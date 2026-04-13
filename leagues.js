@@ -21,7 +21,7 @@ const LEAGUES_DATA = [
 
 // Απαραίτητα arrays για τα Dropdowns και τα Φίλτρα του App
 const LEAGUE_IDS = LEAGUES_DATA.map(l => l.id);
-const MY_LEAGUES_IDS = [39, 78, 88, 144, 140, 135, 197, 253];
+const MY_LEAGUES_IDS = [39, 78, 88, 103, 113, 144, 140, 135, 197, 253];
 
 const LEAGUE_AVG_GOALS = {
   78: 3.12, 88: 3.05, 253: 2.95, 262: 2.88, 113: 2.85, 103: 2.92, 71: 2.65,
