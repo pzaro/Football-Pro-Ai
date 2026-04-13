@@ -42,7 +42,11 @@
   <div class="auth-card">
     <div class="brand-logo" style="justify-content: center; font-size: 2rem; margin-bottom: 10px;">APEX<span>OMEGA</span></div>
     <div style="font-weight: 600; color: var(--accent-blue);">v5.0 · Modular Edition</div>
-    <input type="password" id="pin" class="auth-input" placeholder="• • • •" maxlength="8" autocomplete="off" inputmode="numeric">
+    <input type="password" id="pin" class="auth-input" placeholder="• • • •" maxlength="8"
+      autocomplete="off" inputmode="numeric"
+      onkeydown="if(event.key==='Enter') authenticate()">
+    <input type="text" id="apiInput" class="auth-input" placeholder="API-Sports Key (προαιρετικό)" style="margin-top:10px;">
+    <button class="btn btn-primary" style="margin-top:14px;width:100%;" onclick="authenticate()">ΕΙΣΟΔΟΣ</button>
     <div id="authError" style="margin-top:12px; font-size:0.75rem; color:var(--accent-red); min-height:20px; font-weight:600;"></div>
   </div>
 </div>
