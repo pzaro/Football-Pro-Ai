@@ -7,12 +7,14 @@ const REQUEST_GAP_MS = 150;
 async function apiReq(path) {
   return new Promise(resolve => { _apiQueue.push({path, resolve}); _drainQueue(); });
 }
+
 async function _drainQueue() {
   while(_apiActiveCount < MAX_CONCURRENT && _apiQueue.length > 0) {
     const {path, resolve} = _apiQueue.shift();
     _apiActiveCount++; _executeRequest(path, resolve);
   }
 }
+
 async function _executeRequest(path, resolve) {
   await new Promise(r => setTimeout(r, Math.random() * 100));
   try {
@@ -33,11 +35,13 @@ function poissonProb(lambda, k) {
   for(let i = 1; i <= k; i++) logP -= Math.log(i);
   return Math.exp(logP);
 }
+
 function getPoissonMatrix(hL, aL, maxG = 6) {
   const m = [];
   for(let h = 0; h <= maxG; h++) { m[h] = []; for(let a = 0; a <= maxG; a++) m[h][a] = poissonProb(hL, h) * poissonProb(aL, a); }
   return m;
 }
+
 function getPoissonProbabilities(hL, aL) {
   const m = getPoissonMatrix(hL, aL, 6);
   let pHome=0, pDraw=0, pAway=0, pO25=0, pO35=0, pU25=0, pBTTS=0, bestScore={h:1, a:1, prob:0};
@@ -50,6 +54,7 @@ function getPoissonProbabilities(hL, aL) {
   }
   return { pHome, pDraw, pAway, pO25, pO35, pU25, pBTTS, bestScore, matrix: m };
 }
+
 function normalCDF(z) {
   if(z < -6) return 0; if(z > 6) return 1;
   const t = 1 / (1 + 0.2316419 * Math.abs(z));
@@ -65,12 +70,14 @@ async function getTStats(t, lg, s) {
     const d = await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`); 
     teamStatsCache.set(k, d?.response || {}); return d?.response || {}; 
 }
+
 async function getLFix(t, lg, s) { 
     const k = `${t}_${lg}_${s}`; 
     if(lastFixCache.has(k)) return lastFixCache.get(k); 
     const d = await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`); 
     lastFixCache.set(k, d?.response || []); return d?.response || []; 
 }
+
 async function getStand(lg, s) { 
     const k = `${lg}_${s}`; 
     if(standCache.has(k)) return standCache.get(k); 
@@ -78,6 +85,7 @@ async function getStand(lg, s) {
     const f = Array.isArray(d?.response?.[0]?.league?.standings) ? d.response[0].league.standings.flat() : []; 
     standCache.set(k, f); return f; 
 }
+
 async function getHeadToHead(t1, t2, lg, s) { 
     const k = `${t1}_${t2}_${lg||'a'}_${s||'a'}`; 
     if(h2hCache.has(k)) return h2hCache.get(k); 
@@ -85,7 +93,11 @@ async function getHeadToHead(t1, t2, lg, s) {
     h2hCache.set(k, d?.response || []); return d?.response || []; 
 }
 
-// INTEL BUILDER
+// DATA PROCESSORS
+window.getTeamRank =(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
+const getTeamGoals=(f,t)=>{if(!f?.teams)return 0;return f.teams.home?.id===t?(f.goals?.home??0):(f.goals?.away??0);};
+const getOppGoals =(f,t)=>{if(!f?.teams)return 0;return f.teams.home?.id===t?(f.goals?.away??0):(f.goals?.home??0);};
+
 window.summarizeH2H = function(fixtures, homeId, awayId) {
   let hw=0, aw=0, dr=0, totGoals=0, bttsCount=0, n=0;
   for(const f of (fixtures || []).slice(0, 10)) {
@@ -104,16 +116,9 @@ window.buildIntel = async function(tId, lg, s, isHome) {
     const seasonXG = parseFloat(ss?.goals?.for?.average?.total) || 1.35;
     const seasonXGA = parseFloat(ss?.goals?.against?.average?.total) || 1.35;
     
-    let tx=0, txa=0, tc=0, n=0;
-    for(const f of gen) {
-        const myG = getTeamGoals(f, tId), opG = getOppGoals(f, tId);
-        tx += seasonXG; txa += seasonXGA; n++;
-    }
-
     return {
-      fXG: n > 0 ? tx / n : seasonXG, fXGA: n > 0 ? txa / n : seasonXGA,
-      wXG: weightedRecentXG(gen, tId) || seasonXG,
-      cor: 4.5, crd: 2.0, formRating: 50
+      fXG: seasonXG, fXGA: seasonXGA,
+      wXG: seasonXG, cor: 4.5, crd: 2.0, formRating: 50
     };
   } catch { return { fXG: 1.35, fXGA: 1.35, wXG: 1.35, cor: 4.5, crd: 2.0, formRating: 50 }; }
 }
@@ -138,7 +143,7 @@ window.computePick = function(hXG, aXG, tXG, bttsScore, cor, totCards, lp, hS, a
 
 window.scrollToMatch = function(id) {
   const el = document.getElementById(id);
-  if(el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); flashElement(el); }
+  if(el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); if(typeof flashElement === 'function') flashElement(el); }
 };
 
 window.getMatchCardHTML = function(d) {
