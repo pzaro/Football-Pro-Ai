@@ -372,7 +372,7 @@ function authenticate() {
   if(pin==="106014") {
     if(apiInput){API_KEY=apiInput;localStorage.setItem('omega_api_key',API_KEY);}
     if(!API_KEY){document.getElementById('authError').innerText="Παρακαλώ εισάγετε το API-Sports Key.";return;}
-    document.getElementById('apiKeyModal').style.display='none';
+    document.getElementById('auth').style.display='none';
     document.getElementById('app').style.display='block';
     initCredits(); updateAuditLeagueFilter(); loadSettings(); loadBankroll();
   } else {
