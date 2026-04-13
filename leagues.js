@@ -1,13 +1,5 @@
 // leagues.js
 
-const API_BASE = "https://v3.football.api-sports.io";
-let API_KEY = localStorage.getItem('omega_api_key') || "956cbd05f9e9bf934df78d9b72d9a3a0";
-
-const LS_PREDS = "omega_preds_v5.0";
-const LS_SETTINGS = "omega_settings_v5.0";
-const LS_LGMODS = "omega_lgmods_v5.0";
-const LS_BANKROLL = "omega_bankroll_v5.0";
-
 const LEAGUES_DATA = [
   {id:2,  name:"Champions League"},     {id:3,  name:"Europa League"},
   {id:848,name:"Conference League"},    {id:39, name:"Premier League (EN)"},
@@ -28,6 +20,7 @@ const LEAGUES_DATA = [
 ];
 
 const LEAGUE_IDS = LEAGUES_DATA.map(l => l.id);
+
 const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]); 
 const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]); 
 const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]); 
@@ -39,6 +32,14 @@ const LEAGUE_AVG_GOALS = {
   2:  2.55, 3:  2.60, 848: 2.50,
   135:2.48, 140:2.52, 61:2.45, 197:2.40, 94:2.45, 128: 2.30
 };
+
+// Global App State Variables
+const API_BASE = "https://v3.football.api-sports.io";
+let API_KEY = "956cbd05f9e9bf934df78d9b72d9a3a0";
+const LS_PREDS = "omega_preds_v5.0";
+const LS_SETTINGS = "omega_settings_v5.0";
+const LS_LGMODS = "omega_lgmods_v5.0";
+const LS_BANKROLL = "omega_bankroll_v5.0";
 
 let teamStatsCache = new Map(), lastFixCache = new Map(), standCache = new Map(), h2hCache = new Map();
 let isRunning = false, currentCredits = null;
@@ -53,7 +54,7 @@ const DEFAULT_SETTINGS = {
   minCorners: 10.5, minCards: 5.8
 };
 let engineConfig = {...DEFAULT_SETTINGS};
-let leagueMods   = {};
+let leagueMods = {};
 const SETTINGS_MAP = {
   cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
   cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
