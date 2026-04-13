@@ -1,4 +1,4 @@
-// leagues.js
+// leagues.js - Η βάση δεδομένων των πρωταθλημάτων
 
 const LEAGUES_DATA = [
   {id:2,  name:"Champions League"},     {id:3,  name:"Europa League"},
@@ -19,12 +19,9 @@ const LEAGUES_DATA = [
   {id:103,name:"Eliteserien (NO)"}
 ];
 
+// Απαραίτητα arrays για τα Dropdowns και τα Φίλτρα του App
 const LEAGUE_IDS = LEAGUES_DATA.map(l => l.id);
-
-const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]); 
-const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]); 
-const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]); 
-const MY_LEAGUES_IDS = [39,78,88,144,140,135,197,253, 71, 128];
+const MY_LEAGUES_IDS = [39, 78, 88, 144, 140, 135, 197, 253];
 
 const LEAGUE_AVG_GOALS = {
   78: 3.12, 88: 3.05, 253: 2.95, 262: 2.88, 113: 2.85, 103: 2.92, 71: 2.65,
@@ -33,33 +30,13 @@ const LEAGUE_AVG_GOALS = {
   135:2.48, 140:2.52, 61:2.45, 197:2.40, 94:2.45, 128: 2.30
 };
 
-// Global App State Variables
-const API_BASE = "https://v3.football.api-sports.io";
-let API_KEY = "956cbd05f9e9bf934df78d9b72d9a3a0";
-const LS_PREDS = "omega_preds_v5.0";
-const LS_SETTINGS = "omega_settings_v5.0";
-const LS_LGMODS = "omega_lgmods_v5.0";
-const LS_BANKROLL = "omega_bankroll_v5.0";
-
-let teamStatsCache = new Map(), lastFixCache = new Map(), standCache = new Map(), h2hCache = new Map();
-let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], combo2:[], outcomes:[], over25:[], over35:[], under25:[] };
-window.scannedMatchesData = [];
-let bankrollData = { current: 0, history: [] };
+const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]); 
+const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]); 
+const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]); 
 
 const DEFAULT_SETTINGS = {
-  wShotsOn:0.14,wShotsOff:0.04,wCorners:0.02,wGoals:0.20,
-  tXG_O25:2.70,tXG_O35:3.25,tXG_U25:1.80,tBTTS_U25:0.65,
-  xG_Diff:0.55,tBTTS:1.10,modTrap:0.90,modTight:0.95,modGold:1.15,
+  wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
+  tXG_O25:2.70, tXG_O35:3.25, tXG_U25:1.80, tBTTS_U25:0.65,
+  xG_Diff:0.55, tBTTS:1.10, modTrap:0.90, modTight:0.95, modGold:1.15,
   minCorners: 10.5, minCards: 5.8
 };
-let engineConfig = {...DEFAULT_SETTINGS};
-let leagueMods = {};
-const SETTINGS_MAP = {
-  cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
-  cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
-  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS', cfg_minCorners:'minCorners', cfg_minCards:'minCards'
-};
-
-const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=8; const REQUEST_GAP_MS=260;
-let _errTimer=null, _okTimer=null;
