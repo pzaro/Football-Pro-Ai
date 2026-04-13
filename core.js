@@ -1,4 +1,6 @@
-// core.js - API ENGINE & QUANT LOGIC
+// core.js - THE ENGINE
+
+// 1. API QUEUE SYSTEM (Για να μην μπλοκάρει το API Key)
 window._apiQueue = []; 
 window._apiActiveCount = 0; 
 const MAX_CONCURRENT = 5; 
@@ -16,19 +18,22 @@ async function _drainQueue() {
 }
 
 async function _executeRequest(path, resolve) {
-  await new Promise(r => setTimeout(r, Math.random() * 100));
   try {
     const r = await fetch(`${API_BASE}/${path}`, { headers: { 'x-apisports-key': API_KEY } });
-    if(typeof currentCredits === 'number') {
+    const data = await r.json();
+    if(typeof currentCredits === 'number' && data.results !== undefined) {
       currentCredits--; 
-      if(typeof window.updateCredits === 'function') window.updateCredits(currentCredits);
+      if(window.updateCreditsDisplay) window.updateCreditsDisplay(currentCredits);
     }
-    resolve(r.ok ? await r.json() : { response: [] });
-  } catch { resolve({ response: [] }); }
-  finally { await new Promise(r => setTimeout(r, REQUEST_GAP_MS)); _apiActiveCount--; _drainQueue(); }
+    resolve(data);
+  } catch(e) { resolve({ response: [] }); }
+  finally { 
+    await new Promise(r => setTimeout(r, REQUEST_GAP_MS)); 
+    _apiActiveCount--; _drainQueue(); 
+  }
 }
 
-// MATH & LOGIC
+// 2. MATH FUNCTIONS (Poisson & Stats)
 function poissonProb(lambda, k) {
   if(lambda <= 0) return k === 0 ? 1 : 0;
   let logP = -lambda + k * Math.log(lambda);
@@ -36,78 +41,63 @@ function poissonProb(lambda, k) {
   return Math.exp(logP);
 }
 
-function getPoissonMatrix(hL, aL, maxG = 6) {
-  const m = [];
-  for(let h = 0; h <= maxG; h++) { m[h] = []; for(let a = 0; a <= maxG; a++) m[h][a] = poissonProb(hL, h) * poissonProb(aL, a); }
-  return m;
-}
-
 function getPoissonProbabilities(hL, aL) {
-  const m = getPoissonMatrix(hL, aL, 6);
-  let pHome=0, pDraw=0, pAway=0, pO25=0, pO35=0, pU25=0, pBTTS=0, bestScore={h:1, a:1, prob:0};
-  for(let h = 0; h <= 6; h++) for(let a = 0; a <= 6; a++) {
-    const p = m[h]?.[a] ?? 0;
-    if(h > a) pHome += p; else if(h < a) pAway += p; else pDraw += p;
-    if(h + a > 2.5) pO25 += p; if(h + a > 3.5) pO35 += p; if(h + a < 2.5) pU25 += p;
-    if(h > 0 && a > 0) pBTTS += p;
-    if(p > bestScore.prob) bestScore = {h, a, prob:p};
+  let pHome=0, pDraw=0, pAway=0, pO25=0, pBTTS=0;
+  let maxG = 6, bestScore = {h:1, a:1, prob:0};
+  
+  for(let h=0; h<=maxG; h++) {
+    for(let a=0; a<=maxG; a++) {
+      const p = poissonProb(hL, h) * poissonProb(aL, a);
+      if(h > a) pHome += p; else if(h < a) pAway += p; else pDraw += p;
+      if(h + a > 2.5) pO25 += p;
+      if(h > 0 && a > 0) pBTTS += p;
+      if(p > bestScore.prob) bestScore = {h, a, prob:p};
+    }
   }
-  return { pHome, pDraw, pAway, pO25, pO35, pU25, pBTTS, bestScore, matrix: m };
+  return { pHome, pDraw, pAway, pO25, pBTTS, bestScore };
 }
 
-// FETCHERS
+// 3. DATA FETCHERS
 async function getTStats(t, lg, s) { 
-    const k = `${t}_${lg}_${s}`; 
-    if(teamStatsCache.has(k)) return teamStatsCache.get(k); 
-    const d = await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);
-    teamStatsCache.set(k, d?.response || {}); return d?.response || {}; 
+  const d = await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);
+  return d?.response || {}; 
 }
 
 async function getLFix(t, lg, s) { 
-    const k = `${t}_${lg}_${s}`; 
-    if(lastFixCache.has(k)) return lastFixCache.get(k); 
-    const d = await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);
-    lastFixCache.set(k, d?.response || []); return d?.response || []; 
+  const d = await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=10&status=FT`);
+  return d?.response || []; 
 }
 
-// INTEL BUILDER
-window.buildIntel = async function(tId, lg, s, isHome) {
+// 4. INTEL BUILDER (Εδώ γίνεται η ανάλυση)
+window.buildIntel = async function(tId, lg, s) {
   try {
-    const [ss, allFix] = await Promise.all([getTStats(tId, lg, s), getLFix(tId, lg, s)]);
-    const seasonXG = parseFloat(ss?.goals?.for?.average?.total) || 1.35;
-    const seasonXGA = parseFloat(ss?.goals?.against?.average?.total) || 1.35;
+    const [ss, fix] = await Promise.all([getTStats(tId, lg, s), getLFix(tId, lg, s)]);
+    const fXG = parseFloat(ss?.goals?.for?.average?.total) || 1.30;
+    const fXGA = parseFloat(ss?.goals?.against?.average?.total) || 1.30;
     
-    return {
-      fXG: seasonXG, fXGA: seasonXGA,
-      wXG: seasonXG, cor: 4.5, crd: 2.0, formRating: 50,
-      uiXG: seasonXG.toFixed(2), uiXGA: seasonXGA.toFixed(2)
-    };
-  } catch { return { fXG: 1.35, fXGA: 1.35, wXG: 1.35, cor: 4.5, crd: 2.0, formRating: 50, uiXG: '1.35', uiXGA: '1.35' }; }
+    // Υπολογισμός Φόρμας (Τελευταία 6 παιχνίδια)
+    let formPts = 0;
+    fix.slice(0,6).forEach(f => {
+      const myG = f.teams.home.id === tId ? f.goals.home : f.goals.away;
+      const opG = f.teams.home.id === tId ? f.goals.away : f.goals.home;
+      if(myG > opG) formPts += 3; else if(myG === opG) formPts += 1;
+    });
+
+    return { fXG, fXGA, formRating: (formPts/18)*100, uiXG: fXG.toFixed(2), uiXGA: fXGA.toFixed(2) };
+  } catch { return { fXG:1.3, fXGA:1.3, formRating:50, uiXG:'1.30', uiXGA:'1.30' }; }
 }
 
-window.computePick = function(hXG, aXG, tXG, bttsScore, lp) {
-  const hLambda = Math.max(hXG * lp.mult, 0.5);
-  const aLambda = Math.max(aXG * lp.mult, 0.5);
-  const pp = getPoissonProbabilities(hLambda, aLambda);
+window.computePick = function(hS, aS, lp) {
+  const hExp = hS.fXG * (hS.formRating/100 + 0.5);
+  const aExp = aS.fXG * (aS.formRating/100 + 0.5);
+  const pp = getPoissonProbabilities(hExp, aExp);
   
-  let omegaPick = "NO BET", pickScore = 0;
-  if(pp.pO25 > 0.65 && tXG >= lp.minXGO25) { omegaPick = "🔥 OVER 2.5"; pickScore = pp.pO25 * 100; }
-  else if(pp.pBTTS > 0.55 && bttsScore >= lp.minBTTS) { omegaPick = "🎯 BTTS"; pickScore = pp.pBTTS * 100; }
+  let pick = "NO BET", strength = 0;
+  const totalXG = hS.fXG + aS.fXG;
 
-  return { omegaPick, pickScore, hG: pp.bestScore.h, aG: pp.bestScore.a };
+  if(pp.pO25 > 0.60 && totalXG > lp.tXG_O25) { pick = "🔥 OVER 2.5"; strength = pp.pO25 * 100; }
+  else if(pp.pHome > 0.50) { pick = "🏠 ΑΣΟΣ"; strength = pp.pHome * 100; }
+  else if(pp.pAway > 0.50) { pick = "✈️ ΔΙΠΛΟ"; strength = pp.pAway * 100; }
+
+  return { pick, strength, hExp, aExp, hG: pp.bestScore.h, aG: pp.bestScore.a };
 }
-
-window.getMatchCardHTML = function(d) {
-  return `<div class="match-card" id="card-${d.fixId}">
-    <div class="match-league"><span class="league-badge">${esc(d.lg)}</span></div>
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div class="team-name">${esc(d.ht)}</div>
-        <div class="score-display">vs</div>
-        <div class="team-name" style="text-align:right;">${esc(d.at)}</div>
-    </div>
-    <div class="signal-box signal-hit">
-        <div class="signal-value">${esc(d.omegaPick)}</div>
-        <div class="signal-desc">Conf: ${d.strength.toFixed(1)}% | xG: ${d.tXG.toFixed(2)}</div>
-    </div>
-  </div>`;
-};
