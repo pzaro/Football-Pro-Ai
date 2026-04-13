@@ -1,30 +1,5 @@
 // app.js
 
-const LS_PREDS = "omega_preds_v5.0";
-const LS_SETTINGS = "omega_settings_v5.0";
-const LS_LGMODS = "omega_lgmods_v5.0";
-const LS_BANKROLL = "omega_bankroll_v5.0";
-
-let teamStatsCache = new Map(), lastFixCache = new Map(), standCache = new Map(), h2hCache = new Map();
-let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], combo2:[], outcomes:[], over25:[], over35:[], under25:[] };
-window.scannedMatchesData = [];
-let bankrollData = { current: 0, history: [] };
-
-const DEFAULT_SETTINGS = {
-  wShotsOn:0.14,wShotsOff:0.04,wCorners:0.02,wGoals:0.20,
-  tXG_O25:2.70,tXG_O35:3.25,tXG_U25:1.80,tBTTS_U25:0.65,
-  xG_Diff:0.55,tBTTS:1.10,modTrap:0.90,modTight:0.95,modGold:1.15,
-  minCorners: 10.5, minCards: 5.8
-};
-let engineConfig = {...DEFAULT_SETTINGS};
-let leagueMods = {};
-const SETTINGS_MAP = {
-  cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
-  cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
-  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS', cfg_minCorners:'minCorners', cfg_minCards:'minCards'
-};
-
 // UI UTILS
 const isLive = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
@@ -45,7 +20,6 @@ function setProgress(pct,text='') {
   document.getElementById('status').textContent=text + (_apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : ''); 
 }
 function setBtnsDisabled(d) { ["btnPre","leagueFilter","auditLeague"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
-let _errTimer=null, _okTimer=null;
 function showErr(msg) { clearTimeout(_errTimer); const box=document.getElementById('errorBox'); box.innerHTML=`<div>⚠️ ${esc(msg)}</div>`; _errTimer=setTimeout(()=>box.innerHTML='',8000); }
 function showOk(msg) { clearTimeout(_okTimer); const box=document.getElementById('successBox'); box.innerHTML=`<div>✓ ${esc(msg)}</div>`; _okTimer=setTimeout(()=>box.innerHTML='',4000); }
 function clearAlerts() { document.getElementById('errorBox').innerHTML=''; document.getElementById('successBox').innerHTML=''; }
@@ -106,6 +80,19 @@ function buildLeagueModTable(auditStats={}) {
   });
 }
 function defaultLeagueMult(id) { if(GOLD_LEAGUES.has(id)) return engineConfig.modGold; if(TRAP_LEAGUES.has(id)) return engineConfig.modTrap; if(TIGHT_LEAGUES.has(id)) return engineConfig.modTight; return 1.00; }
+function saveLeagueMods(silent=false) {
+  LEAGUES_DATA.forEach(l => {
+    const g=id=>parseFloat(document.getElementById(id)?.value);
+    const mult=g(`lm_mult_${l.id}`),minO25=g(`lm_minO25_${l.id}`),minO35=g(`lm_minO35_${l.id}`),maxU25=g(`lm_maxU25_${l.id}`),minBTTS=g(`lm_minBTTS_${l.id}`),xgDiff=g(`lm_xgDiff_${l.id}`);
+    const entry={};
+    if(!isNaN(mult)) entry.mult=mult; if(!isNaN(minO25)) entry.minXGO25=minO25; if(!isNaN(minO35)) entry.minXGO35=minO35;
+    if(!isNaN(maxU25)) entry.maxU25=maxU25; if(!isNaN(minBTTS)) entry.minBTTS=minBTTS; if(!isNaN(xgDiff)) entry.xgDiff=xgDiff;
+    if(Object.keys(entry).length) leagueMods[l.id]=entry; else delete leagueMods[l.id];
+  });
+  try { localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); } catch {}
+  if(!silent) showOk("League Modifiers Saved!");
+}
+function resetLeagueMods() { leagueMods={}; try{localStorage.removeItem(LS_LGMODS);}catch{} buildLeagueModTable(); showOk("League Modifiers Reset."); }
 
 // BANKROLL
 function loadBankroll() { try { const b = JSON.parse(localStorage.getItem(LS_BANKROLL)); if(b) bankrollData = b; } catch {} updateBankrollDisplay(); }
@@ -142,7 +129,119 @@ function kellyStake(winProb, odds, fraction=0.25) {
   return Math.max(0.5, Math.min(stake, bankrollData.current*0.20));
 }
 
-// CORE EXECUTION
+// STORAGE
+function stripForStorage(rec) {
+  const { pp, hS, aS, aTot, aCor, aCards, ...rest } = rec;
+  const stripTeam = t => t ? { fXG:t.fXG, fXGA:t.fXGA, sXG:t.sXG, sXGA:t.sXGA, wXG:t.wXG, formRating:t.formRating, cor:t.cor, crd:t.crd, uiXG:t.uiXG, uiXGA:t.uiXGA, uiDevXG:t.uiDevXG, uiDevXGA:t.uiDevXGA, uiSXG:t.uiSXG } : undefined;
+  return { ...rest, hS: stripTeam(hS), aS: stripTeam(aS) };
+}
+function getPredStore()  { try{return JSON.parse(localStorage.getItem(LS_PREDS)||"[]");}catch{return [];} }
+
+function bulkSavePredictions(newRecords) {
+  try {
+    const store=getPredStore();
+    const map=new Map(store.map(x=>[String(x.fixtureId),x]));
+    newRecords.forEach(rec=>map.set(String(rec.fixtureId), stripForStorage(rec)));
+    localStorage.setItem(LS_PREDS, JSON.stringify(Array.from(map.values())));
+    updateAuditLeagueFilter();
+  } catch(e) {
+    if(e.name==='QuotaExceededError') showErr('Storage full. Κάνε Purge Data.');
+    else showErr(e.message);
+  }
+}
+function clearVault() { if(confirm("Διαγραφή όλου του ιστορικού;")){localStorage.removeItem(LS_PREDS);showOk("Vault Cleared.");updateAuditLeagueFilter();} }
+function updateAuditLeagueFilter() {
+  const store=getPredStore(), leagues=new Set(store.map(x=>x.leagueId));
+  const sel=document.getElementById('auditLeague'); if(!sel) return;
+  sel.innerHTML='<option value="ALL">Global (All Leagues)</option>';
+  const known=new Set(LEAGUE_IDS);
+  LEAGUES_DATA.forEach(l=>{if(leagues.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});
+  store.forEach(x=>{if(!known.has(x.leagueId)&&x.leagueId){sel.innerHTML+=`<option value="${x.leagueId}">${x.league}</option>`;known.add(x.leagueId);}});
+}
+
+// EXPORT / IMPORT
+window.exportData = function() {
+  if(!window.scannedMatchesData?.length){showErr("Δεν υπάρχουν δεδομένα.");return;}
+  const blob=new Blob([JSON.stringify(window.scannedMatchesData.map(stripForStorage))],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=`apex_omega_${todayISO()}.json`; a.click();
+  URL.revokeObjectURL(url); showOk("Export ολοκληρώθηκε!");
+};
+window.importData = function(event) {
+  const file=event.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e) {
+    try {
+      const imported=JSON.parse(e.target.result);
+      if(!Array.isArray(imported)) throw new Error("Invalid format");
+      
+      window.scannedMatchesData = imported.map(d => ({
+         ...d, tXG: d.tXG || 0, strength: d.strength || 0, exactConf: d.exactConf || 0,
+      }));
+      
+      rebuildTopLists(); renderTopSections(); renderWallBets(); renderSummaryTable();
+      document.getElementById('feedFilterSection').style.display='block'; filterFeed();
+      showOk(`Import: ${imported.length} αγώνες (Offline Mode).`);
+    } catch { showErr("Μη έγκυρο αρχείο JSON."); }
+    event.target.value='';
+  };
+  reader.readAsText(file);
+};
+
+// ================================================================
+// ENGINE RUNNERS (Scan & Re-Sim)
+// ================================================================
+window.resimulateMatches = function() {
+  if(!window.scannedMatchesData.length){showErr("Δεν υπάρχουν δεδομένα. Κάνε Scan πρώτα.");return;}
+  clearAlerts();
+  try {
+    const toSave=[];
+    window.scannedMatchesData.forEach(d=>{
+      if(!d.leagueId) return;
+      const lp=getLeagueParams(d.leagueId);
+      
+      const fallback = d.tXG && d.tXG > 0 ? d.tXG/2 : 1.35;
+      const hXG=Math.max(Number(d.hS?.fXG||fallback), 0.85)*lp.mult;
+      const aXG=Math.max(Number(d.aS?.fXG||fallback), 0.85)*lp.mult;
+      const hS_safe={...d.hS, wXG:Math.max(Number(d.hS?.wXG||0),0.85), fXGA:Math.max(Number(d.hS?.fXGA||0),0.85)};
+      const aS_safe={...d.aS, wXG:Math.max(Number(d.aS?.wXG||0),0.85), fXGA:Math.max(Number(d.aS?.fXGA||0),0.85)};
+      
+      const tXG=hXG+aXG, bttsScore=Math.min(hXG,aXG);
+      const cor=Number(d.hS?.cor||d.cor/2||4.5)+Number(d.aS?.cor||d.cor/2||4.5);
+      const totCards=Number(d.hS?.crd||d.totCards/2||2.5)+Number(d.aS?.crd||d.totCards/2||2.5);
+      
+      const result=computePick(hXG,aXG,tXG,bttsScore,cor,totCards,lp,hS_safe,aS_safe,d.h2h,d.hInj||0,d.aInj||0,d.leagueId);
+
+      const totCorExp=clamp((cor*0.78)+((Number(hS_safe.sXG)+Number(aS_safe.sXG))*0.72),5,15);
+      const hShare=clamp((result.hExp+Number(hS_safe.sXG)+0.25)/Math.max(result.hExp+result.aExp+Number(hS_safe.sXG)+Number(aS_safe.sXG)+0.5,0.1),0.38,0.62);
+      const hCors=Math.max(2,Math.round(totCorExp*hShare)), aCors=Math.max(2,Math.round(totCorExp-hCors));
+      
+      Object.assign(d,{tXG,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,exact:`${result.hG}-${result.aG}`,exactConf:result.exactConf,omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,hCors,aCors,totCards,
+        isLockO25:tXG>=(lp.minXGO25+0.15)&&bttsScore>=1.00,
+        isLockBTTS:bttsScore>=(lp.minBTTS+0.05)&&tXG>=2.50,
+        isLockU25:tXG<=(lp.maxU25-0.20)&&bttsScore<=(engineConfig.tBTTS_U25-0.10)
+      });
+      toSave.push(buildSaveRecord(d,result));
+    });
+    bulkSavePredictions(toSave);
+    rebuildTopLists(); renderTopSections(); renderWallBets(); renderSummaryTable(); window.filterFeed();
+    showOk("Re-simulation complete (0 Credits).");
+  } catch(e){ showErr(e.message); }
+};
+
+function buildSaveRecord(d,result) {
+  return stripForStorage({
+    fixtureId:d.fixId, date:d.m?.fixture?.date, scanDate:d.scanDate||todayISO(),
+    league:d.lg, leagueId:d.leagueId, homeTeam:d.ht, awayTeam:d.at,
+    outPick:result?.outPick||d.outPick,
+    predOver25:!!(d.omegaPick?.includes('OVER 2')||d.omegaPick?.includes('OVER 3')),
+    predOver35:!!d.omegaPick?.includes('OVER 3'),
+    predUnder25:!!d.omegaPick?.includes('UNDER 2.5'),
+    predBTTS:!!d.omegaPick?.includes('GOAL'),
+    exactScorePred:d.exact, omegaPick:d.omegaPick, savedAt:new Date().toISOString()
+  });
+}
+
 async function analyzeMatchSafe(m, index, total) {
   try {
     setProgress(10+((index+1)/total)*88, `Processing ${index+1}/${total}: ${m.teams.home.name}`);
@@ -243,7 +342,6 @@ async function runScan() {
     const toSave=window.scannedMatchesData.filter(d=>d.fixId).map(d=>buildSaveRecord(d,{outPick:d.outPick}));
     bulkSavePredictions(toSave);
     
-    // RENDER FUNCTIONS CALLED HERE
     rebuildTopLists(); 
     renderTopSections(); 
     renderWallBets(); 
@@ -257,261 +355,61 @@ async function runScan() {
   finally { isRunning=false; setLoader(false); setBtnsDisabled(false); }
 }
 
-window.resimulateMatches = function() {
-  if(!window.scannedMatchesData.length){showErr("Δεν υπάρχουν δεδομένα. Κάνε Scan πρώτα.");return;}
-  clearAlerts();
+// ================================================================
+// UI RENDERING FUNCTIONS
+// ================================================================
+function rebuildTopLists() {
   try {
-    const toSave=[];
-    window.scannedMatchesData.forEach(d=>{
-      if(!d.leagueId) return;
-      const lp=getLeagueParams(d.leagueId);
-      
-      const fallback = d.tXG && d.tXG > 0 ? d.tXG/2 : 1.35;
-      const hXG=Math.max(Number(d.hS?.fXG||fallback), 0.85)*lp.mult;
-      const aXG=Math.max(Number(d.aS?.fXG||fallback), 0.85)*lp.mult;
-      const hS_safe={...d.hS, wXG:Math.max(Number(d.hS?.wXG||0),0.85), fXGA:Math.max(Number(d.hS?.fXGA||0),0.85)};
-      const aS_safe={...d.aS, wXG:Math.max(Number(d.aS?.wXG||0),0.85), fXGA:Math.max(Number(d.aS?.fXGA||0),0.85)};
-      
-      const tXG=hXG+aXG, bttsScore=Math.min(hXG,aXG);
-      const cor=Number(d.hS?.cor||d.cor/2||4.5)+Number(d.aS?.cor||d.cor/2||4.5);
-      const totCards=Number(d.hS?.crd||d.totCards/2||2.5)+Number(d.aS?.crd||d.totCards/2||2.5);
-      
-      const result=computePick(hXG,aXG,tXG,bttsScore,cor,totCards,lp,hS_safe,aS_safe,d.h2h,d.hInj||0,d.aInj||0,d.leagueId);
+    const sd = window.scannedMatchesData || [];
+    latestTopLists.combo1   = sd.filter(x=>x.omegaPick&&x.omegaPick.includes('⚡')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
+    latestTopLists.outcomes = sd.filter(x=>x.omegaPick&&(x.omegaPick.includes('ΑΣΟΣ')||x.omegaPick.includes('ΔΙΠΛΟ'))).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
+    latestTopLists.exact    = [...sd].filter(x=>x.exactConf).sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,5);
+    latestTopLists.over25   = sd.filter(x=>x.omegaPick&&x.omegaPick.includes('OVER 2.5')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
+    latestTopLists.over35   = sd.filter(x=>x.omegaPick&&x.omegaPick.includes('OVER 3.5')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
+    latestTopLists.under25  = sd.filter(x=>x.omegaPick&&x.omegaPick.includes('UNDER 2.5')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
+  } catch(e) { console.error("Error building lists:", e); }
+}
 
-      const totCorExp=clamp((cor*0.78)+((Number(hS_safe.sXG)+Number(aS_safe.sXG))*0.72),5,15);
-      const hShare=clamp((result.hExp+Number(hS_safe.sXG)+0.25)/Math.max(result.hExp+result.aExp+Number(hS_safe.sXG)+Number(aS_safe.sXG)+0.5,0.1),0.38,0.62);
-      const hCors=Math.max(2,Math.round(totCorExp*hShare)), aCors=Math.max(2,Math.round(totCorExp-hCors));
-      
-      Object.assign(d,{tXG,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,exact:`${result.hG}-${result.aG}`,exactConf:result.exactConf,omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,hCors,aCors,totCards,
-        isLockO25:tXG>=(lp.minXGO25+0.15)&&bttsScore>=1.00,
-        isLockBTTS:bttsScore>=(lp.minBTTS+0.05)&&tXG>=2.50,
-        isLockU25:tXG<=(lp.maxU25-0.20)&&bttsScore<=(engineConfig.tBTTS_U25-0.10)
-      });
-      toSave.push(buildSaveRecord(d,result));
+window.renderTopSections = function() {
+  const tabs=[
+    {id:'combo1',  lbl:'High Conf 1X2',      d:latestTopLists.combo1,   sk:'strength', sl:'CONF'},
+    {id:'outcomes',lbl:'Match Odds',         d:latestTopLists.outcomes, sk:'strength', sl:'CONF'},
+    {id:'over25',  lbl:'Over 2.5',           d:latestTopLists.over25,   sk:'tXG',      sl:'xG'},
+    {id:'over35',  lbl:'Over 3.5',           d:latestTopLists.over35,   sk:'tXG',      sl:'xG'},
+    {id:'under25', lbl:'Under 2.5',          d:latestTopLists.under25,  sk:'strength', sl:'CONF'},
+    {id:'exact',   lbl:'Exact Score',        d:latestTopLists.exact,    sk:'exactConf',sl:'CONF'}
+  ];
+  let html=`<div class="quant-panel" style="padding:0; overflow:hidden;"><div class="tabs-wrapper">`;
+  tabs.forEach((t,i)=>{ html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${t.id}')" id="tab-btn-${t.id}">${t.lbl} <span class="tab-count">${t.d.length}</span></button>`; });
+  html+=`</div>`;
+  tabs.forEach((t,i)=>{
+    html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'}" id="tabpanel-${t.id}">
+      <div style="padding:0 20px 20px 20px; display:flex; flex-direction:column; gap:8px;">`;
+    if(!t.d.length) html+=`<div style="text-align:center;color:var(--text-muted);padding:20px 0;font-weight:600;">No high-confidence signals found.</div>`;
+    t.d.forEach((x,j)=>{
+      const rawVal = t.id === 'exact' ? x.exact : Number(x[t.sk] || 0);
+      const val = t.id === 'exact' ? rawVal : rawVal.toFixed(1);
+      html+=`
+      <div onclick="scrollToMatch('card-${x.fixId}')" style="display:flex; align-items:center; gap:16px; padding:12px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:var(--radius-sm); cursor:pointer; transition:border-color 0.2s;" onmouseenter="this.style.borderColor='var(--border-focus)'" onmouseleave="this.style.borderColor='var(--border-light)'">
+        <div class="mono" style="color:var(--text-muted); font-size:1.2rem;">#${j+1}</div>
+        <div style="flex:1;">
+          <div style="font-weight:700; font-size:0.9rem;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
+          <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">${esc(x.lg)}</div>
+          <div style="font-size:0.7rem; color:var(--accent-green); font-weight:600; margin-top:2px;">${esc(x.omegaPick)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="mono" style="color:var(--accent-blue); font-size:1.1rem;">${val}</div>
+          <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600;">${t.sl}</div>
+        </div>
+      </div>`;
     });
-    bulkSavePredictions(toSave);
-    rebuildTopLists(); renderTopSections(); renderWallBets(); renderSummaryTable(); window.filterFeed();
-    showOk("Re-simulation complete (0 Credits).");
-  } catch(e){ showErr(e.message); }
-};
-
-function buildSaveRecord(d,result) {
-  return stripForStorage({
-    fixtureId:d.fixId, date:d.m?.fixture?.date, scanDate:d.scanDate||todayISO(),
-    league:d.lg, leagueId:d.leagueId, homeTeam:d.ht, awayTeam:d.at,
-    outPick:result?.outPick||d.outPick,
-    predOver25:!!(d.omegaPick?.includes('OVER 2')||d.omegaPick?.includes('OVER 3')),
-    predOver35:!!d.omegaPick?.includes('OVER 3'),
-    predUnder25:!!d.omegaPick?.includes('UNDER 2.5'),
-    predBTTS:!!d.omegaPick?.includes('GOAL'),
-    exactScorePred:d.exact, omegaPick:d.omegaPick, savedAt:new Date().toISOString()
+    html+=`</div></div>`;
   });
+  html+=`</div>`;
+  document.getElementById('topSection').innerHTML=html;
 }
 
-function stripForStorage(rec) {
-  const { pp, hS, aS, aTot, aCor, aCards, ...rest } = rec;
-  const stripTeam = t => t ? { fXG:t.fXG, fXGA:t.fXGA, sXG:t.sXG, sXGA:t.sXGA, wXG:t.wXG, formRating:t.formRating, cor:t.cor, crd:t.crd, uiXG:t.uiXG, uiXGA:t.uiXGA, uiDevXG:t.uiDevXG, uiDevXGA:t.uiDevXGA, uiSXG:t.uiSXG } : undefined;
-  return { ...rest, hS: stripTeam(hS), aS: stripTeam(aS) };
-}
-function getPredStore()  { try{return JSON.parse(localStorage.getItem(LS_PREDS)||"[]");}catch{return [];} }
-
-function bulkSavePredictions(newRecords) {
-  try {
-    const store=getPredStore();
-    const map=new Map(store.map(x=>[String(x.fixtureId),x]));
-    newRecords.forEach(rec=>map.set(String(rec.fixtureId), stripForStorage(rec)));
-    localStorage.setItem(LS_PREDS, JSON.stringify(Array.from(map.values())));
-    updateAuditLeagueFilter();
-  } catch(e) {
-    if(e.name==='QuotaExceededError') showErr('Storage full. Κάνε Purge Data.');
-    else showErr(e.message);
-  }
-}
-function clearVault() { if(confirm("Διαγραφή όλου του ιστορικού;")){localStorage.removeItem(LS_PREDS);showOk("Vault Cleared.");updateAuditLeagueFilter();} }
-function updateAuditLeagueFilter() {
-  const store=getPredStore(), leagues=new Set(store.map(x=>x.leagueId));
-  const sel=document.getElementById('auditLeague'); if(!sel) return;
-  sel.innerHTML='<option value="ALL">Global (All Leagues)</option>';
-  const known=new Set(LEAGUE_IDS);
-  LEAGUES_DATA.forEach(l=>{if(leagues.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});
-  store.forEach(x=>{if(!known.has(x.leagueId)&&x.leagueId){sel.innerHTML+=`<option value="${x.leagueId}">${x.league}</option>`;known.add(x.leagueId);}});
-}
-
-// EXPORT / IMPORT
-window.exportData = function() {
-  if(!window.scannedMatchesData?.length){showErr("Δεν υπάρχουν δεδομένα.");return;}
-  const blob=new Blob([JSON.stringify(window.scannedMatchesData.map(stripForStorage))],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download=`apex_omega_${todayISO()}.json`; a.click();
-  URL.revokeObjectURL(url); showOk("Export ολοκληρώθηκε!");
-};
-window.importData = function(event) {
-  const file=event.target.files[0]; if(!file) return;
-  const reader=new FileReader();
-  reader.onload=function(e) {
-    try {
-      const imported=JSON.parse(e.target.result);
-      if(!Array.isArray(imported)) throw new Error("Invalid format");
-      
-      window.scannedMatchesData = imported.map(d => ({
-         ...d, tXG: d.tXG || 0, strength: d.strength || 0, exactConf: d.exactConf || 0,
-      }));
-      
-      rebuildTopLists(); renderTopSections(); renderWallBets(); renderSummaryTable();
-      document.getElementById('feedFilterSection').style.display='block'; filterFeed();
-      showOk(`Import: ${imported.length} αγώνες (Offline Mode).`);
-    } catch { showErr("Μη έγκυρο αρχείο JSON."); }
-    event.target.value='';
-  };
-  reader.readAsText(file);
-};
-
-function authenticate() {
-  const pin=document.getElementById('pin').value;
-  const apiInput=document.getElementById('apiInput').value.trim();
-  if(pin==="106014") {
-    if(apiInput){API_KEY=apiInput;localStorage.setItem('omega_api_key',API_KEY);}
-    if(!API_KEY){document.getElementById('authError').innerText="Παρακαλώ εισάγετε το API-Sports Key.";return;}
-    document.getElementById('auth').style.display='none';
-    document.getElementById('app').style.display='block';
-    initCredits(); updateAuditLeagueFilter(); loadSettings(); loadBankroll();
-  } else {
-    document.getElementById('authError').innerText="Λάθος PIN.";
-  }
-}
-
-function getMatchCardHTML(d) {
-  const isUnder=d.omegaPick?.includes('UNDER'), isNoBet=d.omegaPick?.includes('NO BET');
-  let signalClass=isNoBet?'signal-warn':isUnder?'signal-under':'signal-hit';
-  let pickColor=isNoBet?'var(--accent-red)':isUnder?'var(--accent-teal)':d.omegaPick?.includes('ΚΑΡΤΕΣ')?'var(--accent-gold)':'var(--accent-green)';
-  if(d.isBomb){signalClass='signal-hit';pickColor='var(--accent-purple)';}
-
-  let lockHtml='';
-  if(d.isLockO25)  lockHtml+=`<span class="lock-badge lock-o25">💎 HIGH CONF O2.5</span>`;
-  if(d.isLockBTTS) lockHtml+=`<span class="lock-badge lock-btts">🎯 HIGH CONF BTTS</span>`;
-  if(d.isLockU25)  lockHtml+=`<span class="lock-badge lock-under">🔒 HIGH CONF U2.5</span>`;
-
-  let scoreHtml='';
-  if(d.m?.goals?.home!=null){
-    const live=isLive(d.m.fixture.status.short), col=live?'var(--accent-green)':'var(--text-main)';
-    const el=live?`<span style="font-size:0.72rem;color:var(--accent-green);margin-left:3px;">${d.m.fixture.status.elapsed}'</span>`:'';
-    scoreHtml=`<div class="score-display" style="color:${col}">${d.m.goals.home} - ${d.m.goals.away}${el}</div>`;
-  }
-
-  let liveStatsBadges = '';
-  if (d.liveCorners !== undefined) {
-    liveStatsBadges = `
-    <div style="margin-top:6px; display:flex; gap:5px; justify-content:flex-end; flex-wrap:wrap;">
-      <span class="live-stat-badge" style="background:rgba(20,184,166,0.1); border-color:rgba(20,184,166,0.3); color:var(--accent-teal);">
-        🚩 COR: ${d.liveCorners}
-      </span>
-      <span class="live-stat-badge" style="background:rgba(245,158,11,0.1); border-color:rgba(245,158,11,0.3); color:var(--accent-gold);">
-        🟨 ${d.liveYellows}${d.liveReds > 0 ? ` 🟥${d.liveReds}` : ''}
-      </span>
-    </div>`;
-  }
-
-  const rankBadge=r=>r&&r!==99?`<span class="team-rank">#${r}</span>`:'';
-  const formHtml=hist=>`<div style="display:flex;gap:3px;margin-top:2px;">${(hist||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('')}</div>`;
-
-  let h2hStr='H2H: N/A', biasHtml='';
-  if(d.h2h){
-    if(d.h2h.homeWins-d.h2h.awayWins>=3) biasHtml=`<span class="h2h-bias-badge" style="color:var(--accent-green)">🔥 HOME DOM.</span>`;
-    else if(d.h2h.awayWins-d.h2h.homeWins>=3) biasHtml=`<span class="h2h-bias-badge" style="color:var(--accent-blue)">🔥 AWAY DOM.</span>`;
-    h2hStr=`H2H (8): ${d.h2h.homeWins}W-${d.h2h.draws}D-${d.h2h.awayWins}W`;
-  }
-
-  const conf=Math.min(Math.max(safeNum(d.strength),0),100);
-  const confColor=conf>=70?'var(--accent-green)':conf>=50?'var(--accent-gold)':'var(--accent-red)';
-
-  let kellyHtml='';
-  if(bankrollData.current>0&&!isNoBet){
-    const prob=safeNum(d.strength)/100, impliedOdds=prob>0?1/prob:2.0;
-    const est_odds=Math.max(1.5,Math.min(impliedOdds*1.1,5.0));
-    const stake=kellyStake(prob,est_odds);
-    if(stake) kellyHtml=`<div class="kelly-box"><div><div class="kelly-label">Kelly Stake (25%)</div><div style="font-size:0.62rem;color:var(--text-muted);">Bankroll: €${bankrollData.current.toFixed(0)}</div></div><div class="kelly-val">€${stake.toFixed(2)}</div></div>`;
-  }
-
-  const poissonHtml=d.pp?getPoissonMatrixHTML(safeNum(d.hExp),safeNum(d.aExp),4):'';
-  const hFormC=d.hS?.formRating>=70?'var(--accent-green)':d.hS?.formRating<=30?'var(--accent-red)':'var(--accent-gold)';
-  const aFormC=d.aS?.formRating>=70?'var(--accent-green)':d.aS?.formRating<=30?'var(--accent-red)':'var(--accent-gold)';
-  const hInjHtml=d.hInj>0?`<span style="color:var(--accent-red);margin-left:5px;font-size:0.68rem;" title="${d.hInj} Missing">🏥${d.hInj}</span>`:'';
-  const aInjHtml=d.aInj>0?`<span style="color:var(--accent-red);margin-left:5px;font-size:0.68rem;" title="${d.aInj} Missing">🏥${d.aInj}</span>`:'';
-  const isMatchLive = isLive(d.m?.fixture?.status?.short);
-  const liveIndicator = isMatchLive ? `<span class="live-dot"></span>` : '';
-
-  return `
-  <div class="match-card" id="card-${d.fixId}">
-    <div class="match-header">
-      <div style="flex:1;min-width:0;">
-        <div class="match-league">
-          ${liveIndicator}<span class="league-badge">${esc(d.m?.fixture?.status?.short||'FT')}</span> ${esc(d.lg)}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          <div>
-            <div class="team-name">${esc(d.ht)}${rankBadge(d.hr)}</div>
-            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;align-items:center;gap:7px;">
-              Form: <span style="color:${hFormC};font-family:var(--font-mono);font-weight:700;">${d.hS?.formRating||50}%</span>${hInjHtml}
-            </div>
-            ${formHtml(d.hS?.history)}
-          </div>
-          <div>
-            <div class="team-name" style="color:var(--text-muted)">${esc(d.at)}${rankBadge(d.ar)}</div>
-            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;align-items:center;gap:7px;">
-              Form: <span style="color:${aFormC};font-family:var(--font-mono);font-weight:700;">${d.aS?.formRating||50}%</span>${aInjHtml}
-            </div>
-            ${formHtml(d.aS?.history)}
-          </div>
-        </div>
-      </div>
-      <div class="score-box" style="margin-left:16px;">
-        ${scoreHtml}
-        <div class="total-xg-badge">xG: ${Number(d.tXG||0).toFixed(2)}</div>
-        ${liveStatsBadges}
-      </div>
-    </div>
-
-    ${lockHtml?`<div style="margin-bottom:11px;display:flex;flex-wrap:wrap;gap:4px;">${lockHtml}</div>`:''}
-
-    <div class="signal-box ${signalClass}">
-      <div style="font-size:0.6rem;font-weight:700;color:${pickColor};text-transform:uppercase;letter-spacing:1.2px;margin-bottom:3px;">System Output Signal</div>
-      <div class="signal-value" style="color:${pickColor}">${esc(d.omegaPick)}</div>
-      <div class="signal-desc">${esc(d.reason)}</div>
-      <div class="conf-bar-wrap" style="margin-top:9px;">
-        <div class="conf-bar-label">
-          <span>Confidence</span>
-          <span style="color:${confColor};font-family:var(--font-mono)">${conf.toFixed(1)}%</span>
-        </div>
-        <div class="conf-bar-track"><div class="conf-bar-fill" style="width:${conf}%;background:${confColor};"></div></div>
-      </div>
-    </div>
-    ${kellyHtml}
-
-    <div class="stats-grid">
-      <div class="stat-box">
-        <div class="stat-box-title">Game Projections</div>
-        <div class="stat-row"><span class="stat-lbl">Exact Score (Poisson)</span><span class="stat-val stat-highlight">${esc(d.exact||'?-?')}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Lambda xG</span><span class="stat-val" style="color:var(--accent-blue)">${Number(d.hExp||0).toFixed(2)} – ${Number(d.aExp||0).toFixed(2)}</span></div>
-        <div class="stat-row"><span class="stat-lbl">xG Diff</span><span class="stat-val" style="color:${(d.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(d.xgDiff||0)>0?'+':''}${Number(d.xgDiff||0).toFixed(2)}</span></div>
-        <div class="stat-row"><span class="stat-lbl">BTTS Rating</span><span class="stat-val">${Number(d.btts||0).toFixed(2)}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Poisson O2.5</span><span class="stat-val" style="color:var(--accent-blue)">${d.pp?(d.pp.pO25*100).toFixed(1)+'%':'—'}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Poisson U2.5</span><span class="stat-val" style="color:var(--accent-teal)">${d.pp?(d.pp.pU25*100).toFixed(1)+'%':'—'}</span></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-title">Home vs Away Breakdown</div>
-        <div class="stat-row"><span class="stat-lbl">Form xG</span><span class="stat-val">${d.hS?.uiXG||'0.00'}${d.hS?.uiDevXG||''} <span style="color:var(--text-muted)">vs</span> ${d.aS?.uiXG||'0.00'}${d.aS?.uiDevXG||''}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Weighted xG</span><span class="stat-val">${Number(d.hS?.wXG||0).toFixed(2)} <span style="color:var(--text-muted)">vs</span> ${Number(d.aS?.wXG||0).toFixed(2)}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Split xG</span><span class="stat-val">${d.hS?.uiSXG||'0.00'} <span style="color:var(--text-muted)">vs</span> ${d.aS?.uiSXG||'0.00'}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Proj Corners</span><span class="stat-val">${Number(d.hCors||0).toFixed(0)} <span style="color:var(--text-muted)">vs</span> ${Number(d.aCors||0).toFixed(0)}</span></div>
-        <div class="stat-row"><span class="stat-lbl">Exp. Cards</span><span class="stat-val">${Number(d.hS?.crd||0).toFixed(1)} <span style="color:var(--text-muted)">vs</span> ${Number(d.aS?.crd||0).toFixed(1)}</span></div>
-      </div>
-    </div>
-    ${poissonHtml?`<div class="stat-box" style="margin-top:10px;"><div class="stat-box-title">📊 Poisson Matrix (Home↓ Away→)</div>${poissonHtml}</div>`:''}
-    <div class="h2h-footer">${h2hStr} ${biasHtml}</div>
-  </div>`;
-}
-
-function renderSummaryTable() {
+window.renderSummaryTable = function() {
   const sec = document.getElementById('summarySection');
   if(!sec) return;
   const sd = window.scannedMatchesData;
@@ -529,7 +427,6 @@ function renderSummaryTable() {
     if(d.omegaPick?.includes('ΑΣΟΣ')||d.omegaPick?.includes('ΔΙΠΛΟ')||d.omegaPick?.includes('⚡')) lgMap[d.lg].outcome++;
     if(d.omegaPick?.includes('ΚΟΡΝΕΡ')) lgMap[d.lg].corner++;
   });
-
   const rows = Object.values(lgMap).sort((a,b)=>b.count-a.count);
 
   let matchRows = '';
@@ -588,7 +485,8 @@ function renderSummaryTable() {
       }
 
       const conf=Math.min(Math.max(safeNum(x.strength),0),100);
-      const liveExtra = isLiveNow && x.liveCorners !== undefined ? `<div style="font-size:0.6rem;color:var(--accent-teal);margin-top:2px;">🚩${x.liveCorners} 🟨${x.liveYellows}</div>` : '';
+      const liveExtra = isLiveNow && x.liveCorners !== undefined
+        ? `<div style="font-size:0.6rem;color:var(--accent-teal);margin-top:2px;">🚩${x.liveCorners} 🟨${x.liveYellows}</div>` : '';
 
       matchRows+=`<tr onclick="scrollToMatch('card-${x.fixId}')" style="cursor:pointer;${isLiveNow?'background:rgba(52,211,153,0.04);':''}" title="${esc(x.ht)} vs ${esc(x.at)}">
         <td class="col-match" style="font-weight:600;color:var(--text-main);">
@@ -598,7 +496,7 @@ function renderSummaryTable() {
         <td class="col-1x2 mono" style="color:${colOut};">${x.outPick}</td>
         <td class="col-o25 mono" style="color:${colO25};">${isO25}</td>
         <td class="col-u25 mono" style="color:${colU25};">${isU25}</td>
-        <td class="col-btts mono" style="color:${colBtts};">${isBtts}</td>
+        <td class="col-btts mono" style="color:${colBtts};">${isBttsF}</td>
         <td class="col-exact mono" style="color:${colEx};">${x.exact||'?-?'}</td>
         <td class="col-conf mono" style="color:${conf>=65?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--text-muted)'};">${conf.toFixed(0)}%</td>
         <td class="col-signal" style="font-size:0.68rem;color:${colOm};font-weight:800;font-family:var(--font-body);">${x.omegaPick?.split(' ').slice(0,3).join(' ')||'-'}</td>
@@ -642,54 +540,24 @@ function renderSummaryTable() {
     </div>`;
 }
 
-function rebuildTopLists() {
-  latestTopLists.combo1   = window.scannedMatchesData.filter(x=>x.omegaPick&&x.omegaPick.includes('⚡')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
-  latestTopLists.outcomes = window.scannedMatchesData.filter(x=>x.omegaPick&&(x.omegaPick.includes('ΑΣΟΣ')||x.omegaPick.includes('ΔΙΠΛΟ'))).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
-  latestTopLists.exact    = [...window.scannedMatchesData].filter(x=>x.exactConf).sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,5);
-  latestTopLists.over25   = window.scannedMatchesData.filter(x=>x.omegaPick&&x.omegaPick.includes('OVER 2.5')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
-  latestTopLists.over35   = window.scannedMatchesData.filter(x=>x.omegaPick&&x.omegaPick.includes('OVER 3.5')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
-  latestTopLists.under25  = window.scannedMatchesData.filter(x=>x.omegaPick&&x.omegaPick.includes('UNDER 2.5')).sort((a,b)=>(b.strength||0)-(a.strength||0)).slice(0,5);
-}
-
-function renderTopSections() {
-  const tabs=[
-    {id:'combo1',  lbl:'High Conf 1X2',      d:latestTopLists.combo1,   sk:'strength', sl:'CONF'},
-    {id:'outcomes',lbl:'Match Odds',         d:latestTopLists.outcomes, sk:'strength', sl:'CONF'},
-    {id:'over25',  lbl:'Over 2.5',           d:latestTopLists.over25,   sk:'tXG',      sl:'xG'},
-    {id:'over35',  lbl:'Over 3.5',           d:latestTopLists.over35,   sk:'tXG',      sl:'xG'},
-    {id:'under25', lbl:'Under 2.5',          d:latestTopLists.under25,  sk:'strength', sl:'CONF'},
-    {id:'exact',   lbl:'Exact Score',        d:latestTopLists.exact,    sk:'exactConf',sl:'CONF'}
-  ];
-  let html=`<div class="quant-panel" style="padding:0; overflow:hidden;"><div class="tabs-wrapper">`;
-  tabs.forEach((t,i)=>{
-    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${t.id}')" id="tab-btn-${t.id}">${t.lbl} <span class="tab-count">${t.d.length}</span></button>`;
-  });
-  html+=`</div>`;
-  tabs.forEach((t,i)=>{
-    html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'}" id="tabpanel-${t.id}">
-      <div style="padding:0 20px 20px 20px; display:flex; flex-direction:column; gap:8px;">`;
-    if(!t.d.length) html+=`<div style="text-align:center;color:var(--text-muted);padding:20px 0;font-weight:600;">No high-confidence signals found.</div>`;
-    t.d.forEach((x,j)=>{
-      const rawVal = t.id === 'exact' ? x.exact : Number(x[t.sk] || 0);
-      const val = t.id === 'exact' ? rawVal : rawVal.toFixed(1);
-      html+=`
-      <div onclick="scrollToMatch('card-${x.fixId}')" style="display:flex; align-items:center; gap:16px; padding:12px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:var(--radius-sm); cursor:pointer; transition:border-color 0.2s;">
-        <div class="mono" style="color:var(--text-muted); font-size:1.2rem;">#${j+1}</div>
-        <div style="flex:1;">
-          <div style="font-weight:700; font-size:0.9rem;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
-          <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">${esc(x.lg)}</div>
-          <div style="font-size:0.7rem; color:var(--accent-green); font-weight:600; margin-top:2px;">${esc(x.omegaPick)}</div>
-        </div>
-        <div style="text-align:right;">
-          <div class="mono" style="color:var(--accent-blue); font-size:1.1rem;">${val}</div>
-          <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600;">${t.sl}</div>
-        </div>
-      </div>`;
-    });
-    html+=`</div></div>`;
-  });
-  html+=`</div>`;
-  document.getElementById('topSection').innerHTML=html;
+window.renderWallBets = function() {
+  const wallDiv=document.getElementById('wallbetSection'); if(!window.scannedMatchesData.length){if(wallDiv)wallDiv.innerHTML='';return;}
+  const safe=window.scannedMatchesData.filter(m=>(m.omegaPick?.includes('OVER 2.5')||m.omegaPick?.includes('GOAL')||m.omegaPick?.includes('UNDER 2.5'))&&!m.isBomb).sort((a,b)=>b.strength-a.strength);
+  const leg=(x)=>`<div onclick="scrollToMatch('card-${x.fixId}')" style="background:var(--bg-surface); padding:12px; border-radius:var(--radius-sm); border-left:3px solid var(--accent-blue); margin-bottom:10px; cursor:pointer;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
+    <div style="font-size:0.7rem; color:var(--text-muted); font-weight:600; margin-bottom:4px;">${esc(x.ht)} vs ${esc(x.at)}</div>
+    <div style="font-weight:800; font-size:0.85rem; color:var(--text-main);">${esc(x.omegaPick)}</div>
+    <div style="font-size:0.65rem; color:var(--accent-gold); margin-top:4px;">Conf: ${safeNum(x.strength).toFixed(1)}%</div>
+  </div>`;
+  let html=`<div class="quant-panel" style="border-color:var(--accent-green);">
+    <div class="panel-title" style="color:var(--accent-green);">🛡️ Premium Double Bets</div>
+    <div style="display:flex; flex-wrap:wrap; gap:20px;">`;
+  if(safe.length>=2) html+=`<div style="flex:1; min-width:280px; background:var(--bg-base); padding:16px; border-radius:var(--radius-md); border:1px solid var(--border-light);">
+    <div style="font-family:'Syne',sans-serif; color:var(--accent-blue); font-size:0.8rem; margin-bottom:16px; font-weight:800;">💎 DOUBLE #1 (SAFE)</div>${leg(safe[0])}${leg(safe[1])}</div>`;
+  if(safe.length>=4) html+=`<div style="flex:1; min-width:280px; background:var(--bg-base); padding:16px; border-radius:var(--radius-md); border:1px solid var(--border-light);">
+    <div style="font-family:'Syne',sans-serif; color:var(--accent-gold); font-size:0.8rem; margin-bottom:16px; font-weight:800;">🔥 DOUBLE #2 (VALUE)</div>${leg(safe[2])}${leg(safe[3])}</div>`;
+  if(safe.length<2) html+=`<div style="text-align:center; padding:20px; width:100%; color:var(--text-muted); font-weight:600;">⚠️ Insufficient secure signals.</div>`;
+  html+=`</div></div>`;
+  if(wallDiv) wallDiv.innerHTML=html;
 }
 
 window.filterFeed = function(){
@@ -712,7 +580,61 @@ window.filterFeed = function(){
   document.getElementById('feedCount').innerText=n;
 };
 
-// 12. SMART AUDIT
+// 10. Live Events Parse
+function parseEventsForStats(events) {
+  let corners = 0, yellowCards = 0, redCards = 0;
+  (events || []).forEach(ev => {
+    const type   = (ev.type   || '').toLowerCase();
+    const detail = (ev.detail || '').toLowerCase();
+    if (type === 'corner') { corners++; } 
+    else if (type === 'card') {
+      if (detail.includes('yellow')) yellowCards++;
+      else if (detail.includes('red') && !detail.includes('yellow')) redCards++;
+    }
+  });
+  return { corners, yellowCards, redCards, totalCards: yellowCards + redCards };
+}
+
+window.syncLiveScores = async function() {
+  if (isRunning) return;
+  const btn = document.getElementById('btnSyncLive');
+  if (btn) { btn.innerText = 'Syncing...'; btn.disabled = true; }
+  try {
+    const res = await apiReq('fixtures?live=all');
+    const liveFixtures = res.response || [];
+    if (!liveFixtures.length) { showOk('No live matches right now.'); return; }
+
+    const liveMap = new Map(liveFixtures.map(f => [f.fixture.id, f]));
+    const liveScanned = window.scannedMatchesData.filter(d => liveMap.has(d.fixId));
+    if (!liveScanned.length) { showOk('No live matches in current scan set.'); return; }
+
+    const eventPromises = liveScanned.map(d => apiReq(`fixtures/events?fixture=${d.fixId}`));
+    const eventResults  = await Promise.all(eventPromises);
+
+    let updCount = 0;
+    liveScanned.forEach((d, i) => {
+      const liveData = liveMap.get(d.fixId);
+      d.m.goals = liveData.goals;
+      d.m.fixture.status = liveData.fixture.status;
+      const evStats = parseEventsForStats(eventResults[i]?.response || []);
+      d.liveCorners = evStats.corners;
+      d.liveCards   = evStats.totalCards;
+      d.liveYellows = evStats.yellowCards;
+      d.liveReds    = evStats.redCards;
+      updCount++;
+    });
+
+    renderSummaryTable();
+    filterFeed();
+    showOk(`Synced ${updCount} live match${updCount !== 1 ? 'es' : ''} · Score + Corners + Cards`);
+  } catch (e) {
+    showErr('Sync error: ' + e.message);
+  } finally {
+    if (btn) { btn.innerHTML = '<span class="live-dot"></span>Live Sync'; btn.disabled = false; }
+  }
+};
+
+// 11. SMART AUDIT
 async function runCustomAudit() {
   if(isRunning) return;
   const s=document.getElementById('auditStart').value, e=document.getElementById('auditEnd').value;
@@ -898,8 +820,19 @@ async function runCustomAudit() {
   finally { isRunning=false; setLoader(false); setBtnsDisabled(false); }
 }
 
-// 13. INIT
+// 12. INIT
 window.addEventListener('DOMContentLoaded', () => {
+  const pinInput = document.getElementById('pin');
+  if (pinInput) {
+    pinInput.addEventListener('input', function() {
+      if(this.value === "106014") {
+        document.getElementById('auth').style.display = 'none';
+        document.getElementById('app').style.display  = 'block';
+        initCredits(); updateAuditLeagueFilter(); loadSettings(); loadBankroll();
+      }
+    });
+  }
+
   document.getElementById('scanStart').value = todayISO();
   document.getElementById('scanEnd').value   = todayISO();
   const d30=new Date(); d30.setDate(d30.getDate()-15);
@@ -909,6 +842,3 @@ window.addEventListener('DOMContentLoaded', () => {
   const sel=document.getElementById('leagueFilter');
   LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`);
 });
-</script>
-</body>
-</html>
