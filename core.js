@@ -1,7 +1,4 @@
 // core.js
-const API_BASE = "https://v3.football.api-sports.io";
-let API_KEY = localStorage.getItem('omega_api_key') || "956cbd05f9e9bf934df78d9b72d9a3a0";
-const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=8; const REQUEST_GAP_MS=260;
 
 // MATH & PROBABILITY
 function poissonProb(lambda, k) {
