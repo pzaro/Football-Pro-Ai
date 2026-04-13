@@ -1,67 +1,23 @@
-// app.js
-
 // ================================================================
-// CREDITS MANAGEMENT
+// UI UTILS & HELPERS
 // ================================================================
-window.initCredits = async function() {
-  try {
-    const res = await fetch(`${API_BASE}/status`, {
-      headers: { 'x-apisports-key': API_KEY }
-    });
-    const data = await res.json();
-    
-    if (data.response?.requests?.current !== undefined) {
-      const limit = data.response.requests.limit_day || 100;
-      const used = data.response.requests.current;
-      currentCredits = limit - used;
-    } else {
-      const subRes = await fetch(`${API_BASE}/subscription`, {
-        headers: { 'x-apisports-key': API_KEY }
-      });
-      const subData = await subRes.json();
-      const remaining = subData.response?.quota_remaining;
-      currentCredits = (remaining !== undefined) ? remaining : 100;
-    }
-  } catch (e) {
-    console.warn('Could not fetch credits, using default', e);
-    currentCredits = 100;
-  } finally {
-    window.updateCreditsDisplay(currentCredits);
-  }
-};
 
-window.updateCreditsDisplay = function(val) {
-  const el = document.getElementById('creditDisplay');
-  if (el) {
-    el.textContent = val ?? '—';
-    if (val < 100) el.classList.add('low');
-    else el.classList.remove('low');
-  }
-};
-
-window.updateCredits = function(newVal) {
-  currentCredits = newVal;
-  window.updateCreditsDisplay(newVal);
-};
-
-// ================================================================
-// UI UTILS
-// ================================================================
+// Βασικές βοηθητικές συναρτήσεις
+const clamp = (n, mn, mx) => Math.max(mn, Math.min(mx, n));
 const isLive = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
 const todayISO = () => new Date().toISOString().split('T')[0];
 
-// Βοηθητική συνάρτηση για strings (αποτρέπει errors στα alerts)
-const esc = str => String(str).replace(/[&<>'"]/g, match => ({
+// Ασφαλής επεξεργασία κειμένου για αποτροπή σφαλμάτων στα alerts
+const esc = str => String(str ?? '').replace(/[&<>'"]/g, match => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
 }[match]));
 
-// Συνάρτηση για εύρεση ημερομηνιών (Διορθώνει το σφάλμα στο Scan)
+// Υπολογισμός εύρους ημερομηνιών για το Scan
 function getDatesInRange(startDate, endDate) {
   const dates = [];
   let currentDate = new Date(startDate);
   const end = new Date(endDate);
-  
   while (currentDate <= end) {
     dates.push(currentDate.toISOString().split('T')[0]);
     currentDate.setDate(currentDate.getDate() + 1);
@@ -69,27 +25,81 @@ function getDatesInRange(startDate, endDate) {
   return dates;
 }
 
-function togglePanel(panelId,arrowId) {
-  const p=document.getElementById(panelId),a=document.getElementById(arrowId);
-  if(p.style.display==='none'){p.style.display='block';if(a)a.innerText='▲';}
-  else{p.style.display='none';if(a)a.innerText='▼';}
+// Διαχείριση εμφάνισης/απόκρυψης πάνελ
+function togglePanel(panelId, arrowId) {
+  const p = document.getElementById(panelId), a = document.getElementById(arrowId);
+  if (p.style.display === 'none') {
+    p.style.display = 'block';
+    if (a) a.innerText = '▲';
+  } else {
+    p.style.display = 'none';
+    if (a) a.innerText = '▼';
+  }
 }
-function setLoader(show,text='') { 
-  document.getElementById('loader').style.display=show?'block':'none'; 
-  document.getElementById('status').textContent=text; 
-  if(!show) document.getElementById('bar').style.width='0%'; 
-}
-function setProgress(pct,text='') { 
-  document.getElementById('bar').style.width=Math.round(clamp(pct,0,100))+'%'; 
-  document.getElementById('status').textContent=text + (_apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : ''); 
-}
-function setBtnsDisabled(d) { ["btnPre","leagueFilter","auditLeague"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
-function showErr(msg) { clearTimeout(_errTimer); const box=document.getElementById('errorBox'); box.innerHTML=`<div>⚠️ ${esc(msg)}</div>`; _errTimer=setTimeout(()=>box.innerHTML='',8000); }
-function showOk(msg) { clearTimeout(_okTimer); const box=document.getElementById('successBox'); box.innerHTML=`<div>✓ ${esc(msg)}</div>`; _okTimer=setTimeout(()=>box.innerHTML='',4000); }
-function clearAlerts() { document.getElementById('errorBox').innerHTML=''; document.getElementById('successBox').innerHTML=''; }
-function abortScan(msg) { if(msg)showErr(msg); isRunning=false; setBtnsDisabled(false); setLoader(false); }
-function flashElement(el) { if(!el) return; const original = el.style.background; el.style.background = 'rgba(14, 165, 233, 0.2)'; setTimeout(() => el.style.background = original, 800); }
 
+// Έλεγχος Loader και Μπάρας Προόδου
+function setLoader(show, text = '') {
+  const loader = document.getElementById('loader');
+  const status = document.getElementById('status');
+  const bar = document.getElementById('bar');
+  if (loader) loader.style.display = show ? 'block' : 'none';
+  if (status) status.textContent = text;
+  if (!show && bar) bar.style.width = '0%';
+}
+
+function setProgress(pct, text = '') {
+  const bar = document.getElementById('bar');
+  const status = document.getElementById('status');
+  if (bar) bar.style.width = Math.round(clamp(pct, 0, 100)) + '%';
+  if (status) status.textContent = text + (typeof _apiActiveCount !== 'undefined' && _apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : '');
+}
+
+// Διαχείριση κουμπιών και ειδοποιήσεων
+function setBtnsDisabled(d) { 
+  ["btnPre", "leagueFilter", "auditLeague"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = d;
+  }); 
+}
+
+function showErr(msg) { 
+  clearTimeout(window._errTimer); 
+  const box = document.getElementById('errorBox'); 
+  if (box) {
+    box.innerHTML = `<div>⚠️ ${esc(msg)}</div>`; 
+    window._errTimer = setTimeout(() => box.innerHTML = '', 8000); 
+  }
+}
+
+function showOk(msg) { 
+  clearTimeout(window._okTimer); 
+  const box = document.getElementById('successBox'); 
+  if (box) {
+    box.innerHTML = `<div>✓ ${esc(msg)}</div>`; 
+    window._okTimer = setTimeout(() => box.innerHTML = '', 4000); 
+  }
+}
+
+function clearAlerts() { 
+  const errBox = document.getElementById('errorBox');
+  const successBox = document.getElementById('successBox');
+  if (errBox) errBox.innerHTML = ''; 
+  if (successBox) successBox.innerHTML = ''; 
+}
+
+function abortScan(msg) { 
+  if (msg) showErr(msg); 
+  isRunning = false; 
+  setBtnsDisabled(false); 
+  setLoader(false); 
+}
+
+function flashElement(el) { 
+  if (!el) return; 
+  const original = el.style.background; 
+  el.style.background = 'rgba(14, 165, 233, 0.2)'; 
+  setTimeout(() => el.style.background = original, 800); 
+}
 // ================================================================
 // SETTINGS & MODS
 // ================================================================
