@@ -19,9 +19,9 @@ const LEAGUES_DATA = [
 ];
 
 const LEAGUE_IDS = LEAGUES_DATA.map(l => l.id);
-const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]); 
-const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]); 
-const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]); 
+const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]);
+const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]);
+const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]);
 const MY_LEAGUES_IDS = [39,78,88,144,140,135,197,253, 71, 128];
 
 const LEAGUE_AVG_GOALS = {
