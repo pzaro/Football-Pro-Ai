@@ -1,6 +1,52 @@
 // app.js
 
+// ================================================================
+// CREDITS MANAGEMENT
+// ================================================================
+window.initCredits = async function() {
+  try {
+    const res = await fetch(`${API_BASE}/status`, {
+      headers: { 'x-apisports-key': API_KEY }
+    });
+    const data = await res.json();
+    
+    if (data.response?.requests?.current !== undefined) {
+      const limit = data.response.requests.limit_day || 100;
+      const used = data.response.requests.current;
+      currentCredits = limit - used;
+    } else {
+      const subRes = await fetch(`${API_BASE}/subscription`, {
+        headers: { 'x-apisports-key': API_KEY }
+      });
+      const subData = await subRes.json();
+      const remaining = subData.response?.quota_remaining;
+      currentCredits = (remaining !== undefined) ? remaining : 100;
+    }
+  } catch (e) {
+    console.warn('Could not fetch credits, using default', e);
+    currentCredits = 100;
+  } finally {
+    window.updateCreditsDisplay(currentCredits);
+  }
+};
+
+window.updateCreditsDisplay = function(val) {
+  const el = document.getElementById('creditDisplay');
+  if (el) {
+    el.textContent = val ?? '—';
+    if (val < 100) el.classList.add('low');
+    else el.classList.remove('low');
+  }
+};
+
+window.updateCredits = function(newVal) {
+  currentCredits = newVal;
+  window.updateCreditsDisplay(newVal);
+};
+
+// ================================================================
 // UI UTILS
+// ================================================================
 const isLive = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
 const todayISO = () => new Date().toISOString().split('T')[0];
@@ -26,7 +72,9 @@ function clearAlerts() { document.getElementById('errorBox').innerHTML=''; docum
 function abortScan(msg) { if(msg)showErr(msg); isRunning=false; setBtnsDisabled(false); setLoader(false); }
 function flashElement(el) { if(!el) return; const original = el.style.background; el.style.background = 'rgba(14, 165, 233, 0.2)'; setTimeout(() => el.style.background = original, 800); }
 
+// ================================================================
 // SETTINGS & MODS
+// ================================================================
 function loadSettings() {
   try { const s = JSON.parse(localStorage.getItem(LS_SETTINGS)); if(s) engineConfig = {...DEFAULT_SETTINGS,...s}; } catch {}
   try { const lm = JSON.parse(localStorage.getItem(LS_LGMODS)); if(lm) leagueMods = { ...leagueMods, ...lm }; } catch {}
@@ -94,7 +142,9 @@ function saveLeagueMods(silent=false) {
 }
 function resetLeagueMods() { leagueMods={}; try{localStorage.removeItem(LS_LGMODS);}catch{} buildLeagueModTable(); showOk("League Modifiers Reset."); }
 
+// ================================================================
 // BANKROLL
+// ================================================================
 function loadBankroll() { try { const b = JSON.parse(localStorage.getItem(LS_BANKROLL)); if(b) bankrollData = b; } catch {} updateBankrollDisplay(); }
 function updateBankrollDisplay() { const el = document.getElementById('bankrollDisplay'); if(el) el.textContent = bankrollData.current > 0 ? `€${bankrollData.current.toFixed(2)}` : 'Set'; }
 function openBankroll()  { document.getElementById('bankrollModal').style.display = 'flex'; document.getElementById('bankrollInput').value = bankrollData.current || ''; renderBankrollHistory(); }
@@ -129,7 +179,9 @@ function kellyStake(winProb, odds, fraction=0.25) {
   return Math.max(0.5, Math.min(stake, bankrollData.current*0.20));
 }
 
+// ================================================================
 // STORAGE
+// ================================================================
 function stripForStorage(rec) {
   const { pp, hS, aS, aTot, aCor, aCards, ...rest } = rec;
   const stripTeam = t => t ? { fXG:t.fXG, fXGA:t.fXGA, sXG:t.sXG, sXGA:t.sXGA, wXG:t.wXG, formRating:t.formRating, cor:t.cor, crd:t.crd, uiXG:t.uiXG, uiXGA:t.uiXGA, uiDevXG:t.uiDevXG, uiDevXGA:t.uiDevXGA, uiSXG:t.uiSXG } : undefined;
@@ -159,7 +211,9 @@ function updateAuditLeagueFilter() {
   store.forEach(x=>{if(!known.has(x.leagueId)&&x.leagueId){sel.innerHTML+=`<option value="${x.leagueId}">${x.league}</option>`;known.add(x.leagueId);}});
 }
 
+// ================================================================
 // EXPORT / IMPORT
+// ================================================================
 window.exportData = function() {
   if(!window.scannedMatchesData?.length){showErr("Δεν υπάρχουν δεδομένα.");return;}
   const blob=new Blob([JSON.stringify(window.scannedMatchesData.map(stripForStorage))],{type:'application/json'});
@@ -496,7 +550,7 @@ window.renderSummaryTable = function() {
         <td class="col-1x2 mono" style="color:${colOut};">${x.outPick}</td>
         <td class="col-o25 mono" style="color:${colO25};">${isO25}</td>
         <td class="col-u25 mono" style="color:${colU25};">${isU25}</td>
-        <td class="col-btts mono" style="color:${colBtts};">${isBttsF}</td>
+        <td class="col-btts mono" style="color:${colBtts};">${isBtts}</td>
         <td class="col-exact mono" style="color:${colEx};">${x.exact||'?-?'}</td>
         <td class="col-conf mono" style="color:${conf>=65?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--text-muted)'};">${conf.toFixed(0)}%</td>
         <td class="col-signal" style="font-size:0.68rem;color:${colOm};font-weight:800;font-family:var(--font-body);">${x.omegaPick?.split(' ').slice(0,3).join(' ')||'-'}</td>
@@ -580,7 +634,9 @@ window.filterFeed = function(){
   document.getElementById('feedCount').innerText=n;
 };
 
-// 10. Live Events Parse
+// ================================================================
+// LIVE EVENTS PARSE
+// ================================================================
 function parseEventsForStats(events) {
   let corners = 0, yellowCards = 0, redCards = 0;
   (events || []).forEach(ev => {
@@ -634,7 +690,9 @@ window.syncLiveScores = async function() {
   }
 };
 
-// 11. SMART AUDIT
+// ================================================================
+// SMART AUDIT
+// ================================================================
 async function runCustomAudit() {
   if(isRunning) return;
   const s=document.getElementById('auditStart').value, e=document.getElementById('auditEnd').value;
@@ -820,7 +878,9 @@ async function runCustomAudit() {
   finally { isRunning=false; setLoader(false); setBtnsDisabled(false); }
 }
 
-// 12. INIT
+// ================================================================
+// INIT
+// ================================================================
 window.addEventListener('DOMContentLoaded', () => {
   const pinInput = document.getElementById('pin');
   if (pinInput) {
@@ -828,7 +888,8 @@ window.addEventListener('DOMContentLoaded', () => {
       if(this.value === "106014") {
         document.getElementById('auth').style.display = 'none';
         document.getElementById('app').style.display  = 'block';
-        initCredits(); updateAuditLeagueFilter(); loadSettings(); loadBankroll();
+        window.initCredits();
+        updateAuditLeagueFilter(); loadSettings(); loadBankroll();
       }
     });
   }
