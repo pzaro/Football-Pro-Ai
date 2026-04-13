@@ -32,3 +32,34 @@ const LEAGUE_AVG_GOALS = {
   2:  2.55, 3:  2.60, 848: 2.50,
   135:2.48, 140:2.52, 61:2.45, 197:2.40, 94:2.45, 128: 2.30
 };
+
+// Global App State Variables
+const API_BASE = "https://v3.football.api-sports.io";
+let API_KEY = "956cbd05f9e9bf934df78d9b72d9a3a0";
+const LS_PREDS = "omega_preds_v5.0";
+const LS_SETTINGS = "omega_settings_v5.0";
+const LS_LGMODS = "omega_lgmods_v5.0";
+const LS_BANKROLL = "omega_bankroll_v5.0";
+
+let teamStatsCache = new Map(), lastFixCache = new Map(), standCache = new Map(), h2hCache = new Map();
+let isRunning = false, currentCredits = null;
+let latestTopLists = { exact:[], combo1:[], combo2:[], outcomes:[], over25:[], over35:[], under25:[] };
+window.scannedMatchesData = [];
+let bankrollData = { current: 0, history: [] };
+
+const DEFAULT_SETTINGS = {
+  wShotsOn:0.14,wShotsOff:0.04,wCorners:0.02,wGoals:0.20,
+  tXG_O25:2.70,tXG_O35:3.25,tXG_U25:1.80,tBTTS_U25:0.65,
+  xG_Diff:0.55,tBTTS:1.10,modTrap:0.90,modTight:0.95,modGold:1.15,
+  minCorners: 10.5, minCards: 5.8
+};
+let engineConfig = {...DEFAULT_SETTINGS};
+let leagueMods = {};
+const SETTINGS_MAP = {
+  cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
+  cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
+  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS', cfg_minCorners:'minCorners', cfg_minCards:'minCards'
+};
+
+const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=8; const REQUEST_GAP_MS=260;
+let _errTimer=null, _okTimer=null;
