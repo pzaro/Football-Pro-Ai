@@ -51,6 +51,24 @@ const isLive = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
 const todayISO = () => new Date().toISOString().split('T')[0];
 
+// Βοηθητική συνάρτηση για strings (αποτρέπει errors στα alerts)
+const esc = str => String(str).replace(/[&<>'"]/g, match => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+}[match]));
+
+// Συνάρτηση για εύρεση ημερομηνιών (Διορθώνει το σφάλμα στο Scan)
+function getDatesInRange(startDate, endDate) {
+  const dates = [];
+  let currentDate = new Date(startDate);
+  const end = new Date(endDate);
+  
+  while (currentDate <= end) {
+    dates.push(currentDate.toISOString().split('T')[0]);
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  return dates;
+}
+
 function togglePanel(panelId,arrowId) {
   const p=document.getElementById(panelId),a=document.getElementById(arrowId);
   if(p.style.display==='none'){p.style.display='block';if(a)a.innerText='▲';}
