@@ -76,7 +76,7 @@ async function _executeRequest(path,resolve) {
   await new Promise(r=>setTimeout(r,Math.random()*100));
   try {
     const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY}});
-    if(typeof currentCredits==='number'){currentCredits--;updateCredits(currentCredits);}
+    if(typeof currentCredits==='number'){currentCredits--;window.updateCredits(currentCredits);}
     resolve(r.ok ? await r.json() : {response:[]});
   } catch { resolve({response:[]}); }
   finally { await new Promise(r=>setTimeout(r,REQUEST_GAP_MS)); _apiActiveCount--; _drainQueue(); }
