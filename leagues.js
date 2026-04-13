@@ -32,11 +32,4 @@ const LEAGUE_AVG_GOALS = {
 
 const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]); 
 const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]); 
-const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]); 
-
-const DEFAULT_SETTINGS = {
-  wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
-  tXG_O25:2.70, tXG_O35:3.25, tXG_U25:1.80, tBTTS_U25:0.65,
-  xG_Diff:0.55, tBTTS:1.10, modTrap:0.90, modTight:0.95, modGold:1.15,
-  minCorners: 10.5, minCards: 5.8
-};
+const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]);
