@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>APEX OMEGA v4736 - Quant Terminal</title>
+  
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-base: #0b0f19; --bg-surface: #111827; --bg-panel: #1f2937;
+      --border-light: rgba(255, 255, 255, 0.08); --border-focus: rgba(14, 165, 233, 0.4);
+      --text-main: #f3f4f6; --text-muted: #9ca3af;
+      --accent-blue: #0ea5e9; --accent-blue-glow: rgba(14, 165, 233, 0.15);
+      --accent-green: #10b981; --accent-red: #f43f5e;
+      --accent-gold: #fbbf24; --accent-purple: #a855f7;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background: var(--bg-base); color: var(--text-main); line-height: 1.5; overflow-x: hidden; font-size: 13px; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-base); }
+    ::-webkit-scrollbar-thumb { background: var(--bg-panel); border-radius: 3px; }
+
+    header {
+      height: 60px; background: var(--bg-surface); border-bottom: 1px solid var(--border-light);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 1.5rem;
+      position: sticky; top: 0; z-index: 100; backdrop-filter: blur(12px);
+    }
+
+    .status-pill {
+      padding: 4px 10px; border-radius: 20px; font-size: 0.65rem; font-weight: 700;
+      letter-spacing: 0.5px; text-transform: uppercase; background: var(--bg-panel);
+      border: 1px solid var(--border-light); color: var(--text-muted); display: flex; align-items: center; gap: 6px;
+    }
+
+    .status-online { color: var(--accent-green); border-color: rgba(16, 185, 129, 0.2); }
+
+    main { padding: 1.5rem; max-width: 1600px; margin: 0 auto; }
+
+    .grid-main { display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem; align-items: start; }
+    @media (max-width: 1024px) { .grid-main { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: 12px;
+      overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    .card-header {
+      padding: 1rem 1.25rem; background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center;
+    }
+
+    .card-title { font-family: 'Orbitron'; font-size: 0.75rem; letter-spacing: 1px; color: var(--accent-blue); }
+
+    .control-group { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
+    label { font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.4rem; display: block; }
+    
+    input, select, textarea {
+      width: 100%; background: var(--bg-panel); border: 1px solid var(--border-light);
+      color: var(--text-main); padding: 0.75rem; border-radius: 6px; font-size: 0.85rem; transition: all 0.2s;
+    }
+    input:focus { border-color: var(--accent-blue); outline: none; box-shadow: 0 0 0 3px var(--accent-blue-glow); }
+
+    .btn {
+      width: 100%; padding: 0.85rem; border-radius: 6px; border: none; font-weight: 700;
+      cursor: pointer; transition: all 0.2s; font-family: 'Orbitron'; font-size: 0.75rem; letter-spacing: 1px;
+    }
+    .btn-primary { background: var(--accent-blue); color: white; box-shadow: 0 4px 15px rgba(14, 165, 233, 0.3); }
+    .btn-primary:hover { transform: translateY(-1px); filter: brightness(1.1); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .results-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .results-table th {
+      text-align: left; padding: 1rem; background: rgba(255,255,255,0.02);
+      color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .results-table td { padding: 1rem; border-bottom: 1px solid var(--border-light); vertical-align: middle; }
+    .results-table tr:hover { background: rgba(255,255,255,0.01); }
+
+    .data-num { font-family: 'Fira Code', monospace; font-weight: 600; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 800; }
+    .badge-gold { background: rgba(251, 191, 36, 0.1); color: var(--accent-gold); border: 1px solid rgba(251, 191, 36, 0.2); }
+    
+    .color-hit { color: var(--accent-green); }
+    .color-miss { color: var(--accent-red); }
+
+    #loader {
+      display: none; height: 2px; background: var(--bg-panel); position: relative; overflow: hidden;
+    }
+    #loader::after {
+      content: ''; position: absolute; left: -50%; width: 50%; height: 100%;
+      background: var(--accent-blue); animation: loading 1.5s infinite linear;
+    }
+    @keyframes loading { 0% { left: -50%; } 100% { left: 100%; } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="width:10px; height:10px; background:var(--accent-blue); border-radius:50%; box-shadow: 0 0 10px var(--accent-blue);"></div>
+      <h1 style="font-family:'Orbitron',sans-serif; font-size:1.1rem; letter-spacing:1px; font-weight:900;">APEX OMEGA <span style="color:var(--accent-blue)">v4736</span></h1>
+    </div>
+    <div id="status-bar" class="status-pill status-online">SYSTEM READY</div>
+  </header>
+
+  <div id="loader"></div>
+
+  <main>
+    <div class="grid-main">
+      <aside class="card">
+        <div class="card-header"><span class="card-title">CONFIGURATION</span></div>
+        <div class="control-group">
+          <div>
+            <label>Scan Range</label>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
+              <input type="date" id="scanStart">
+              <input type="date" id="scanEnd">
+            </div>
+          </div>
+          <button id="btnRun" class="btn btn-primary" onclick="runScan()">EXECUTE ANALYSIS</button>
+          <button class="btn" style="background:var(--bg-panel); color:var(--text-muted); margin-top:0.5rem;" onclick="runAudit()">AUDIT RESULTS</button>
+        </div>
+      </aside>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">REAL-TIME DATA STREAM</span>
+          <div id="credits-display" style="font-family:'Fira Code'; font-size:0.7rem; color:var(--text-muted);">API-KEY: ACTIVE</div>
+        </div>
+        <div id="results-container" style="min-height: 400px; max-height: 80vh; overflow-y: auto;">
+          <div style="padding:4rem; text-align:center; color:var(--text-muted);">
+            <div style="font-size:2rem; margin-bottom:1rem; opacity:0.3;">&empty;</div>
+            <p style="font-family:'Orbitron'; font-size:0.7rem; letter-spacing:1px;">WAITING FOR INPUT...</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="leagues.js"></script>
+
+  <script>
+    // ================================================================
+    //  ENGINE CORE
+    // ================================================================
+    
+    // Όλες οι μεταβλητές (LEAGUES_DATA κλπ) προέρχονται από το leagues.js
+    let isRunning = false;
+    let engineConfig = {...DEFAULT_SETTINGS};
+
+    async function apiReq(endpoint) {
+      const res = await fetch(`${API_BASE}/${endpoint}`, {
+        headers: { "x-rapidapi-key": API_KEY, "x-rapidapi-host": "v3.football.api-sports.io" }
+      });
+      const data = await res.json();
+      if (data.errors && Object.keys(data.errors).length > 0) {
+        if (data.errors.requests) throw new Error("API Limit Reached");
+        throw new Error(JSON.stringify(data.errors));
+      }
+      return data.response;
+    }
+
+    function poissonProb(lambda, k) {
+      return (Math.exp(-lambda) * Math.pow(lambda, k)) / factorial(k);
+    }
+    function factorial(n) {
+      let r=1; for(let i=2; i<=n; i++) r*=i; return r;
+    }
+
+    async function getTeamStats(league, season, team) {
+      const key = `${league}-${season}-${team}`;
+      if (teamStatsCache.has(key)) return teamStatsCache.get(key);
+      const data = await apiReq(`teams/statistics?league=${league}&season=${season}&team=${team}`);
+      teamStatsCache.set(key, data);
+      return data;
+    }
+
+    // ================================================================
+    //  MAIN ANALYSIS LOGIC
+    // ================================================================
+    async function runScan() {
+      if (isRunning) return;
+      isRunning = true;
+      setLoader(true);
+      setBtnsDisabled(true);
+      window.scannedMatchesData = [];
+      
+      const start = document.getElementById('scanStart').value;
+      const end = document.getElementById('scanEnd').value;
+
+      try {
+        for (const lg of LEAGUES_DATA) {
+          showOk(`STREAMING: ${lg.name}...`);
+          const fixtures = await apiReq(`fixtures?league=${lg.id}&season=2025&from=${start}&to=${end}`);
+          if (!fixtures || fixtures.length === 0) continue;
+
+          for (const f of fixtures) {
+            const analysis = await analyzeMatch(f);
+            if (analysis) window.scannedMatchesData.push(analysis);
+          }
+        }
+        renderResults();
+        showOk('SCAN COMPLETED');
+      } catch (e) {
+        showErr(e.message);
+      } finally {
+        isRunning = false;
+        setLoader(false);
+        setBtnsDisabled(false);
+      }
+    }
+
+    async function analyzeMatch(f) {
+      try {
+        const lgId = f.league.id;
+        const homeId = f.teams.home.id;
+        const awayId = f.teams.away.id;
+
+        const [hStats, aStats] = await Promise.all([
+          getTeamStats(lgId, 2025, homeId),
+          getTeamStats(lgId, 2025, awayId)
+        ]);
+
+        // xG / xGA Calculation Logic
+        const hG = hStats.goals.for.average.home || 1.2;
+        const hA = hStats.goals.against.average.home || 1.2;
+        const aG = aStats.goals.for.average.away || 1.0;
+        const aA = aStats.goals.against.average.away || 1.4;
+
+        const leagueAvg = LEAGUE_AVG_GOALS[lgId] || 2.5;
+        const expH = (hG * aA) / (leagueAvg / 2);
+        const expA = (aG * hA) / (leagueAvg / 2);
+
+        // Poisson
+        let pO25 = 0;
+        for(let i=0; i<=2; i++) {
+          for(let j=0; j<=2-i; j++) {
+            pO25 += poissonProb(expH, i) * poissonProb(expA, j);
+          }
+        }
+        pO25 = (1 - pO25) * 100;
+
+        return {
+          id: f.fixture.id,
+          time: new Date(f.fixture.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+          league: f.league.name,
+          home: f.teams.home.name,
+          away: f.teams.away.name,
+          expH: expH.toFixed(2),
+          expA: expA.toFixed(2),
+          pO25: pO25.toFixed(1) + "%",
+          rawO25: pO25
+        };
+      } catch(e) { return null; }
+    }
+
+    function renderResults() {
+      const container = document.getElementById('results-container');
+      if (window.scannedMatchesData.length === 0) {
+        container.innerHTML = `<div style="padding:4rem; text-align:center; color:var(--text-muted);">NO MATCHES FOUND</div>`;
+        return;
+      }
+
+      let html = `<table class="results-table">
+        <thead>
+          <tr>
+            <th>TIME</th><th>MATCH</th><th>xG H</th><th>xG A</th><th>O2.5%</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+      window.scannedMatchesData.forEach(m => {
+        html += `
+          <tr>
+            <td class="data-num">${m.time}</td>
+            <td style="font-weight:600;">${m.home} vs ${m.away}</td>
+            <td class="data-num">${m.expH}</td>
+            <td class="data-num">${m.expA}</td>
+            <td class="data-num" style="color:${m.rawO25 > 70 ? 'var(--accent-green)' : 'var(--text-main)'}">${m.pO25}</td>
+          </tr>`;
+      });
+
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+    }
+
+    // UI Helpers
+    function setLoader(v) { document.getElementById('loader').style.display = v ? 'block' : 'none'; }
+    function setBtnsDisabled(v) { document.getElementById('btnRun').disabled = v; }
+    function showOk(m) { document.getElementById('status-bar').innerText = m; document.getElementById('status-bar').className = "status-pill status-online"; }
+    function showErr(m) { document.getElementById('status-bar').innerText = m; document.getElementById('status-bar').className = "status-pill color-miss"; }
+    function todayISO() { return new Date().toISOString().split('T')[0]; }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('scanStart').value = todayISO();
+      document.getElementById('scanEnd').value = todayISO();
+      
+      const savedSettings = localStorage.getItem(LS_SETTINGS);
+      if (savedSettings) engineConfig = JSON.parse(savedSettings);
+    });
+
+  </script>
+</body>
+</html>
