@@ -2,6 +2,122 @@
 // v2.1 - Διορθώσεις: lambda bug, weighted xG normalization,
 //         opponent-adjusted form, bttsScore cap, αυστηρότερα thresholds
 
+// ================================================================
+//  INJURY / ABSENCE IMPACT SYSTEM  —  v1.0
+// ================================================================
+/**
+ * Κάθε τραυματισμένος παίκτης εκπροσωπείται ως:
+ * { name, position, importanceScore }
+ *
+ * importanceScore: 0..1
+ *   1.0  = βασικό πρόσωπο (αρχηγός, top scorer, first-choice GK)
+ *   0.7  = σημαντικός βασικός
+ *   0.4  = χρήσιμος rotation player
+ *   0.2  = αδύναμος/νεαρός
+ *
+ * Θέση → ποιοι δείκτες επηρεάζονται:
+ *   FW  → xG (attack output)
+ *   MF  → xG (build-up / chances creation) + corners
+ *   DF  → xGA (defensive solidity)
+ *   GK  → xGA (last line of defence)
+ */
+
+const POSITION_IMPACT = {
+  FW:  { xg: 0.18, xga: 0.00, cor: 0.04 },
+  MF:  { xg: 0.10, xga: 0.04, cor: 0.06 },
+  DF:  { xg: 0.02, xga: 0.14, cor: 0.01 },
+  GK:  { xg: 0.00, xga: 0.20, cor: 0.00 },
+  UNK: { xg: 0.06, xga: 0.06, cor: 0.02 }  // άγνωστη θέση
+};
+
+/**
+ * Δέχεται λίστα τραυματιών/απόντων και επιστρέφει penalty factors (0..1):
+ * { xgFactor, xgaFactor, corFactor }
+ * factor < 1 = μείωση της απόδοσης
+ *
+ * Παράδειγμα:
+ *   applyInjuryPenalties([
+ *     { position: 'FW', importanceScore: 1.0 },  // αρχηγός επιθετικός
+ *     { position: 'DF', importanceScore: 0.7 },   // σημαντικός αμυντικός
+ *   ])
+ *   → { xgFactor: 0.82, xgaFactor: 0.90, corFactor: 0.97 }
+ */
+function applyInjuryPenalties(absentPlayers = []) {
+  let xgPenalty = 0, xgaPenalty = 0, corPenalty = 0;
+
+  for (const p of absentPlayers) {
+    const pos    = (p.position || 'UNK').toUpperCase().slice(0, 2);
+    const impact = POSITION_IMPACT[pos] || POSITION_IMPACT.UNK;
+    const w      = clamp(safeNum(p.importanceScore, 0.5), 0, 1);
+
+    xgPenalty  += impact.xg  * w;
+    xgaPenalty += impact.xga * w;
+    corPenalty += impact.cor * w;
+  }
+
+  // Cap ώστε ένας τραυματισμός να μην "σβήσει" την ομάδα
+  return {
+    xgFactor:  clamp(1 - xgPenalty,  0.50, 1.00),
+    xgaFactor: clamp(1 - xgaPenalty, 0.50, 1.00),
+    corFactor: clamp(1 - corPenalty,  0.70, 1.00)
+  };
+}
+
+/**
+ * Εφαρμόζει τους injury factors στα intel data μιας ομάδας.
+ * Τροποποιεί: fXG, sXG, wXG (xgFactor) και fXGA, sXGA (xgaFactor) και cor (corFactor).
+ * Επιστρέφει νέο object χωρίς mutation.
+ */
+function applyInjuriesToIntel(intel, absentPlayers = []) {
+  if (!absentPlayers || !absentPlayers.length) return intel;
+  const { xgFactor, xgaFactor, corFactor } = applyInjuryPenalties(absentPlayers);
+  return {
+    ...intel,
+    fXG:  safeNum(intel.fXG)  * xgFactor,
+    sXG:  safeNum(intel.sXG)  * xgFactor,
+    wXG:  safeNum(intel.wXG)  * xgFactor,
+    fXGA: safeNum(intel.fXGA) * xgaFactor,
+    sXGA: safeNum(intel.sXGA) * xgaFactor,
+    cor:  safeNum(intel.cor)  * corFactor,
+    // UI fields για εμφάνιση στο card
+    uiXG:  (safeNum(intel.fXG) * xgFactor).toFixed(2),
+    uiXGA: (safeNum(intel.fXGA) * xgaFactor).toFixed(2),
+    // Αποθήκευση factors για UI badge
+    injuryFactors: { xgFactor, xgaFactor, corFactor },
+    absentPlayers
+  };
+}
+
+/**
+ * Δημιουργεί σύντομο HTML badge για να εμφανιστεί στο match card.
+ * Δείχνει πόσο μειώθηκε το xG/xGA λόγω τραυματισμών.
+ */
+function injuryBadgeHTML(intel, teamName) {
+  if (!intel?.injuryFactors || !intel?.absentPlayers?.length) return '';
+  const { xgFactor, xgaFactor } = intel.injuryFactors;
+  const count = intel.absentPlayers.length;
+  const severity = (2 - xgFactor - xgaFactor) / 2; // 0 = no impact, 1 = max
+  const col = severity > 0.25 ? 'var(--accent-red)' : severity > 0.10 ? 'var(--accent-gold)' : 'var(--text-muted)';
+  const icon = severity > 0.25 ? '🚨' : severity > 0.10 ? '⚠️' : 'ℹ️';
+  const xgPct = ((1 - xgFactor) * 100).toFixed(0);
+  const xgaPct = ((1 - xgaFactor) * 100).toFixed(0);
+
+  const playerList = intel.absentPlayers.slice(0, 4).map(p =>
+    `<span style="opacity:0.8">${p.name || '?'} (${p.position || '?'})</span>`
+  ).join(', ');
+
+  return `
+    <div style="margin-top:8px; padding:8px 10px; background:rgba(244,63,94,0.06);
+      border:1px solid rgba(244,63,94,0.2); border-radius:6px; font-size:0.68rem; color:${col}; line-height:1.5;">
+      ${icon} <strong>Απόντες (${count}):</strong> ${playerList}
+      ${count > 4 ? `<span style="opacity:0.6">+${count-4} ακόμα</span>` : ''}
+      <div style="margin-top:4px; color:var(--text-muted); font-size:0.63rem; font-family:'Fira Code',monospace;">
+        xG penalty: <span style="color:var(--accent-red)">-${xgPct}%</span>
+        &nbsp;|&nbsp; xGA penalty: <span style="color:var(--accent-gold)">-${xgaPct}%</span>
+      </div>
+    </div>`;
+}
+
 // --- Βοηθητικές Μαθηματικές Συναρτήσεις ---
 const safeNum  = (x, d=0) => Number.isFinite(Number(x)) ? Number(x) : d;
 const clamp    = (n,mn,mx) => Math.max(mn, Math.min(mx, n));

@@ -508,6 +508,123 @@ async function _executeRequest(path, resolve) {
 }
 
 // ================================================================
+//  MATCHMONEY.GR ANALYSIS FETCHER
+// ================================================================
+const matchmoneyCache = new Map();
+
+/**
+ * Ψάχνει αναλύσεις στο matchmoney.com.gr για ένα συγκεκριμένο ματς.
+ * Χρησιμοποιεί CORS proxy (allorigins) για να παρακάμψει τους CORS περιορισμούς.
+ * Επιστρέφει HTML snippet ή null αν δεν βρεθεί.
+ */
+async function fetchMatchmoneyAnalysis(homeTeam, awayTeam) {
+  const cacheKey = `${homeTeam}_${awayTeam}`;
+  if (matchmoneyCache.has(cacheKey)) return matchmoneyCache.get(cacheKey);
+
+  try {
+    // Φτιάχνουμε search-friendly query
+    const q = encodeURIComponent(`${homeTeam} ${awayTeam} site:matchmoney.com.gr`);
+    // Χρησιμοποιούμε allorigins για να πάρουμε το listing page
+    const listUrl = `https://api.allorigins.win/get?url=${encodeURIComponent('https://www.matchmoney.com.gr/analuseis-agonon/')}`;
+    const resp = await fetch(listUrl, { signal: AbortSignal.timeout(7000) });
+    if (!resp.ok) { matchmoneyCache.set(cacheKey, null); return null; }
+    const data = await resp.json();
+    const html = data.contents || '';
+
+    // Ψάχνουμε link που περιέχει ονόματα ομάδων (transliterated)
+    const normalize = s => s.toLowerCase()
+      .replace(/[αά]/g,'a').replace(/[εέ]/g,'e').replace(/[ηή]/g,'h')
+      .replace(/[ιίϊΐ]/g,'i').replace(/[οό]/g,'o').replace(/[υύϋΰ]/g,'u')
+      .replace(/[ωώ]/g,'w').replace(/[θ]/g,'th').replace(/[χ]/g,'ch')
+      .replace(/[ξ]/g,'x').replace(/[ψ]/g,'ps').replace(/[ζ]/g,'z')
+      .replace(/[σς]/g,'s').replace(/[κ]/g,'k').replace(/[μ]/g,'m')
+      .replace(/[ν]/g,'n').replace(/[λ]/g,'l').replace(/[ρ]/g,'r')
+      .replace(/[π]/g,'p').replace(/[τ]/g,'t').replace(/[φ]/g,'f')
+      .replace(/[γ]/g,'g').replace(/[δ]/g,'d').replace(/[β]/g,'b')
+      .replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g,'');
+
+    const normHome = normalize(homeTeam).slice(0, 6);
+    const normAway = normalize(awayTeam).slice(0, 6);
+
+    // Βρίσκουμε links αναλύσεων
+    const linkRe = /href="(https?:\/\/www\.matchmoney\.com\.gr\/analuseis-agonon\/[^"]+)"/gi;
+    let match, foundUrl = null;
+    while ((match = linkRe.exec(html)) !== null) {
+      const url = match[1].toLowerCase();
+      // Ελέγχουμε αν το URL περιέχει κάτι σχετικό με τις ομάδες
+      const hParts = homeTeam.toLowerCase().split(' ').filter(p => p.length > 3);
+      const aParts = awayTeam.toLowerCase().split(' ').filter(p => p.length > 3);
+      const urlNorm = url.replace(/-/g,' ');
+      const homeMatch = hParts.some(p => urlNorm.includes(p.slice(0,5)));
+      const awayMatch = aParts.some(p => urlNorm.includes(p.slice(0,5)));
+      if (homeMatch || awayMatch) { foundUrl = match[1]; break; }
+    }
+
+    if (!foundUrl) {
+      matchmoneyCache.set(cacheKey, null);
+      return null;
+    }
+
+    // Φέρνουμε το άρθρο
+    const artUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(foundUrl)}`;
+    const artResp = await fetch(artUrl, { signal: AbortSignal.timeout(8000) });
+    if (!artResp.ok) { matchmoneyCache.set(cacheKey, null); return null; }
+    const artData = await artResp.json();
+    const artHtml = artData.contents || '';
+
+    // Εξάγουμε το κύριο άρθρο
+    const articleMatch = artHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i)
+                      || artHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i)
+                      || artHtml.match(/<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+
+    if (!articleMatch) { matchmoneyCache.set(cacheKey, null); return null; }
+
+    // Καθαρίζουμε το HTML — αφαιρούμε scripts, ads, iframes
+    let clean = articleMatch[1]
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+      .replace(/<img[^>]*>/gi, '')
+      .replace(/class="[^"]*"/g, '')
+      .replace(/style="[^"]*"/g, '')
+      .replace(/<a\s[^>]*>/gi, '<span>')
+      .replace(/<\/a>/gi, '</span>')
+      .trim();
+
+    // Κρατάμε μόνο τα πρώτα 1200 χαρακτήρες text
+    const textOnly = clean.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200);
+
+    const result = { url: foundUrl, text: textOnly };
+    matchmoneyCache.set(cacheKey, result);
+    return result;
+  } catch (e) {
+    matchmoneyCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+function renderMatchmoneyPanel(mmData) {
+  if (!mmData) return '';
+  return `
+    <div style="margin-top:12px; background:rgba(245,158,11,0.05); border:1px solid rgba(245,158,11,0.25);
+      border-radius:8px; padding:14px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <div style="font-size:0.72rem; font-weight:800; color:var(--accent-gold); text-transform:uppercase; letter-spacing:1px;">
+          📰 Ανάλυση MatchMoney.gr
+        </div>
+        <a href="${mmData.url}" target="_blank" rel="noopener"
+          style="font-size:0.62rem; color:var(--accent-blue); text-decoration:none; font-weight:600;
+          padding:2px 8px; border:1px solid var(--border-focus); border-radius:4px;">
+          Διαβάστε Πλήρως →
+        </a>
+      </div>
+      <div style="font-size:0.76rem; color:var(--text-main); line-height:1.65; opacity:0.9;">
+        ${esc(mmData.text)}${mmData.text.length >= 1200 ? '…' : ''}
+      </div>
+    </div>`;
+}
+
+// ================================================================
 //  SETTINGS & LEAGUE MODS
 // ================================================================
 function loadSettings() {
@@ -977,6 +1094,12 @@ function getMatchCardHTML(d) {
     </div>
 
     <div class="h2h-footer">${h2hStr}</div>
+    ${injuryBadgeHTML(d.hS, d.ht) || injuryBadgeHTML(d.aS, d.at) ? `
+    <div style="margin-top:12px;">
+      ${injuryBadgeHTML(d.hS, d.ht)}
+      ${injuryBadgeHTML(d.aS, d.at)}
+    </div>` : ''}
+    ${renderMatchmoneyPanel(d.mmData)}
   </div>`;
 }
 
@@ -1241,12 +1364,30 @@ window.resimulateMatches = function() {
 async function analyzeMatch(m, index, total) {
   setProgress(10 + ((index+1)/total)*90, `Processing: ${m.teams.home.name}`);
   const lp = getLeagueParams(m.league.id);
-  const [hS, aS, stand, h2hFix] = await Promise.all([
+
+  // Παράλληλη ανάκτηση: intel + matchmoney + injuries
+  const injuryMapper = r =>
+    (r?.response || [])
+      .filter(p => ['out','questionable'].includes((p.player?.reason || p.player?.type || '').toLowerCase()))
+      .map(p => ({
+        name: p.player?.name || '?',
+        position: (p.player?.pos || 'UNK').slice(0,2).toUpperCase(),
+        importanceScore: 0.6
+      }));
+
+  const [hS_raw, aS_raw, stand, h2hFix, mmData, hInjuries, aInjuries] = await Promise.all([
     buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
     buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
     getStand(m.league.id, m.league.season),
-    getHeadToHead(m.teams.home.id, m.teams.away.id, m.league.id, m.league.season)
+    getHeadToHead(m.teams.home.id, m.teams.away.id, m.league.id, m.league.season),
+    fetchMatchmoneyAnalysis(m.teams.home.name, m.teams.away.name),
+    apiReq(`injuries?team=${m.teams.home.id}&season=${m.league.season}`).then(injuryMapper).catch(() => []),
+    apiReq(`injuries?team=${m.teams.away.id}&season=${m.league.season}`).then(injuryMapper).catch(() => [])
   ]);
+
+  // Εφαρμόζουμε injury penalties στα intel data
+  const hS = applyInjuriesToIntel(hS_raw, hInjuries);
+  const aS = applyInjuriesToIntel(aS_raw, aInjuries);
   const hXG = Number(hS.fXG) * lp.mult;
   const aXG = Number(aS.fXG) * lp.mult;
   const tXG = hXG + aXG;
@@ -1268,6 +1409,7 @@ async function analyzeMatch(m, index, total) {
     hr: getTeamRank(stand, m.teams.home.id) ?? 99, ar: getTeamRank(stand, m.teams.away.id) ?? 99,
     hCors, aCors, totCors: hCors+aCors, totCards, hS, aS,
     h2h: summarizeH2H(h2hFix, m.teams.home.id, m.teams.away.id),
+    mmData,
     isBomb: false,
     isLockO25:  tXG >= (lp.minXGO25+0.15) && bttsScore >= 1.00,
     isLockBTTS: bttsScore >= (lp.minBTTS+0.05) && tXG >= 2.50,
