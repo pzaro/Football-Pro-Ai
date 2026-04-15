@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.0 - Modular Quant</title>
+  <title>APEX OMEGA v4736 - Quant Terminal</title>
   
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   
@@ -49,44 +49,27 @@
 
 <div id="app" style="display:none">
   <div class="container">
-
     <div class="quant-panel" style="border-color: rgba(139, 92, 246, 0.4);">
       <div class="panel-title" style="cursor:pointer; color: var(--accent-purple);" onclick="togglePanel('globalCalibPanel','globalArrow')">
         <span>⚙️ Global Engine Parameters</span><span id="globalArrow">▼</span>
       </div>
       <div id="globalCalibPanel" style="display:none;">
-        <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:16px;">
-          Βασικά βάρη και κατώφλια που εφαρμόζονται globally (εκτός αν override από Per-League).
-        </div>
-        
-        <div class="panel-title" style="font-size:0.7rem; color:var(--text-main);">Model Weights</div>
         <div class="calib-grid">
           <div class="calib-item"><span class="calib-lbl">Shots on Target</span><input type="number" step="0.01" id="cfg_wShotsOn" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Shots off Target</span><input type="number" step="0.01" id="cfg_wShotsOff" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Corners</span><input type="number" step="0.01" id="cfg_wCorners" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Recent Goals</span><input type="number" step="0.01" id="cfg_wGoals" class="calib-input"></div>
-        </div>
-
-        <div class="panel-title" style="font-size:0.7rem; color:var(--text-main); margin-top:20px;">Decision Thresholds</div>
-        <div class="calib-grid">
           <div class="calib-item"><span class="calib-lbl">Min Total xG (O2.5)</span><input type="number" step="0.05" id="cfg_tXG_O25" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Min Total xG (O3.5)</span><input type="number" step="0.05" id="cfg_tXG_O35" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Max Total xG (U2.5)</span><input type="number" step="0.05" id="cfg_tXG_U25" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl" style="color:var(--accent-teal)">Max Total xG (U2.5)</span><input type="number" step="0.05" id="cfg_tXG_U25" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Min xG (BTTS)</span><input type="number" step="0.05" id="cfg_tBTTS" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">xG Diff (1X2)</span><input type="number" step="0.05" id="cfg_xG_Diff" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Max btts (U2.5)</span><input type="number" step="0.05" id="cfg_tBTTS_U25" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Min Corners (O8.5)</span><input type="number" step="0.1" id="cfg_minCorners" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Min Cards (O5.5)</span><input type="number" step="0.1" id="cfg_minCards" class="calib-input"></div>
-        </div>
-
-        <div class="panel-title" style="font-size:0.7rem; color:var(--text-main); margin-top:20px;">League Type Multipliers</div>
-        <div class="calib-grid">
           <div class="calib-item"><span class="calib-lbl">Trap Leagues</span><input type="number" step="0.01" id="cfg_modTrap" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Tight Leagues</span><input type="number" step="0.01" id="cfg_modTight" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Gold Leagues</span><input type="number" step="0.01" id="cfg_modGold" class="calib-input"></div>
         </div>
-
-        <div class="toolbar" style="margin-top:20px;">
+        <div class="toolbar">
           <button class="btn btn-primary" onclick="saveSettings()">Save Global Config</button>
           <button class="btn btn-outline" onclick="resimulateMatches()">Re-Simulate Data</button>
           <button class="btn btn-outline" onclick="resetSettings()">Reset Defaults</button>
@@ -99,29 +82,16 @@
         <span>🏆 Per-League Tuning (Overrides)</span><span id="leagueArrow">▼</span>
       </div>
       <div id="leagueModPanel" style="display:none;">
-        <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:15px; line-height:1.4;">
-          Overrides για συγκεκριμένα leagues.<br>
-          <i>AI Targets: 80% για 1X2 &amp; O2.5 | 70% για O3.5 &amp; BTTS</i>
-        </div>
         <div class="data-table-wrapper">
           <table class="league-mod-table">
             <thead><tr>
-              <th class="left-align">League</th>
-              <th>xG Mult.</th>
-              <th>Min O2.5</th>
-              <th>Min O3.5</th>
-              <th>Max U2.5</th>
-              <th>Min BTTS</th>
-              <th>xG Diff</th>
-              <th>Hit Rates (1X2|O25|O35|BTT)</th>
+              <th class="left-align">League</th><th>xG Mult.</th><th>Min O2.5</th><th>Min O3.5</th><th>Max U2.5</th><th>Min BTTS</th><th>xG Diff</th><th>Hit Rates</th>
             </tr></thead>
             <tbody id="leagueModBody"></tbody>
           </table>
         </div>
         <div class="toolbar" style="margin-top:16px;">
           <button class="btn btn-gold" onclick="saveLeagueMods()">Save League Mods</button>
-          <button class="btn btn-outline" onclick="resimulateMatches()">Re-Simulate</button>
-          <button class="btn btn-outline" onclick="resetLeagueMods()">Clear Overrides</button>
         </div>
       </div>
     </div>
@@ -130,39 +100,17 @@
       <div class="toolbar">
         <div class="input-group"><label class="input-label">Date From</label><input type="date" id="scanStart" class="quant-input"></div>
         <div class="input-group"><label class="input-label">Date To</label><input type="date" id="scanEnd" class="quant-input"></div>
-        <div class="input-group" style="flex:2"><label class="input-label">Filter</label>
+        <div class="input-group" style="flex:2">
           <select id="leagueFilter" class="quant-input">
             <option value="MY_LEAGUES">⭐ MY LEAGUES (High Yield)</option>
             <option value="ALL">🌐 Top 24 Leagues</option>
-            <option value="WORLD">🌍 Global Coverage</option>
           </select>
         </div>
-      </div>
-      <div class="toolbar" style="margin-top: 15px; justify-content: flex-end;">
-        <button class="btn btn-outline" onclick="exportData()">💾 EXPORT</button>
-        <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
-        <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">📂 IMPORT</button>
         <button class="btn btn-primary" id="btnPre" onclick="runScan()" style="height: 38px;">▶ Run Model Scan</button>
       </div>
     </div>
 
-    <div class="quant-panel">
-      <div class="panel-title">🗄️ Smart Audit &amp; AI Advisor</div>
-      <div class="toolbar">
-        <div class="input-group"><label class="input-label">Audit From</label><input type="date" id="auditStart" class="quant-input"></div>
-        <div class="input-group"><label class="input-label">Audit To</label><input type="date" id="auditEnd" class="quant-input"></div>
-        <div class="input-group"><label class="input-label">Target League</label><select id="auditLeague" class="quant-input"><option value="ALL">Global (All Leagues)</option></select></div>
-        <div class="input-group" style="flex:0;">
-          <button class="btn btn-primary" style="background:var(--accent-purple); height: 38px;" onclick="runCustomAudit()">Run Audit</button>
-        </div>
-        <div class="input-group" style="flex:0;">
-          <button class="btn btn-danger" style="height: 38px;" onclick="clearVault()">Purge Data</button>
-        </div>
-      </div>
-    </div>
-
     <div id="errorBox"></div><div id="successBox"></div>
-    
     <div id="loader" style="display:none" class="progress-container">
       <div class="progress-track"><div id="bar" class="progress-bar"></div></div>
       <div class="progress-text" id="status">Initializing...</div>
@@ -170,45 +118,14 @@
 
     <div id="advisorSection"></div>
     <div id="topSection"></div>
-    <div id="wallbetSection"></div>
     <div id="summarySection"></div>
-
-    <div id="feedFilterSection" style="display:none;margin-top:20px">
-      <div class="quant-panel">
-        <div class="toolbar" style="margin-bottom:0;">
-          <div class="panel-title" style="margin:0; color:var(--accent-blue);">⚽ Live Match Feed (<span id="feedCount">0</span>)</div>
-          <div class="input-group" style="max-width:320px; margin-left:auto;">
-            <select id="marketFilter" class="quant-input" onchange="filterFeed()">
-              <option value="ALL">Show All Signals</option>
-              <option value="COMBO">⚡ Combos (1X2 &amp; Over)</option>
-              <option value="1X2">⚖️ Match Odds (1X2)</option>
-              <option value="O25">🔥 Over 2.5 Goals</option>
-              <option value="O35">🚀 Over 3.5 Goals</option>
-              <option value="U25">🔒 Under 2.5 Goals</option>
-              <option value="BTTS">🎯 Both Teams To Score</option>
-              <option value="CARDS">🟨 Over 5.5 Cards</option>
-              <option value="COR">🚩 Over 8.5 Corners</option>
-              <option value="BOMB">💣 Underdog Bombs</option>
-            </select>
-          </div>
-          <div style="margin-left:10px;">
-            <button id="btnSyncLive" onclick="syncLiveScores()" class="btn btn-outline" style="padding:8px 12px; font-size:0.75rem;">
-              <span class="live-dot"></span> Live Sync
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <div id="matchesFeed"></div>
     <div id="auditSection"></div>
-
   </div>
 </div>
 
 <script src="leagues.js"></script>
-<script src="core.js"></script>
-<script src="app.js"></script>
+<script src="stats.js"></script>
 
 </body>
 </html>
