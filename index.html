@@ -171,17 +171,49 @@
     .live-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent-green); animation:livePulse 1.4s ease-in-out infinite; margin-right:4px; vertical-align:middle; }
 
     /* ── Audit table enhancements ── */
-    .audit-pick-cell { display:flex; align-items:center; justify-content:center; gap:6px; flex-direction:column; line-height:1.3; }
-    .audit-pick-pred { font-size:0.7rem; font-weight:700; font-family:'Fira Code',monospace; }
-    .audit-pick-actual { font-size:0.65rem; color:var(--text-muted); font-family:'Fira Code',monospace; }
-    .audit-result-icon { font-size:0.9rem; }
-    .audit-omega-cell { font-size:0.7rem; font-weight:700; padding:3px 7px; border-radius:5px; display:inline-block; }
-    .audit-omega-hit  { background:rgba(16,185,129,0.15); color:var(--accent-green); border:1px solid rgba(16,185,129,0.3); }
-    .audit-omega-miss { background:rgba(244,63,94,0.12);  color:var(--accent-red);   border:1px solid rgba(244,63,94,0.3); }
-    .audit-omega-void { background:rgba(156,163,175,0.1); color:var(--text-muted);   border:1px solid var(--border-light); }
-    .audit-tr-hit  { background:rgba(16,185,129,0.03)  !important; }
-    .audit-tr-miss { background:rgba(244,63,94,0.04)   !important; }
-    .audit-tr-void { background:transparent; }
+        /* ── Audit Card Layout ── */
+    .audit-cards-grid { display:flex; flex-direction:column; gap:10px; }
+    .audit-card {
+      background: var(--bg-surface); border: 1px solid var(--border-light);
+      border-radius: var(--radius-md); padding: 14px 16px;
+      display: grid; grid-template-columns: 1fr auto; gap: 12px;
+      transition: border-color 0.2s;
+    }
+    .audit-card.ac-hit  { border-left: 3px solid var(--accent-green); background: rgba(16,185,129,0.04); }
+    .audit-card.ac-miss { border-left: 3px solid var(--accent-red);   background: rgba(244,63,94,0.04); }
+    .audit-card.ac-void { border-left: 3px solid var(--border-light); opacity: 0.7; }
+    .audit-card.ac-pending { border-left: 3px solid var(--accent-blue); }
+    .audit-card-left { display:flex; flex-direction:column; gap:6px; }
+    .audit-match-name { font-weight:700; font-size:0.88rem; color:var(--text-main); }
+    .audit-meta { font-size:0.65rem; color:var(--text-muted); display:flex; gap:8px; align-items:center; }
+    .audit-meta-badge { background:var(--bg-panel); padding:2px 6px; border-radius:4px; font-weight:700; color:var(--accent-blue); }
+    .audit-score-row { display:flex; align-items:center; gap:14px; margin-top:6px; flex-wrap:wrap; }
+    .audit-score-block { display:flex; flex-direction:column; align-items:center; gap:2px; }
+    .audit-score-label { font-size:0.58rem; font-weight:800; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); }
+    .audit-score-val { font-family:'Fira Code',monospace; font-size:1.4rem; font-weight:700; line-height:1; }
+    .audit-score-val.pred { color:var(--accent-blue); }
+    .audit-score-val.actual-hit { color:var(--accent-green); }
+    .audit-score-val.actual-miss { color:var(--accent-red); }
+    .audit-score-pending { color:var(--text-muted); font-size:0.75rem; font-style:italic; }
+    .audit-score-divider { width:1px; height:36px; background:var(--border-light); }
+    .audit-picks-row { display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; }
+    .audit-pick-chip {
+      display:inline-flex; align-items:center; gap:4px;
+      font-size:0.63rem; font-weight:700; padding:3px 8px; border-radius:20px;
+      font-family:'Fira Code',monospace; border:1px solid transparent; white-space:nowrap;
+    }
+    .apc-pred-only { background:rgba(14,165,233,0.1);  color:var(--accent-blue);  border-color:rgba(14,165,233,0.25); }
+    .apc-hit       { background:rgba(16,185,129,0.15); color:var(--accent-green); border-color:rgba(16,185,129,0.3); }
+    .apc-miss      { background:rgba(244,63,94,0.12);  color:var(--accent-red);   border-color:rgba(244,63,94,0.3); }
+    .apc-void      { background:rgba(156,163,175,0.08);color:var(--text-muted);   border-color:var(--border-light); }
+    .audit-card-right { display:flex; flex-direction:column; align-items:flex-end; justify-content:space-between; gap:8px; min-width:80px; }
+    .audit-signal-pill { font-size:0.65rem; font-weight:800; padding:5px 10px; border-radius:6px; text-align:center; border:1px solid transparent; line-height:1.4; white-space:nowrap; }
+    .asp-hit     { background:rgba(16,185,129,0.15); color:var(--accent-green); border-color:rgba(16,185,129,0.35); }
+    .asp-miss    { background:rgba(244,63,94,0.12);  color:var(--accent-red);   border-color:rgba(244,63,94,0.3); }
+    .asp-void    { background:rgba(156,163,175,0.08);color:var(--text-muted);   border-color:var(--border-light); }
+    .asp-pending { background:rgba(14,165,233,0.1);  color:var(--accent-blue);  border-color:rgba(14,165,233,0.3); }
+    .audit-result-badge { font-size:1.6rem; line-height:1; }
+    /* legacy compat */
     .audit-score-pill { display:inline-flex; align-items:center; gap:5px; font-family:'Fira Code',monospace; font-size:0.8rem; font-weight:700; }
     .audit-score-sep { color:var(--text-muted); font-size:0.65rem; }
 
@@ -193,6 +225,33 @@
     .lm-badge-warn { background:rgba(245,158,11,0.18); color:var(--accent-gold); }
     .lm-badge-crit { background:rgba(244,63,94,0.18);  color:var(--accent-red); }
     .lm-badge-ok   { background:rgba(16,185,129,0.15); color:var(--accent-green); }
+
+    /* ── MatchMoney panel scrollbar ── */
+    .mm-text-body::-webkit-scrollbar { width:4px; }
+    .mm-text-body::-webkit-scrollbar-track { background:transparent; }
+    .mm-text-body::-webkit-scrollbar-thumb { background:rgba(245,158,11,0.3); border-radius:2px; }
+
+    /* ── Audit filter bar ── */
+    .audit-filter-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+    .audit-filter-btn {
+      background:var(--bg-base); border:1px solid var(--border-light); color:var(--text-muted);
+      padding:5px 12px; border-radius:20px; font-size:0.68rem; font-weight:700; cursor:pointer;
+      font-family:'Inter',sans-serif; text-transform:uppercase; letter-spacing:0.5px;
+      transition:all 0.15s;
+    }
+    .audit-filter-btn:hover { border-color:var(--accent-blue); color:var(--text-main); }
+    .audit-filter-btn.afb-active { background:var(--accent-blue); border-color:var(--accent-blue); color:#fff; }
+    .audit-filter-btn.afb-hit  { background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.4); color:var(--accent-green); }
+    .audit-filter-btn.afb-miss { background:rgba(244,63,94,0.12);  border-color:rgba(244,63,94,0.4);  color:var(--accent-red); }
+
+    /* ── Audit accuracy mini-bars ── */
+    .audit-acc-row { display:flex; flex-direction:column; gap:6px; margin-bottom:20px; }
+    .audit-acc-item { display:flex; align-items:center; gap:10px; }
+    .audit-acc-label { font-size:0.62rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; width:60px; flex-shrink:0; }
+    .audit-acc-track { flex:1; height:8px; background:var(--bg-panel); border-radius:4px; overflow:hidden; }
+    .audit-acc-fill  { height:100%; border-radius:4px; transition:width 0.6s ease; }
+    .audit-acc-pct   { font-family:'Fira Code',monospace; font-size:0.72rem; font-weight:700; width:42px; text-align:right; flex-shrink:0; }
+    .audit-acc-count { font-size:0.62rem; color:var(--text-muted); width:50px; flex-shrink:0; }
   </style>
 </head>
 <body>
@@ -513,90 +572,158 @@ async function _executeRequest(path, resolve) {
 const matchmoneyCache = new Map();
 
 /**
- * Ψάχνει αναλύσεις στο matchmoney.com.gr για ένα συγκεκριμένο ματς.
- * Χρησιμοποιεί CORS proxy (allorigins) για να παρακάμψει τους CORS περιορισμούς.
- * Επιστρέφει HTML snippet ή null αν δεν βρεθεί.
+ * Ψάχνει αναλύσεις στο matchmoney.com.gr.
+ * Στρατηγική (3 επίπεδα fallback):
+ *  1. Φέρνει το sitemap/feed XML για να βρει το σωστό URL
+ *  2. Δοκιμάζει direct URL με slug από ονόματα ομάδων
+ *  3. Scrape listing page με allorigins
  */
 async function fetchMatchmoneyAnalysis(homeTeam, awayTeam) {
   const cacheKey = `${homeTeam}_${awayTeam}`;
   if (matchmoneyCache.has(cacheKey)) return matchmoneyCache.get(cacheKey);
 
+  const PROXY = url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+
+  // Slug helper – μετατρέπει "Real Madrid" → "real-madrid"
+  const toSlug = s => s.toLowerCase()
+    .replace(/\s+/g,'-')
+    .replace(/[αάâ]/g,'a').replace(/[εέ]/g,'e').replace(/[ηή]/g,'i')
+    .replace(/[ιίϊΐ]/g,'i').replace(/[οό]/g,'o').replace(/[υύϋΰ]/g,'y')
+    .replace(/[ωώ]/g,'o').replace(/[θ]/g,'th').replace(/[χ]/g,'x')
+    .replace(/[ξ]/g,'x').replace(/[ψ]/g,'ps').replace(/[ζ]/g,'z')
+    .replace(/[σς]/g,'s').replace(/[κ]/g,'k').replace(/[μ]/g,'m')
+    .replace(/[ν]/g,'n').replace(/[λ]/g,'l').replace(/[ρ]/g,'r')
+    .replace(/[π]/g,'p').replace(/[τ]/g,'t').replace(/[φ]/g,'f')
+    .replace(/[γ]/g,'g').replace(/[δ]/g,'d').replace(/[β]/g,'b')
+    .replace(/[^a-z0-9\-]/g,'').replace(/-+/g,'-');
+
+  // Εξάγει καθαρό κείμενο από HTML string
+  const extractText = (rawHtml) => {
+    // Προτεραιότητα: .entry-content, article, .post-content
+    const patterns = [
+      /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<div/i,
+      /<article[^>]*>([\s\S]{200,}?)<\/article>/i,
+      /<div[^>]*class="[^"]*post[^"]*content[^"]*"[^>]*>([\s\S]{200,}?)<\/div>\s*(?:<div|<footer)/i,
+    ];
+    let body = '';
+    for (const p of patterns) {
+      const m = rawHtml.match(p);
+      if (m && m[1] && m[1].length > 150) { body = m[1]; break; }
+    }
+    if (!body) {
+      // Γενικό fallback — πάρε όλο το body
+      const bm = rawHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      body = bm ? bm[1] : rawHtml;
+    }
+    return body
+      .replace(/<script[\s\S]*?<\/script>/gi,'')
+      .replace(/<style[\s\S]*?<\/style>/gi,'')
+      .replace(/<iframe[\s\S]*?<\/iframe>/gi,'')
+      .replace(/<nav[\s\S]*?<\/nav>/gi,'')
+      .replace(/<header[\s\S]*?<\/header>/gi,'')
+      .replace(/<footer[\s\S]*?<\/footer>/gi,'')
+      .replace(/<[^>]+>/g,' ')
+      .replace(/\s{2,}/g,' ')
+      .trim()
+      .slice(0, 1500);
+  };
+
+  // Φέρνει URL μέσω proxy, επιστρέφει HTML string ή null
+  const proxyFetch = async (url, timeout=9000) => {
+    try {
+      const r = await fetch(PROXY(url), { signal: AbortSignal.timeout(timeout) });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d.contents || null;
+    } catch { return null; }
+  };
+
   try {
-    // Φτιάχνουμε search-friendly query
-    const q = encodeURIComponent(`${homeTeam} ${awayTeam} site:matchmoney.com.gr`);
-    // Χρησιμοποιούμε allorigins για να πάρουμε το listing page
-    const listUrl = `https://api.allorigins.win/get?url=${encodeURIComponent('https://www.matchmoney.com.gr/analuseis-agonon/')}`;
-    const resp = await fetch(listUrl, { signal: AbortSignal.timeout(7000) });
-    if (!resp.ok) { matchmoneyCache.set(cacheKey, null); return null; }
-    const data = await resp.json();
-    const html = data.contents || '';
+    // ── LEVEL 1: RSS Feed για να βρούμε το σωστό article URL ──
+    const feedHtml = await proxyFetch('https://www.matchmoney.com.gr/feed/', 8000);
+    if (feedHtml) {
+      const items = [...feedHtml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+      const hSlug = toSlug(homeTeam);
+      const aSlug = toSlug(awayTeam);
+      // Keywords από τα ονόματα (πρώτη λέξη ≥4 γράμματα)
+      const hKw = homeTeam.split(/\s+/).filter(w=>w.length>=4).map(w=>w.toLowerCase());
+      const aKw = awayTeam.split(/\s+/).filter(w=>w.length>=4).map(w=>w.toLowerCase());
 
-    // Ψάχνουμε link που περιέχει ονόματα ομάδων (transliterated)
-    const normalize = s => s.toLowerCase()
-      .replace(/[αά]/g,'a').replace(/[εέ]/g,'e').replace(/[ηή]/g,'h')
-      .replace(/[ιίϊΐ]/g,'i').replace(/[οό]/g,'o').replace(/[υύϋΰ]/g,'u')
-      .replace(/[ωώ]/g,'w').replace(/[θ]/g,'th').replace(/[χ]/g,'ch')
-      .replace(/[ξ]/g,'x').replace(/[ψ]/g,'ps').replace(/[ζ]/g,'z')
-      .replace(/[σς]/g,'s').replace(/[κ]/g,'k').replace(/[μ]/g,'m')
-      .replace(/[ν]/g,'n').replace(/[λ]/g,'l').replace(/[ρ]/g,'r')
-      .replace(/[π]/g,'p').replace(/[τ]/g,'t').replace(/[φ]/g,'f')
-      .replace(/[γ]/g,'g').replace(/[δ]/g,'d').replace(/[β]/g,'b')
-      .replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g,'');
+      let bestUrl = null, bestScore = 0;
+      for (const item of items) {
+        const itemText = item[1];
+        const linkM = itemText.match(/<link>(.*?)<\/link>/i) || itemText.match(/<guid[^>]*>(.*?)<\/guid>/i);
+        const titleM = itemText.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+        if (!linkM) continue;
+        const url = linkM[1].trim();
+        const title = (titleM ? titleM[1] : url).toLowerCase();
+        let score = 0;
+        hKw.forEach(k => { if(title.includes(k)||url.toLowerCase().includes(k.slice(0,5))) score++; });
+        aKw.forEach(k => { if(title.includes(k)||url.toLowerCase().includes(k.slice(0,5))) score++; });
+        if (score > bestScore) { bestScore = score; bestUrl = url; }
+      }
 
-    const normHome = normalize(homeTeam).slice(0, 6);
-    const normAway = normalize(awayTeam).slice(0, 6);
-
-    // Βρίσκουμε links αναλύσεων
-    const linkRe = /href="(https?:\/\/www\.matchmoney\.com\.gr\/analuseis-agonon\/[^"]+)"/gi;
-    let match, foundUrl = null;
-    while ((match = linkRe.exec(html)) !== null) {
-      const url = match[1].toLowerCase();
-      // Ελέγχουμε αν το URL περιέχει κάτι σχετικό με τις ομάδες
-      const hParts = homeTeam.toLowerCase().split(' ').filter(p => p.length > 3);
-      const aParts = awayTeam.toLowerCase().split(' ').filter(p => p.length > 3);
-      const urlNorm = url.replace(/-/g,' ');
-      const homeMatch = hParts.some(p => urlNorm.includes(p.slice(0,5)));
-      const awayMatch = aParts.some(p => urlNorm.includes(p.slice(0,5)));
-      if (homeMatch || awayMatch) { foundUrl = match[1]; break; }
+      if (bestUrl && bestScore >= 1) {
+        const artHtml = await proxyFetch(bestUrl, 9000);
+        if (artHtml) {
+          const text = extractText(artHtml);
+          if (text.length > 100) {
+            const result = { url: bestUrl, text };
+            matchmoneyCache.set(cacheKey, result);
+            return result;
+          }
+        }
+      }
     }
 
-    if (!foundUrl) {
-      matchmoneyCache.set(cacheKey, null);
-      return null;
+    // ── LEVEL 2: Direct URL slug guessing ──
+    const hSlug = toSlug(homeTeam.split(' ').slice(0,2).join(' '));
+    const aSlug = toSlug(awayTeam.split(' ').slice(0,2).join(' '));
+    const candidates = [
+      `https://www.matchmoney.com.gr/analuseis-agonon/${hSlug}-${aSlug}/`,
+      `https://www.matchmoney.com.gr/analuseis-agonon/${aSlug}-${hSlug}/`,
+      `https://www.matchmoney.com.gr/analuseis-agonon/${hSlug.split('-')[0]}-${aSlug.split('-')[0]}/`,
+    ];
+    for (const url of candidates) {
+      const h = await proxyFetch(url, 7000);
+      if (h && !h.includes('404') && h.length > 500) {
+        const text = extractText(h);
+        if (text.length > 150) {
+          const result = { url, text };
+          matchmoneyCache.set(cacheKey, result);
+          return result;
+        }
+      }
     }
 
-    // Φέρνουμε το άρθρο
-    const artUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(foundUrl)}`;
-    const artResp = await fetch(artUrl, { signal: AbortSignal.timeout(8000) });
-    if (!artResp.ok) { matchmoneyCache.set(cacheKey, null); return null; }
-    const artData = await artResp.json();
-    const artHtml = artData.contents || '';
+    // ── LEVEL 3: Listing page scrape ──
+    const listHtml = await proxyFetch('https://www.matchmoney.com.gr/analuseis-agonon/', 8000);
+    if (listHtml) {
+      const linkRe = /href="(https?:\/\/(?:www\.)?matchmoney\.com\.gr\/analuseis-agonon\/[^"#?]+)"/gi;
+      let m, foundUrl = null;
+      const hKw2 = homeTeam.split(/\s+/).filter(w=>w.length>=4).map(w=>w.toLowerCase());
+      const aKw2 = awayTeam.split(/\s+/).filter(w=>w.length>=4).map(w=>w.toLowerCase());
+      while ((m = linkRe.exec(listHtml)) !== null) {
+        const url = m[1].toLowerCase();
+        const hHit = hKw2.some(k=>url.includes(k.slice(0,5)));
+        const aHit = aKw2.some(k=>url.includes(k.slice(0,5)));
+        if (hHit || aHit) { foundUrl = m[1]; break; }
+      }
+      if (foundUrl) {
+        const artHtml = await proxyFetch(foundUrl, 9000);
+        if (artHtml) {
+          const text = extractText(artHtml);
+          if (text.length > 100) {
+            const result = { url: foundUrl, text };
+            matchmoneyCache.set(cacheKey, result);
+            return result;
+          }
+        }
+      }
+    }
 
-    // Εξάγουμε το κύριο άρθρο
-    const articleMatch = artHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i)
-                      || artHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i)
-                      || artHtml.match(/<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-
-    if (!articleMatch) { matchmoneyCache.set(cacheKey, null); return null; }
-
-    // Καθαρίζουμε το HTML — αφαιρούμε scripts, ads, iframes
-    let clean = articleMatch[1]
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-      .replace(/<img[^>]*>/gi, '')
-      .replace(/class="[^"]*"/g, '')
-      .replace(/style="[^"]*"/g, '')
-      .replace(/<a\s[^>]*>/gi, '<span>')
-      .replace(/<\/a>/gi, '</span>')
-      .trim();
-
-    // Κρατάμε μόνο τα πρώτα 1200 χαρακτήρες text
-    const textOnly = clean.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200);
-
-    const result = { url: foundUrl, text: textOnly };
-    matchmoneyCache.set(cacheKey, result);
-    return result;
+    matchmoneyCache.set(cacheKey, null);
+    return null;
   } catch (e) {
     matchmoneyCache.set(cacheKey, null);
     return null;
@@ -605,21 +732,63 @@ async function fetchMatchmoneyAnalysis(homeTeam, awayTeam) {
 
 function renderMatchmoneyPanel(mmData) {
   if (!mmData) return '';
+
+  // Split text into paragraphs for better readability
+  const paragraphs = mmData.text
+    .split(/\s{3,}|\n{2,}/)
+    .map(p => p.trim())
+    .filter(p => p.length > 30);
+
+  const parasHtml = paragraphs.length > 1
+    ? paragraphs.map(p => `<p style="margin:0 0 10px 0;">${esc(p)}</p>`).join('')
+    : `<p style="margin:0;">${esc(mmData.text)}${mmData.text.length >= 1400 ? '…' : ''}</p>`;
+
+  // Try to detect key prediction keywords in the text
+  const txt = mmData.text.toLowerCase();
+  const hasBTTS    = txt.includes('btts') || txt.includes('goal/goal') || txt.includes('αμφότερες') || txt.includes('και οι δύο');
+  const hasOver    = txt.includes('over') || txt.includes('παραπάνω') || txt.includes('πάνω');
+  const hasUnder   = txt.includes('under') || txt.includes('λιγότερα');
+  const hasHome    = txt.includes('νίκη γηπεδούχου') || txt.includes('home win');
+  const hasAway    = txt.includes('νίκη φιλοξενούμενου') || txt.includes('away win');
+
+  const keywords = [];
+  if (hasBTTS)  keywords.push(`<span style="background:rgba(139,92,246,0.15);color:var(--accent-purple);border:1px solid rgba(139,92,246,0.3);padding:2px 8px;border-radius:20px;font-size:0.62rem;font-weight:700;">BTTS</span>`);
+  if (hasOver)  keywords.push(`<span style="background:rgba(14,165,233,0.15);color:var(--accent-blue);border:1px solid rgba(14,165,233,0.3);padding:2px 8px;border-radius:20px;font-size:0.62rem;font-weight:700;">OVER</span>`);
+  if (hasUnder) keywords.push(`<span style="background:rgba(20,184,166,0.15);color:var(--accent-teal);border:1px solid rgba(20,184,166,0.3);padding:2px 8px;border-radius:20px;font-size:0.62rem;font-weight:700;">UNDER</span>`);
+  if (hasHome)  keywords.push(`<span style="background:rgba(245,158,11,0.15);color:var(--accent-gold);border:1px solid rgba(245,158,11,0.3);padding:2px 8px;border-radius:20px;font-size:0.62rem;font-weight:700;">ΑΣΟΣ</span>`);
+  if (hasAway)  keywords.push(`<span style="background:rgba(244,63,94,0.12);color:var(--accent-red);border:1px solid rgba(244,63,94,0.3);padding:2px 8px;border-radius:20px;font-size:0.62rem;font-weight:700;">ΔΙΠΛΟ</span>`);
+
   return `
-    <div style="margin-top:12px; background:rgba(245,158,11,0.05); border:1px solid rgba(245,158,11,0.25);
-      border-radius:8px; padding:14px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-        <div style="font-size:0.72rem; font-weight:800; color:var(--accent-gold); text-transform:uppercase; letter-spacing:1px;">
-          📰 Ανάλυση MatchMoney.gr
+    <div style="margin-top:14px; background:rgba(245,158,11,0.04); border:1px solid rgba(245,158,11,0.22);
+      border-radius:10px; overflow:hidden;">
+      <!-- Header -->
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px;
+        background:rgba(245,158,11,0.08); border-bottom:1px solid rgba(245,158,11,0.15);">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:1rem;">📰</span>
+          <div>
+            <div style="font-size:0.72rem; font-weight:800; color:var(--accent-gold); text-transform:uppercase; letter-spacing:1px; line-height:1;">
+              Ανάλυση MatchMoney.gr
+            </div>
+            <div style="font-size:0.6rem;color:var(--text-muted);margin-top:2px;">Expert editorial preview</div>
+          </div>
         </div>
         <a href="${mmData.url}" target="_blank" rel="noopener"
-          style="font-size:0.62rem; color:var(--accent-blue); text-decoration:none; font-weight:600;
-          padding:2px 8px; border:1px solid var(--border-focus); border-radius:4px;">
-          Διαβάστε Πλήρως →
+          style="display:inline-flex;align-items:center;gap:4px;font-size:0.62rem;color:var(--accent-blue);
+          text-decoration:none;font-weight:700;padding:4px 10px;background:rgba(14,165,233,0.1);
+          border:1px solid rgba(14,165,233,0.3);border-radius:6px;white-space:nowrap;">
+          Πλήρης Ανάλυση ↗
         </a>
       </div>
-      <div style="font-size:0.76rem; color:var(--text-main); line-height:1.65; opacity:0.9;">
-        ${esc(mmData.text)}${mmData.text.length >= 1200 ? '…' : ''}
+      <!-- Keyword signals detected -->
+      ${keywords.length ? `<div style="padding:8px 14px;border-bottom:1px solid rgba(245,158,11,0.12);display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:0.6rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-right:2px;">Εντοπίστηκε:</span>
+        ${keywords.join('')}
+      </div>` : ''}
+      <!-- Article text -->
+      <div style="padding:12px 14px; font-size:0.75rem; color:var(--text-main); line-height:1.7;
+        opacity:0.92; max-height:220px; overflow-y:auto;">
+        ${parasHtml}
       </div>
     </div>`;
 }
@@ -1553,101 +1722,184 @@ async function runCustomAudit() {
 
     const fmtR=(r,tgt)=>{const col=r>=tgt?'var(--accent-green)':r>=(tgt-10)?'var(--accent-gold)':'var(--accent-red)';return`<span style="color:${col};">${Number(r).toFixed(1)}%</span>`;};
 
-    const auditBool = (pred, actual) => {
-      if(!pred) return `<span style="color:var(--text-muted);font-size:0.7rem;">—</span>`;
-      const hit = pred === actual;
-      return `<div class="audit-pick-cell">
-        <span class="audit-result-icon">${hit ? '✅' : '❌'}</span>
-        <span class="audit-pick-actual" style="color:${actual?'var(--accent-green)':'var(--text-muted)'}">Act: ${actual?'✓':'✗'}</span>
-      </div>`;
-    };
-    const auditOut = (pred, actual) => {
-      if(!pred || pred==='-' || pred==='X') return `<span style="color:var(--text-muted);font-size:0.7rem;">—</span>`;
-      const hit = pred === actual;
-      return `<div class="audit-pick-cell">
-        <span class="audit-result-icon">${hit ? '✅' : '❌'}</span>
-        <span class="audit-pick-pred" style="color:${hit?'var(--accent-green)':'var(--accent-red)'}">${pred}</span>
-        <span class="audit-pick-actual">→ ${actual}</span>
-      </div>`;
-    };
-    const auditExact = (pred, actual) => {
-      if(!pred || pred==='-') return `<span style="color:var(--text-muted);font-size:0.7rem;">—</span>`;
-      const hit = pred === actual;
-      return `<div class="audit-pick-cell">
-        <span class="audit-result-icon">${hit ? '🎯' : '❌'}</span>
-        <span class="audit-pick-pred" style="font-size:0.75rem;color:${hit?'var(--accent-green)':'var(--text-main)'}">${pred}</span>
-        <span class="audit-pick-actual">→ ${actual}</span>
-      </div>`;
-    };
-    const auditOmega = (omega, isFin, atot, ah, aa) => {
-      if(!omega || omega==='NO BET') return `<span class="audit-omega-cell audit-omega-void">NO BET</span>`;
-      if(!isFin) return `<span class="audit-omega-cell audit-omega-void">${esc(omega.split(' ').slice(0,3).join(' '))}</span>`;
-      let hit = null;
-      const aOut = ah>aa?'1':(ah<aa?'2':'X');
-      const aBtts = ah>0&&aa>0;
-      if(omega.includes('OVER 3.5'))      hit = atot >= 4;
-      else if(omega.includes('OVER 2.5')) hit = atot >= 3;
-      else if(omega.includes('UNDER 2.5'))hit = atot < 3;
-      else if(omega.includes('GOAL'))     hit = aBtts;
-      else if(omega.includes('ΑΣΟΣ'))     hit = aOut==='1';
-      else if(omega.includes('ΔΙΠΛΟ'))    hit = aOut==='2';
-      else if(omega.includes('ΚΑΡΤΕΣ')||omega.includes('ΚΟΡΝΕΡ')) hit = null;
-      if(hit===null) return `<span class="audit-omega-cell audit-omega-void">${esc(omega.split(' ').slice(0,3).join(' '))}</span>`;
-      return `<span class="audit-omega-cell ${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'} ${esc(omega.split(' ').slice(0,3).join(' '))}</span>`;
+        // Audit filter state
+    let _auditFilter = 'ALL';
+    window._auditFilterCards = function(f) {
+      _auditFilter = f;
+      document.querySelectorAll('.audit-filter-btn').forEach(b => {
+        b.classList.toggle('afb-active', b.dataset.f === f);
+      });
+      document.querySelectorAll('.audit-card[data-filter]').forEach(card => {
+        const cf = card.dataset.filter;
+        card.style.display = (f === 'ALL' || cf === f) ? '' : 'none';
+      });
+      // Update visible count
+      const vis = document.querySelectorAll('.audit-card[data-filter]:not([style*="none"])').length;
+      const el = document.getElementById('audit-visible-count');
+      if (el) el.textContent = vis;
     };
 
-    document.getElementById('auditSection').innerHTML=`
-      <div class="quant-panel">
-        <div class="panel-title">📊 Audit Telemetry (${s} → ${e})</div>
-        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px;text-align:center">
-          <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(outRate,80)}</div><div class="stat-lbl">1X2<br><span style="font-family:'Fira Code',monospace">${stats.validOut}</span> sig.</div></div>
-          <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(o25Rate,80)}</div><div class="stat-lbl">O2.5<br><span style="font-family:'Fira Code',monospace">${stats.o25Tot}</span> sig.</div></div>
-          <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(o35Rate,70)}</div><div class="stat-lbl">O3.5<br><span style="font-family:'Fira Code',monospace">${stats.o35Tot}</span> sig.</div></div>
-          <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(u25Rate,70)}</div><div class="stat-lbl">U2.5<br><span style="font-family:'Fira Code',monospace">${stats.u25Tot}</span> sig.</div></div>
-          <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(bttsRate,70)}</div><div class="stat-lbl">BTTS<br><span style="font-family:'Fira Code',monospace">${stats.bttsTot}</span> sig.</div></div>
-          <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;color:var(--accent-blue)">${Number(exRate).toFixed(1)}%</div><div class="stat-lbl">EXACT<br><span style="font-family:'Fira Code',monospace">${stats.games}</span> m.</div></div>
+    document.getElementById('auditSection').innerHTML = (() => {
+      // ── Accuracy bar helper ──
+      const accBar = (label, rate, target, total, hitCount) => {
+        if (!total) return '';
+        const col = rate >= target ? 'var(--accent-green)' : rate >= target-10 ? 'var(--accent-gold)' : 'var(--accent-red)';
+        const pct = Math.min(rate, 100);
+        return `<div class="audit-acc-item">
+          <div class="audit-acc-label">${label}</div>
+          <div class="audit-acc-track">
+            <div class="audit-acc-fill" style="width:${pct}%;background:${col};"></div>
+          </div>
+          <div class="audit-acc-pct" style="color:${col};">${rate.toFixed(1)}%</div>
+          <div class="audit-acc-count">${hitCount}/${total}</div>
+        </div>`;
+      };
+
+      const totalCards = rows.length;
+      const hitCards   = rows.filter(r => {
+        if (!r.aEx || r.aEx === '-') return false;
+        const om = r.omega || '';
+        if (om === 'NO BET') return false;
+        const [ah,aa] = r.aEx.split('-').map(Number);
+        const atot=ah+aa, aOut=ah>aa?'1':(ah<aa?'2':'X'), aBtts=ah>0&&aa>0;
+        if (om.includes('OVER 3.5'))  return atot>=4;
+        if (om.includes('OVER 2.5'))  return atot>=3;
+        if (om.includes('UNDER 2.5')) return atot<3;
+        if (om.includes('GOAL'))      return aBtts;
+        if (om.includes('ΑΣΟΣ'))      return aOut==='1';
+        if (om.includes('ΔΙΠΛΟ'))     return aOut==='2';
+        return false;
+      }).length;
+      const missCards  = rows.filter(r => r.aEx && r.aEx !== '-' && r.omega !== 'NO BET').length - hitCards;
+      const pendCards  = rows.filter(r => !r.aEx || r.aEx === '-').length;
+      const voidCards  = rows.filter(r => r.omega === 'NO BET').length;
+
+      let html = `<div class="quant-panel">
+        <div class="panel-title">
+          📊 Audit Telemetry
+          <span style="font-size:0.7rem;color:var(--text-muted);font-weight:400;margin-left:8px;">${s} → ${e}</span>
+          <span style="font-family:'Fira Code',monospace;font-size:0.7rem;color:var(--accent-blue);margin-left:8px;">
+            <span id="audit-visible-count">${totalCards}</span> / ${totalCards} ματς
+          </span>
         </div>
-        <div class="data-table-wrapper">
-          <table class="data-table">
-            <thead><tr>
-              <th class="left-align" style="width:9%">Date</th>
-              <th class="left-align" style="width:22%">Fixture</th>
-              <th style="width:8%">Score</th>
-              <th style="width:7%">1X2</th>
-              <th style="width:7%">O2.5</th>
-              <th style="width:7%">O3.5</th>
-              <th style="width:7%">U2.5</th>
-              <th style="width:7%">BTTS</th>
-              <th style="width:9%">Exact</th>
-              <th style="width:17%">Signal</th>
-            </tr></thead>
-            <tbody>
-            ${rows.map(r=>{
-              const isFin = r.aEx !== '-';
-              const [ah_s, aa_s] = r.aEx !== '-' ? r.aEx.split('-') : ['-','-'];
-              const ah_n = parseInt(ah_s)||0, aa_n = parseInt(aa_s)||0;
-              const atot = ah_n + aa_n;
-              const trClass = r.omega==='NO BET' ? 'audit-tr-void' : isFin ?
-                (r.pO25&&r.aO25 || r.pO35&&r.aO35 || r.pU25&&r.aU25 || r.pBtts&&r.aBtts || r.hitOut ? 'audit-tr-hit' : 'audit-tr-miss') : '';
-              return `<tr class="${trClass}">
-                <td class="data-num left-align" style="font-size:0.72rem;color:var(--text-muted)">${r.date}</td>
-                <td class="left-align" style="font-weight:600;font-size:0.8rem">${esc(r.match)}<div style="font-size:0.62rem;color:var(--text-muted);margin-top:2px">${esc(r.lg||'')}</div></td>
-                <td class="data-num">
-                  ${isFin ? `<span class="audit-score-pill" style="color:var(--text-main)">${ah_s}<span class="audit-score-sep">-</span>${aa_s}</span>` : `<span style="color:var(--text-muted)">—</span>`}
-                </td>
-                <td>${auditOut(r.pOut, r.aOut)}</td>
-                <td>${auditBool(r.pO25, r.aO25)}</td>
-                <td>${auditBool(r.pO35, r.aO35)}</td>
-                <td>${auditBool(r.pU25, r.aU25)}</td>
-                <td>${auditBool(r.pBtts, r.aBtts)}</td>
-                <td>${auditExact(r.pEx, r.aEx)}</td>
-                <td style="text-align:center">${auditOmega(r.omega, isFin, atot, ah_n, aa_n)}</td>
-              </tr>`;
-            }).join('')}
-            </tbody>
-          </table>
+
+        <!-- Accuracy bars -->
+        <div class="stat-box" style="margin-bottom:16px;padding:14px 16px;">
+          <div style="font-size:0.6rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;">
+            Ακρίβεια Σημάτων
+          </div>
+          <div class="audit-acc-row">
+            ${accBar('1X2',   outRate,  80, stats.validOut, stats.outHit)}
+            ${accBar('O 2.5', o25Rate,  80, stats.o25Tot,   stats.o25Hit)}
+            ${accBar('O 3.5', o35Rate,  70, stats.o35Tot,   stats.o35Hit)}
+            ${accBar('U 2.5', u25Rate,  70, stats.u25Tot,   stats.u25Hit)}
+            ${accBar('BTTS',  bttsRate, 70, stats.bttsTot,  stats.bttsHit)}
+            ${accBar('EXACT', exRate,   15, stats.games,    stats.exHit)}
+          </div>
         </div>
-      </div>`;
+
+        <!-- Filter bar -->
+        <div class="audit-filter-bar">
+          <span style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:1px;">Φίλτρο:</span>
+          <button class="audit-filter-btn afb-active" data-f="ALL"     onclick="_auditFilterCards('ALL')">Όλα (${totalCards})</button>
+          <button class="audit-filter-btn afb-hit"    data-f="HIT"     onclick="_auditFilterCards('HIT')">✅ Hit (${hitCards})</button>
+          <button class="audit-filter-btn afb-miss"   data-f="MISS"    onclick="_auditFilterCards('MISS')">❌ Miss (${missCards})</button>
+          <button class="audit-filter-btn"            data-f="PENDING" onclick="_auditFilterCards('PENDING')">⏳ Εκκρεμεί (${pendCards})</button>
+          <button class="audit-filter-btn"            data-f="VOID"    onclick="_auditFilterCards('VOID')">— No Bet (${voidCards})</button>
+        </div>
+
+        <div class="audit-cards-grid">`;
+
+      // ── Per-match cards ──
+      rows.forEach(r => {
+        const isFin = r.aEx !== '-';
+        const [ah_s, aa_s] = isFin ? r.aEx.split('-') : ['-','-'];
+        const ah_n = parseInt(ah_s)||0, aa_n = parseInt(aa_s)||0;
+        const atot = ah_n + aa_n;
+        const aOut = ah_n>aa_n?'1':(ah_n<aa_n?'2':'X');
+        const aBtts = ah_n>0 && aa_n>0;
+
+        // Main signal hit/miss
+        let sigHit = null;
+        const om = r.omega || '';
+        if (isFin && om !== 'NO BET') {
+          if      (om.includes('OVER 3.5'))  sigHit = atot >= 4;
+          else if (om.includes('OVER 2.5'))  sigHit = atot >= 3;
+          else if (om.includes('UNDER 2.5')) sigHit = atot < 3;
+          else if (om.includes('GOAL'))      sigHit = aBtts;
+          else if (om.includes('ΑΣΟΣ'))      sigHit = aOut === '1';
+          else if (om.includes('ΔΙΠΛΟ'))     sigHit = aOut === '2';
+        }
+        const cardClass = om === 'NO BET' ? 'ac-void' : !isFin ? 'ac-pending' : sigHit === true ? 'ac-hit' : sigHit === false ? 'ac-miss' : 'ac-void';
+        const filterTag = om === 'NO BET' ? 'VOID' : !isFin ? 'PENDING' : sigHit === true ? 'HIT' : sigHit === false ? 'MISS' : 'VOID';
+        const resultBadge = !isFin ? '⏳' : sigHit === true ? '✅' : sigHit === false ? '❌' : '—';
+
+        // Score comparison
+        const predScore = r.pEx && r.pEx !== '-' ? r.pEx : '?-?';
+        const actualScoreClass = isFin ? (r.pEx === r.aEx ? 'actual-hit' : 'actual-miss') : '';
+        const exactHit = isFin && r.pEx === r.aEx;
+
+        // Picks chips
+        const chipDefs = [
+          { label:'1X2', pred: r.pOut && r.pOut !== 'X' && r.pOut !== '-', predVal: r.pOut, actVal: r.aOut,
+            hit: isFin && r.pOut && r.pOut !== 'X' ? r.pOut === r.aOut : null },
+          { label:'O2.5', pred: r.pO25, hit: isFin && r.pO25 ? r.aO25 : null },
+          { label:'O3.5', pred: r.pO35, hit: isFin && r.pO35 ? r.aO35 : null },
+          { label:'U2.5', pred: r.pU25, hit: isFin && r.pU25 ? r.aU25 : null },
+          { label:'BTTS', pred: r.pBtts, hit: isFin && r.pBtts ? r.aBtts : null },
+        ];
+        let chipsHtml = '';
+        chipDefs.forEach(c => {
+          if (!c.pred) return;
+          let cls, icon, txt;
+          if (c.hit === true)       { cls='apc-hit';  icon='✓'; txt = c.predVal ? `${c.predVal}→${c.actVal}` : c.label; }
+          else if (c.hit === false) { cls='apc-miss'; icon='✗'; txt = c.predVal ? `${c.predVal}→${c.actVal}` : c.label; }
+          else                      { cls='apc-pred-only'; icon='·'; txt = c.predVal ? `${c.predVal}` : c.label; }
+          chipsHtml += `<span class="audit-pick-chip ${cls}">${icon} ${txt}</span>`;
+        });
+
+        // Signal pill
+        let sigClass = 'asp-void', sigText = om === 'NO BET' ? 'NO BET' : om.replace(/[\u{1F000}-\u{1FFFF}]/gu,'').trim().slice(0,18);
+        if (!isFin)            sigClass = 'asp-pending';
+        else if (sigHit===true)  sigClass = 'asp-hit';
+        else if (sigHit===false) sigClass = 'asp-miss';
+
+        html += `
+        <div class="audit-card ${cardClass}" data-filter="${filterTag}">
+          <div class="audit-card-left">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div class="audit-match-name">${esc(r.match)}</div>
+            </div>
+            <div class="audit-meta">
+              <span class="audit-meta-badge">${esc(r.lg||'')}</span>
+              <span>${r.date}</span>
+            </div>
+            <div class="audit-score-row">
+              <div class="audit-score-block">
+                <div class="audit-score-label">Πρόβλεψη</div>
+                <div class="audit-score-val pred">${esc(predScore)}</div>
+              </div>
+              <div style="color:var(--text-muted);font-size:1.2rem;padding:0 2px;">→</div>
+              <div class="audit-score-block">
+                <div class="audit-score-label">Αποτέλεσμα</div>
+                ${isFin
+                  ? `<div class="audit-score-val ${actualScoreClass}">${ah_s}–${aa_s}</div>`
+                  : `<div class="audit-score-pending">Εκκρεμεί</div>`}
+              </div>
+              ${exactHit ? `<span style="font-size:0.7rem;background:rgba(16,185,129,0.15);color:var(--accent-green);border:1px solid rgba(16,185,129,0.3);padding:3px 8px;border-radius:20px;font-weight:800;">🎯 EXACT</span>` : ''}
+            </div>
+            <div class="audit-picks-row">${chipsHtml}</div>
+          </div>
+          <div class="audit-card-right">
+            <div class="audit-result-badge">${resultBadge}</div>
+            <div class="audit-signal-pill ${sigClass}">${esc(sigText) || '—'}</div>
+          </div>
+        </div>`;
+      });
+
+      html += `</div></div>`;
+      return html;
+    })();
     showOk('Audit complete.');
   } catch(e){ showErr(e.message); }
   finally { isRunning=false; setLoader(false); setBtnsDisabled(false); }
