@@ -817,6 +817,8 @@ window.addEventListener('DOMContentLoaded', () => {
 // =============================================
 
 let isAuditing = false;
+let _auditRecordsCache = [];   // raw records με xg/btts values — επαναξιολογούνται χωρίς νέα API calls
+let _auditRawFixtures  = [];   // αποθηκεύει τα hS/aS/lp per record για re-compute
 
 function setAuditProgress(pct, text) {
   const bar = document.getElementById('auditBar');
@@ -907,13 +909,15 @@ window.runAudit = async function() {
           aOver25, aOver35, aUnder25, aBTTS, aTot,
           aCorners: aCorners !== null ? Number(aCorners) : null,
           omegaPick: res.omegaPick, pickScore: res.pickScore,
-          cornerConf: computeCornerConfidence(hS, aS, hXG, aXG)
+          cornerConf: computeCornerConfidence(hS, aS, hXG, aXG),
+          _hS: hS, _aS: aS  // store for re-evaluation
         });
       } catch { /* skip */ }
     }
 
     setAuditProgress(98, 'Υπολογισμός στατιστικών...');
-    renderAuditResults(auditRecords, selLg);
+    _auditRecordsCache = auditRecords;
+    renderAuditResults(auditRecords, selLg, true);
     setAuditProgress(100, 'Audit ολοκληρώθηκε.');
   } catch(e) { showErr("Audit error: " + e.message); }
   finally {
@@ -954,7 +958,76 @@ function findOptimalXgThreshold(records, predKey, actualKey) {
   return thresholds;
 }
 
-function renderAuditResults(records, selLg) {
+function recomputeAuditRecords(records) {
+  return records.map(r => {
+    try {
+      const lp    = getLeagueParams(r.lgId);
+      const hXG   = Number(r._hS.fXG) * lp.mult;
+      const aXG   = Number(r._aS.fXG) * lp.mult;
+      const tXG   = hXG + aXG;
+      const btts  = Math.min(hXG, aXG);
+      const res   = computePick(hXG, aXG, tXG, btts, lp, r._hS, r._aS, {});
+      return {
+        ...r, tXG, hXG, aXG, xgDiff: hXG - aXG,
+        predOver25:  tXG >= lp.minXGO25 && res.pp.pO25  >= 0.52,
+        predOver35:  tXG >= lp.minXGO35 && res.pp.pO35  >= 0.42,
+        predUnder25: tXG <= lp.maxU25   && res.pp.pU25  >= 0.55,
+        predBTTS:    btts >= lp.minBTTS && res.pp.pBTTS >= 0.48,
+        predExact:   `${res.hG}-${res.aG}`,
+        omegaPick:   res.omegaPick, pickScore: res.pickScore,
+        cornerConf:  computeCornerConfidence(r._hS, r._aS, hXG, aXG)
+      };
+    } catch { return r; }
+  });
+}
+
+window.applyAuditSuggestions = function() {
+  // Read values from suggestion inputs
+  const readF = id => { const el=document.getElementById(id); return el ? parseFloat(el.value) : null; };
+  const newO25  = readF('sug_tXG_O25');
+  const newO35  = readF('sug_tXG_O35');
+  const newBTTS = readF('sug_tBTTS');
+  const newU25  = readF('sug_tXG_U25');
+  const newDiff = readF('sug_xG_Diff');
+
+  if(newO25  !== null && !isNaN(newO25))  { engineConfig.tXG_O25 = newO25;  const el=document.getElementById('cfg_tXG_O25');  if(el) el.value=newO25; }
+  if(newO35  !== null && !isNaN(newO35))  { engineConfig.tXG_O35 = newO35;  const el=document.getElementById('cfg_tXG_O35');  if(el) el.value=newO35; }
+  if(newBTTS !== null && !isNaN(newBTTS)) { engineConfig.tBTTS   = newBTTS; const el=document.getElementById('cfg_tBTTS');    if(el) el.value=newBTTS; }
+  if(newU25  !== null && !isNaN(newU25))  { engineConfig.tXG_U25 = newU25;  const el=document.getElementById('cfg_tXG_U25');  if(el) el.value=newU25; }
+  if(newDiff !== null && !isNaN(newDiff)) { engineConfig.xG_Diff = newDiff; const el=document.getElementById('cfg_xG_Diff'); if(el) el.value=newDiff; }
+
+  // Apply per-league mod suggestions
+  if(typeof LEAGUES_DATA !== 'undefined') {
+    LEAGUES_DATA.forEach(l => {
+      const xgEl = document.getElementById(`sug_lg_xg_${l.id}`);
+      if(xgEl && xgEl.value !== '') {
+        const v = parseFloat(xgEl.value);
+        if(!isNaN(v)) {
+          if(!leagueMods[l.id]) leagueMods[l.id] = {};
+          leagueMods[l.id].minXGO25 = v;
+        }
+      }
+    });
+  }
+
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(engineConfig)); } catch {}
+  try { localStorage.setItem(LS_LGMODS,   JSON.stringify(leagueMods));   } catch {}
+
+  // Re-evaluate cached audit records with new config
+  if(!_auditRecordsCache.length) { showErr("Δεν υπάρχουν cached audit data. Τρέξτε ξανά το Audit."); return; }
+  const newRecords = recomputeAuditRecords(_auditRecordsCache);
+  _auditRecordsCache = newRecords;
+  renderAuditResults(newRecords, null, false);
+  showOk("Ρυθμίσεις εφαρμόστηκαν & αποτελέσματα επαναξιολογήθηκαν!");
+
+  // Also re-simulate main scan if data exists
+  if(window.scannedMatchesData?.length) {
+    window.resimulateMatches();
+    showOk("Engine config αποθηκεύτηκε. Main scan & Audit επαναξιολογήθηκαν!");
+  }
+};
+
+function renderAuditResults(records, selLg, isInitial=true) {
   const el = document.getElementById('auditResults');
   if(!el || !records.length) return;
 
@@ -1003,8 +1076,78 @@ function renderAuditResults(records, selLg) {
   };
   const scoreColor = v => v>=0.65?'var(--accent-green)':v>=0.45?'var(--accent-gold)':'var(--accent-red)';
 
+  // ---- xG Diff optimal for 1X2 ----
+  // Find the xgDiff bucket where O2.5 rate peaks to suggest for xG_Diff param
+  const diffEntries = Object.entries(xgDiffBuckets).sort((a,b)=>parseFloat(a[0])-parseFloat(b[0]));
+  const bestDiffEntry = diffEntries.reduce((best, [k,v]) => v.n>=5 && v.o25/v.n > (best.rate||0) ? {k, rate:v.o25/v.n, n:v.n} : best, {k:'0.5', rate:0});
+  const suggestedDiff = parseFloat(bestDiffEntry.k) > 0 ? parseFloat(bestDiffEntry.k) : engineConfig.xG_Diff;
+
+  // ---- Per-league best O2.5 threshold for mods ----
+  const leagueSuggestions = Object.entries(byLeague).map(([id, lg]) => {
+    const curve = findOptimalXgThreshold(lg.records, 'predOver25', 'aOver25');
+    const best  = curve.reduce((a,b)=>b.rate>a.rate&&b.n>=3?b:a, {rate:0, t:null, n:0});
+    const current = leagueMods[id]?.minXGO25 ?? engineConfig.tXG_O25;
+    const diff = best.t ? (best.t - current).toFixed(2) : null;
+    return { id, name: lg.name, bestT: best.t, bestRate: best.rate, bestN: best.n, current, diff };
+  }).filter(l => l.bestT !== null && Math.abs(l.bestT - l.current) >= 0.1);
+
+  const applyPanel = isInitial ? `
+  <div style="background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.3);border-radius:var(--radius-md);padding:20px;margin-bottom:20px;">
+    <div style="font-size:0.85rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px;">🎯 Audit Suggestions — Εφαρμογή στο Engine</div>
+    <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:16px;">Οι τιμές παρακάτω προτείνονται βάσει των audit δεδομένων. Μπορείς να τις τροποποιήσεις πριν εφαρμόσεις.</div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px;">
+      ${[
+        {id:'sug_tXG_O25',  label:'Min xG (O2.5)',   val:bestO25.t,        cur:engineConfig.tXG_O25,  color:'var(--accent-green)'},
+        {id:'sug_tXG_O35',  label:'Min xG (O3.5)',   val:bestO35.t,        cur:engineConfig.tXG_O35,  color:'var(--accent-blue)'},
+        {id:'sug_tBTTS',    label:'Min xG (BTTS)',   val:bestBTTS.t,       cur:engineConfig.tBTTS,    color:'var(--accent-gold)'},
+        {id:'sug_tXG_U25',  label:'Max xG (U2.5)',   val:null,             cur:engineConfig.tXG_U25,  color:'var(--accent-teal)'},
+        {id:'sug_xG_Diff',  label:'xG Diff (1X2)',   val:suggestedDiff,    cur:engineConfig.xG_Diff,  color:'var(--accent-purple)'},
+      ].map(s => {
+        const sugVal = s.val !== null && s.val !== 0 ? Number(s.val).toFixed(2) : Number(s.cur).toFixed(2);
+        const changed = s.val && Math.abs(s.val - s.cur) >= 0.05;
+        return `<div style="background:var(--bg-base);border:1px solid ${changed?s.color:'var(--border-light)'};border-radius:var(--radius-sm);padding:12px;">
+          <div style="font-size:0.62rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">${s.label}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:0.65rem;color:var(--text-muted);">Τρέχον:</span>
+            <span style="font-family:var(--font-mono);color:var(--text-muted);font-size:0.75rem;">${Number(s.cur).toFixed(2)}</span>
+            ${changed ? `<span style="font-size:0.6rem;color:${s.color};font-weight:700;">→ ${sugVal}</span>` : ''}
+          </div>
+          <input type="number" id="${s.id}" step="0.05" value="${sugVal}" style="width:100%;background:var(--bg-surface);border:1px solid var(--border-light);color:${s.color};padding:6px 8px;border-radius:6px;font-family:var(--font-mono);font-size:0.85rem;font-weight:700;outline:none;">
+        </div>`;
+      }).join('')}
+    </div>
+
+    ${leagueSuggestions.length > 0 ? `
+    <div style="margin-bottom:16px;">
+      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;">Per-League xG O2.5 Overrides (Προτεινόμενες αλλαγές ≥ 0.1)</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;">
+        ${leagueSuggestions.map(l => `
+          <div style="background:var(--bg-base);border:1px solid rgba(251,191,36,0.3);border-radius:var(--radius-sm);padding:10px;">
+            <div style="font-size:0.68rem;font-weight:700;color:var(--text-main);margin-bottom:4px;">${esc(l.name)}</div>
+            <div style="font-size:0.6rem;color:var(--text-muted);margin-bottom:6px;">Τρέχον: <span style="color:var(--accent-gold);font-family:var(--font-mono);">${Number(l.current).toFixed(2)}</span> → Προτεινόμενο: <span style="color:var(--accent-green);font-family:var(--font-mono);">${l.bestT}</span> <span style="color:var(--text-muted);">(${(l.bestRate*100).toFixed(0)}% hit, n=${l.bestN})</span></div>
+            <input type="number" id="sug_lg_xg_${l.id}" step="0.05" value="${l.bestT}" style="width:100%;background:var(--bg-surface);border:1px solid var(--border-light);color:var(--accent-gold);padding:5px 8px;border-radius:6px;font-family:var(--font-mono);font-size:0.8rem;font-weight:700;outline:none;">
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+      <button onclick="applyAuditSuggestions()" style="background:var(--accent-green);color:#000;border:none;padding:10px 24px;border-radius:var(--radius-sm);font-weight:800;font-size:0.8rem;cursor:pointer;letter-spacing:0.5px;">✅ Apply & Re-Evaluate</button>
+      <button onclick="window.saveSettings?.(); showOk('Config αποθηκεύτηκε.');" style="background:transparent;color:var(--accent-blue);border:1px solid var(--accent-blue);padding:10px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:0.75rem;cursor:pointer;">💾 Αποθήκευση Μόνο</button>
+      <span style="font-size:0.65rem;color:var(--text-muted);">Θα ενημερωθούν: Global Config + League Mods + Main Scan (αν υπάρχει)</span>
+    </div>
+  </div>` : `
+  <div style="background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.3);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+    <span style="font-size:1.2rem;">🔄</span>
+    <div>
+      <div style="font-size:0.75rem;font-weight:800;color:var(--accent-blue);">Επαναξιολόγηση με νέες ρυθμίσεις</div>
+      <div style="font-size:0.65rem;color:var(--text-muted);">Τα αποτελέσματα παρακάτω αντικατοπτρίζουν τις νέες παραμέτρους του engine.</div>
+    </div>
+    <button onclick="renderAuditResults(_auditRecordsCache, null, true)" style="margin-left:auto;background:transparent;color:var(--accent-blue);border:1px solid var(--accent-blue);padding:6px 14px;border-radius:var(--radius-sm);font-size:0.7rem;font-weight:700;cursor:pointer;">↩ Edit Suggestions</button>
+  </div>`;
+
   // ---- Build HTML ----
-  let html = `
+  let html = applyPanel + `
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px;">
     ${[
       {label:'Over 2.5', prec:o25.precision, rec:o25.recall, acc:o25.accuracy, n:o25.predicted, hits:o25.tp},
