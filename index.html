@@ -4,143 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>APEX OMEGA v5.0 - Quant Terminal</title>
-  
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-  
-  <style>
-    :root {
-      --bg-base: #0b0f19; --bg-surface: #111827; --bg-panel: #1f2937;
-      --border-light: rgba(255, 255, 255, 0.08); --border-focus: rgba(14, 165, 233, 0.4);
-      --text-main: #f3f4f6; --text-muted: #9ca3af;
-      --accent-blue: #0ea5e9; --accent-blue-glow: rgba(14, 165, 233, 0.15);
-      --accent-green: #10b981; --accent-red: #f43f5e;
-      --accent-gold: #f59e0b; --accent-purple: #8b5cf6;
-      --accent-teal: #14b8a6;
-      --radius-sm: 6px; --radius-md: 12px; --radius-lg: 16px;
-      --shadow-subtle: 0 4px 20px rgba(0,0,0,0.2);
-    }
-
-    *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
-    
-    body {
-      font-family: 'Inter', sans-serif; background: var(--bg-base); color: var(--text-main);
-      line-height: 1.5; -webkit-font-smoothing: antialiased;
-      background-image: linear-gradient(var(--border-light) 1px, transparent 1px), linear-gradient(90deg, var(--border-light) 1px, transparent 1px);
-      background-size: 30px 30px; background-position: center center;
-    }
-
-    .data-num { font-family: 'Fira Code', monospace; font-variant-numeric: tabular-nums; font-weight: 600; }
-    .container { max-width: 1280px; margin: 0 auto; padding: 20px; position: relative; z-index: 1; }
-
-    .terminal-header { background: rgba(17, 24, 39, 0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-light); padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 1000; box-shadow: var(--shadow-subtle); }
-    .brand-logo { font-family: 'Orbitron', sans-serif; color: var(--text-main); font-size: 1rem; font-weight: 900; letter-spacing: 2px; display: flex; align-items: center; gap: 8px;}
-    .brand-logo span { color: var(--accent-blue); }
-    .header-right { display: flex; align-items: center; gap: 12px; }
-    .credit-widget { display: flex; align-items: center; gap: 10px; background: var(--bg-base); padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); }
-    .credit-label { font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
-    .credit-value { font-family: 'Fira Code', monospace; font-size: 0.95rem; color: var(--accent-green); transition: color 0.3s;}
-    .credit-value.low { color: var(--accent-red); }
-
-    .bankroll-widget { display: flex; align-items: center; gap: 10px; background: var(--bg-base); padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid rgba(245, 158, 11, 0.3); cursor: pointer; }
-    .bankroll-label { font-size: 0.65rem; font-weight: 700; color: var(--accent-gold); text-transform: uppercase; letter-spacing: 1px; }
-    .bankroll-value { font-family: 'Fira Code', monospace; font-size: 0.95rem; color: var(--accent-gold); }
-
-    #auth { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 1; position: relative; }
-    .auth-card { background: var(--bg-surface); border: 1px solid var(--border-focus); border-radius: var(--radius-lg); padding: 40px; max-width: 400px; width: 100%; text-align: center; box-shadow: 0 0 40px var(--accent-blue-glow); }
-    .auth-input { width: 100%; background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-light); padding: 16px; font-size: 1.5rem; text-align: center; border-radius: var(--radius-sm); font-family: 'Fira Code', monospace; outline: none; letter-spacing: 6px; transition: border-color 0.2s; margin-top: 20px; }
-    .auth-input:focus { border-color: var(--accent-blue); }
-
-    .quant-panel { background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 20px; margin-bottom: 20px; box-shadow: var(--shadow-subtle); }
-    .panel-title { font-size: 0.85rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-    .input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 140px; }
-    .input-label { font-size: 0.65rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
-    .quant-input { background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-light); padding: 10px 14px; border-radius: var(--radius-sm); font-family: 'Inter', sans-serif; font-size: 0.85rem; font-weight: 500; outline: none; transition: border-color 0.2s; width: 100%; }
-    .quant-input:focus { border-color: var(--accent-blue); }
-    select.quant-input { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%239ca3af%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E"); background-repeat: no-repeat; background-position: right 12px top 50%; background-size: 10px auto; }
-    select.quant-input option { background: var(--bg-surface); }
-
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border-radius: var(--radius-sm); font-family: 'Inter', sans-serif; font-weight: 700; font-size: 0.8rem; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; border: none; transition: all 0.2s; white-space: nowrap; }
-    .btn-primary { background: var(--accent-blue); color: #fff; } .btn-primary:hover { background: #0284c7; }
-    .btn-gold { background: var(--accent-gold); color: #000; } .btn-gold:hover { background: #d97706; }
-    .btn-danger { background: rgba(244, 63, 94, 0.15); color: var(--accent-red); border: 1px solid rgba(244, 63, 94, 0.3); } .btn-danger:hover { background: var(--accent-red); color: #fff; }
-    .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-main); } .btn-outline:hover { border-color: var(--text-muted); }
-    .btn-teal { background: var(--accent-teal); color: #000; } .btn-teal:hover { opacity: 0.85; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    .data-table-wrapper { overflow-x: auto; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--bg-surface); margin-bottom: 16px; }
-    .summary-table, .data-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: center; table-layout: fixed; }
-    .summary-table th, .data-table th { background: var(--bg-panel); color: var(--text-muted); font-weight: 600; padding: 10px 8px; border-bottom: 1px solid var(--border-light); text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.5px; }
-    .summary-table td, .data-table td { padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .summary-table tr:hover td, .data-table tr:hover td { background: rgba(255,255,255,0.02); }
-    
-    .left-align { text-align: left !important; }
-    .col-match { width: 30%; text-align: left; } .col-score { width: 8%; } .col-1x2 { width: 7%; } .col-o25 { width: 7%; } .col-u25 { width: 7%; } .col-btts { width: 7%; } .col-exact { width: 10%; } .col-conf { width: 8%; } .col-signal { width: 16%; text-align: right; padding-right: 16px !important; }
-
-    .calib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
-    .calib-item { background: var(--bg-base); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); }
-    .calib-lbl { font-size: 0.65rem; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block; text-transform: uppercase; }
-    .calib-input { width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--border-focus); color: var(--text-main); font-family: 'Fira Code', monospace; font-size: 1.1rem; font-weight: 700; padding: 4px; outline: none; text-align: center; transition: border-color 0.3s; }
-    
-    .league-mod-table{width:100%;border-collapse:collapse;font-size:0.8rem}
-    .league-mod-table th{padding:10px 8px;background:rgba(0,0,0,0.4);color:var(--accent-gold);font-family:'Inter',sans-serif;font-weight:800;font-size:0.7rem;text-transform:uppercase;text-align:left;border-bottom:1px solid var(--border-light)}
-    .league-mod-table td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);vertical-align:middle}
-    .league-mod-input{background:transparent;border:none;border-bottom:1px solid rgba(14,165,233,0.3);color:var(--text-main);font-family:'Fira Code',monospace;font-size:0.9rem;font-weight:700;width:55px;text-align:center;outline:none;}
-    
-    .progress-container { margin-bottom: 20px; }
-    .progress-track { height: 4px; background: var(--bg-panel); border-radius: 2px; overflow: hidden; margin-bottom: 8px; }
-    .progress-bar { height: 100%; background: var(--accent-blue); width: 0%; transition: width 0.3s ease; }
-    .progress-text { font-family: 'Fira Code', monospace; font-size: 0.7rem; color: var(--accent-blue); }
-
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 2000; display: flex; align-items: center; justify-content: center; }
-    .modal-card { background: var(--bg-surface); border: 1px solid var(--border-focus); border-radius: var(--radius-lg); padding: 32px; max-width: 420px; width: 90%; box-shadow: 0 0 40px var(--accent-blue-glow); }
-    .modal-title { font-family: 'Orbitron', sans-serif; font-size: 1rem; color: var(--accent-gold); margin-bottom: 20px; }
-    .modal-input { width: 100%; background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-focus); padding: 12px 16px; font-size: 1.2rem; border-radius: var(--radius-sm); font-family: 'Fira Code', monospace; outline: none; text-align: center; margin-bottom: 12px; }
-    .modal-close { background: none; border: 1px solid var(--border-light); color: var(--text-muted); padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer; font-family: 'Inter', sans-serif; font-weight: 600; font-size: 0.8rem; }
-    
-    .bk-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 16px; }
-    .bk-table th { background: var(--bg-panel); color: var(--text-muted); padding: 8px; font-size: 0.65rem; text-transform: uppercase; font-weight: 700; border-bottom: 1px solid var(--border-light); }
-    .bk-table td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.03); text-align: center; font-family: 'Fira Code', monospace; }
-
-    /* Match Cards & UI */
-    .match-card { background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 20px; margin-bottom: 16px; transition: transform 0.2s, border-color 0.3s; }
-    .match-card:hover { border-color: var(--border-focus); transform: translateY(-2px); }
-    .match-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; }
-    .match-league { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
-    .league-badge { background: var(--bg-panel); padding: 2px 6px; border-radius: 4px; color: var(--accent-blue); font-weight: 700; letter-spacing: 0.5px;}
-    .team-name { font-size: 1.05rem; font-weight: 700; margin-bottom: 2px; display: flex; align-items: center; gap: 8px; }
-    .score-box { text-align: right; }
-    .score-display { font-family: 'Fira Code', monospace; font-size: 2.2rem; font-weight: 700; line-height: 1; margin-bottom: 4px; }
-    .total-xg-badge { display: inline-block; font-size: 0.7rem; background: rgba(14, 165, 233, 0.1); color: var(--accent-blue); padding: 4px 8px; border-radius: 4px; font-weight: 600; border: 1px solid rgba(14, 165, 233, 0.2); }
-    
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
-    .stat-box { background: var(--bg-base); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 12px; }
-    .stat-box-title { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; border-bottom: 1px solid var(--border-light); padding-bottom: 4px; }
-    .stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .stat-lbl { font-size: 0.7rem; color: var(--text-muted); font-weight: 500; }
-    .stat-val { font-family: 'Fira Code', monospace; font-size: 0.85rem; font-weight: 600; }
-    .stat-highlight { color: var(--accent-gold); }
-
-    .signal-box { margin-top: 16px; padding: 14px; border-radius: var(--radius-sm); text-align: center; border: 1px solid transparent; background: var(--bg-base); }
-    .signal-hit { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.3); }
-    .signal-warn { background: rgba(244, 63, 94, 0.08); border-color: rgba(244, 63, 94, 0.3); }
-    .signal-under { background: rgba(20, 184, 166, 0.08); border-color: rgba(20, 184, 166, 0.3); }
-    .signal-value { font-size: 1.2rem; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 4px; }
-    .signal-desc { font-size: 0.75rem; color: var(--text-muted); }
-
-    .poisson-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; margin-top: 10px; }
-    .poisson-cell { padding: 4px; text-align: center; font-size: 0.55rem; font-family: 'Fira Code', monospace; border-radius: 3px; font-weight: 700; }
-    
-    .tabs-wrapper { display: flex; overflow-x: auto; border-bottom: 1px solid var(--border-light); scrollbar-width: none; margin-bottom: 16px; }
-    .tabs-wrapper::-webkit-scrollbar { display: none; }
-    .tab-btn { background: transparent; border: none; padding: 12px 20px; font-family: 'Inter', sans-serif; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }
-    .tab-btn.active { color: var(--text-main); border-bottom-color: var(--accent-blue); }
-    .tab-count { display: inline-block; background: var(--bg-panel); padding: 2px 8px; border-radius: 10px; font-size: 0.65rem; margin-left: 6px; }
-    .tab-btn.active .tab-count { background: var(--accent-blue); color: #fff; }
-
-    @keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-    .live-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent-green); animation:livePulse 1.4s ease-in-out infinite; margin-right:4px; vertical-align:middle; }
-  </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
@@ -174,7 +39,7 @@
 <div id="auth">
   <div class="auth-card">
     <div class="brand-logo" style="justify-content: center; font-size: 2rem; margin-bottom: 10px;">APEX<span>OMEGA</span></div>
-    <div style="font-weight: 600; color: var(--accent-blue);">v5.0 · Modular Edition</div>
+    <div style="font-weight: 600; color: var(--accent-blue);">v5.0 · Quant Edition</div>
     <input type="password" id="pin" class="auth-input" placeholder="• • • •" maxlength="8" autocomplete="off" inputmode="numeric">
     <div id="authError" style="margin-top:12px; font-size:0.75rem; color:var(--accent-red); min-height:20px; font-weight:600;"></div>
   </div>
@@ -226,7 +91,6 @@
         </div>
         <div class="toolbar" style="margin-top:16px;">
           <button class="btn btn-gold" onclick="saveLeagueMods()">Save League Mods</button>
-          <button class="btn btn-outline" onclick="resetLeagueMods()">Clear Overrides</button>
         </div>
       </div>
     </div>
@@ -235,29 +99,13 @@
       <div class="toolbar">
         <div class="input-group"><label class="input-label">Date From</label><input type="date" id="scanStart" class="quant-input"></div>
         <div class="input-group"><label class="input-label">Date To</label><input type="date" id="scanEnd" class="quant-input"></div>
-        <div class="input-group" style="flex:2"><label class="input-label">Filter</label>
+        <div class="input-group" style="flex:2">
           <select id="leagueFilter" class="quant-input">
             <option value="MY_LEAGUES">⭐ MY LEAGUES (High Yield)</option>
             <option value="ALL">🌐 Top 24 Leagues</option>
-            <option value="WORLD">🌍 Global Coverage</option>
           </select>
         </div>
         <button class="btn btn-primary" id="btnPre" onclick="runScan()" style="height: 38px;">▶ Run Model Scan</button>
-      </div>
-    </div>
-
-    <div class="quant-panel">
-      <div class="panel-title">🗄️ Smart Audit &amp; AI Advisor</div>
-      <div class="toolbar">
-        <div class="input-group"><label class="input-label">Audit From</label><input type="date" id="auditStart" class="quant-input"></div>
-        <div class="input-group"><label class="input-label">Audit To</label><input type="date" id="auditEnd" class="quant-input"></div>
-        <div class="input-group"><label class="input-label">Target League</label><select id="auditLeague" class="quant-input"><option value="ALL">Global (All Leagues)</option></select></div>
-        <div class="input-group" style="flex:0;">
-          <button class="btn btn-primary" style="background:var(--accent-purple); height: 38px;" onclick="runCustomAudit()">Run Audit</button>
-        </div>
-        <div class="input-group" style="flex:0;">
-          <button class="btn btn-danger" style="height: 38px;" onclick="clearVault()">Purge Data</button>
-        </div>
       </div>
     </div>
 
@@ -269,33 +117,9 @@
 
     <div id="advisorSection"></div>
     <div id="topSection"></div>
-    <div id="wallbetSection"></div>
     <div id="summarySection"></div>
-
-    <div id="feedFilterSection" style="display:none;margin-top:20px">
-      <div class="quant-panel">
-        <div class="toolbar" style="margin-bottom:0;">
-          <div class="panel-title" style="margin:0; color:var(--accent-blue);">⚽ Live Match Feed (<span id="feedCount">0</span>)</div>
-          <div class="input-group" style="max-width:320px; margin-left:auto;">
-            <select id="marketFilter" class="quant-input" onchange="filterFeed()">
-              <option value="ALL">Show All Signals</option>
-              <option value="COMBO">⚡ Combos (1X2 &amp; Over)</option>
-              <option value="1X2">⚖️ Match Odds (1X2)</option>
-              <option value="O25">🔥 Over 2.5 Goals</option>
-              <option value="O35">🚀 Over 3.5 Goals</option>
-              <option value="U25">🔒 Under 2.5 Goals</option>
-              <option value="BTTS">🎯 Both Teams To Score</option>
-              <option value="CARDS">🟨 Over 5.5 Cards</option>
-              <option value="COR">🚩 Over 8.5 Corners</option>
-            </select>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <div id="matchesFeed"></div>
     <div id="auditSection"></div>
-
   </div>
 </div>
 
