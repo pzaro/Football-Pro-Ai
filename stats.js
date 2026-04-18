@@ -1,4 +1,4 @@
-// stats.js - Στατιστική Ανάλυση, Μοντέλο Poisson & UI Engine
+// stats.js - Στατιστική Ανάλυση, Μοντέλο Poisson & UI Engine (Βελτιστοποιημένο)
 
 // Global App Variables - ΟΛΑ ΒΡΙΣΚΟΝΤΑΙ ΕΔΩ (Πουθενά αλλού)
 const API_BASE = "https://v3.football.api-sports.io";
@@ -31,7 +31,8 @@ const SETTINGS_MAP = {
   cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold'
 };
 
-const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=8; const REQUEST_GAP_MS=260;
+// API Queue - Πιο συντηρητικό για να μην μπλοκάρει το API (4 concurrent, 350ms gap)
+const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=4; const REQUEST_GAP_MS=350;
 let _errTimer=null, _okTimer=null;
 
 // --- Βοηθητικές Μαθηματικές Συναρτήσεις ---
@@ -128,7 +129,9 @@ function normalCDF(z) {
   return z >= 0 ? p : 1 - p;
 }
 
-// API QUEUE SYSTEM
+// ================================================================
+//  API QUEUE SYSTEM (ΒΕΛΤΙΩΜΕΝΟ)
+// ================================================================
 async function apiReq(path) {
   return new Promise(resolve=>{ _apiQueue.push({path,resolve}); _drainQueue(); });
 }
@@ -139,27 +142,66 @@ async function _drainQueue() {
   }
 }
 async function _executeRequest(path,resolve) {
-  await new Promise(r=>setTimeout(r,Math.random()*100));
+  await new Promise(r=>setTimeout(r,Math.random()*100)); // Μικρό delay για να μην στέλνονται όλα μαζί
   try {
-    const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY}});
-    if(typeof currentCredits==='number'){
-      currentCredits--; 
-      const el = document.getElementById('creditDisplay');
-      if(el) el.textContent = currentCredits;
+    const url = `${API_BASE}/${path}`;
+    // Προσθήκη σωστού User-Agent / Headers αν χρειαστεί
+    const options = {
+      method: 'GET',
+      headers: {
+        'x-apisports-key': API_KEY,
+        'Accept': 'application/json'
+      }
+    };
+    
+    const r=await fetch(url, options);
+    
+    if(r.ok) {
+        const data = await r.json();
+        // Ανανέωση των credits αν το API επιστρέψει το header
+        if(data.response) {
+             if(typeof currentCredits==='number'){
+                currentCredits--; 
+                const el = document.getElementById('creditDisplay');
+                if(el) el.textContent = currentCredits;
+              }
+        }
+        resolve(data);
+    } else {
+        console.error("API Error:", r.status, r.statusText);
+        resolve({response:[]}); // Αν αποτύχει, επιστρέφει κενό για να μην κρασάρει η εφαρμογή
     }
-    resolve(r.ok ? await r.json() : {response:[]});
-  } catch { resolve({response:[]}); }
+  } catch (error) { 
+      console.error("Fetch failed (Network/CORS):", error);
+      resolve({response:[]}); 
+  }
   finally { await new Promise(r=>setTimeout(r,REQUEST_GAP_MS)); _apiActiveCount--; _drainQueue(); }
 }
 
 window.initCredits = async function() {
   try {
-    const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});
+    const r=await fetch(`${API_BASE}/status`,{
+        headers:{
+            'x-apisports-key':API_KEY,
+            'Accept': 'application/json'
+        }
+    });
+    if(!r.ok) {
+        console.error("Δεν ήταν δυνατή η φόρτωση των credits (Σφάλμα δικτύου ή κλειδιού)");
+        const el = document.getElementById('creditDisplay');
+        if(el) el.textContent = "Error";
+        return;
+    }
     const d=await r.json();
     currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);
     const el = document.getElementById('creditDisplay');
     if(el) el.textContent = currentCredits;
-  } catch {}
+    console.log("Credits loaded successfully:", currentCredits);
+  } catch (error) {
+      console.error("initCredits failed:", error);
+      const el = document.getElementById('creditDisplay');
+      if(el) el.textContent = "Error";
+  }
 }
 
 async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
@@ -168,37 +210,34 @@ async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return s
 const getTeamRank =(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ----------------------------------------------------------------
-//  Corners per xG Stating Engine
+//  ΕΛΑΦΡΙΑ έκδοση της batchCalc (Χωρίς έξτρα API Calls για να μην τερματίζει τα Credits)
 // ----------------------------------------------------------------
 async function batchCalc(list, tId) {
-  if (!list.length) return { xg: '0.00', xga: '0.00', cor: '4.5', crd: '2.0', corRatio: '3.5' };
-  let x = 0, xa = 0, c = 0, cr = 0, n = 0;
-  for (const f of list) {
-    try {
-      const st = await apiReq(`fixtures/statistics?fixture=${f.fixture.id}`);
-      if (!st?.response || st.response.length < 2) continue;
-      const my = st.response.find(z => z.team.id === tId)?.statistics || [];
-      const op = st.response.find(z => z.team.id !== tId)?.statistics || [];
-      
-      const myXG = statVal(my, 'Expected Goals') || getTeamGoals(f, tId)*1.05;
-      x += myXG;
-      xa += (statVal(op, 'Expected Goals') || getOppGoals(f, tId)*1.05);
-      c += statVal(my, 'Corner Kicks');
-      cr += statVal(my, 'Yellow Cards') + statVal(my, 'Red Cards');
-      n++;
-    } catch { continue; }
-  }
+  if (!list || !list.length) return { xg: '1.10', xga: '1.10', cor: '4.5', crd: '2.0', corRatio: '3.5' };
   
-  const avgXG = n > 0 ? x / n : 0;
-  const avgCor = n > 0 ? c / n : 0;
-  const corRatio = avgXG > 0 ? avgCor / Math.max(avgXG, 0.5) : 3.5;
+  let totalXG = 0, totalXGA = 0, n = 0;
+  
+  for (const f of list) {
+    const myGoals = getTeamGoals(f, tId);
+    const oppGoals = getOppGoals(f, tId);
+    
+    // Χρησιμοποιούμε τα πραγματικά γκολ για να εκτιμήσουμε το xG (γρήγορο, χωρίς credits)
+    const myXG = myGoals > 0 ? myGoals * 1.10 : 0.40; 
+    const oppXG = oppGoals > 0 ? oppGoals * 1.10 : 0.40;
+    
+    totalXG += myXG;
+    totalXGA += oppXG;
+    n++;
+  }
 
+  const avgXG = n > 0 ? totalXG / n : 0;
+  
   return {
-    xg: n > 0 ? avgXG.toFixed(2) : '0.00',
-    xga: n > 0 ? (xa / n).toFixed(2) : '0.00',
-    cor: avgCor.toFixed(1),
-    crd: n > 0 ? (cr / n).toFixed(1) : '2.0',
-    corRatio: corRatio.toFixed(2)
+    xg:  n > 0 ? avgXG.toFixed(2)  : '1.10',
+    xga: n > 0 ? (totalXGA / n).toFixed(2) : '1.10',
+    cor: '4.8', // Static estimate
+    crd: '2.1', // Static estimate
+    corRatio: '3.5' // Static estimate
   };
 }
 
