@@ -1,0 +1,687 @@
+/* ==========================================================================
+   APEX OMEGA v5.0 - Premium Quant Terminal Styles
+   ========================================================================== */
+
+/* --- 1. CSS VARIABLES & THEME --- */
+:root {
+  /* Βασικά Χρώματα (Deep Space Dark) */
+  --bg-base: #0f172a;        /* Σκούρο μπλε/γκρι για το φόντο */
+  --bg-surface: #1e293b;     /* Ελαφρώς πιο ανοιχτό για τα panels */
+  --bg-panel: #334155;       /* Για εσωτερικά στοιχεία (π.χ. table headers) */
+  
+  /* Περιγράμματα (Borders) */
+  --border-light: rgba(255, 255, 255, 0.08);
+  --border-focus: rgba(56, 189, 248, 0.5); /* Neon Blue Glow */
+  
+  /* Τυπογραφία (Κείμενο) */
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  
+  /* Accent Colors (Neon & Ειδοποιήσεις) */
+  --accent-blue: #38bdf8;
+  --accent-blue-glow: rgba(56, 189, 248, 0.2);
+  --accent-green: #10b981;
+  --accent-green-bg: rgba(16, 185, 129, 0.1);
+  --accent-red: #f43f5e;
+  --accent-red-bg: rgba(244, 63, 94, 0.1);
+  --accent-gold: #fbbf24;
+  --accent-gold-bg: rgba(251, 191, 36, 0.1);
+  --accent-purple: #a78bfa;
+  --accent-teal: #2dd4bf;
+  
+  /* Διαστάσεις & Σκιές */
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --shadow-subtle: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(56, 189, 248, 0.15);
+  
+  /* Γραμματοσειρές */
+  --font-main: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-display: 'Orbitron', sans-serif;
+}
+
+/* --- 2. ΒΑΣΙΚΟ RESET & ΓΕΝΙΚΗ ΕΜΦΑΝΙΣΗ --- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-main);
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  /* Ελαφρύ grid pattern για tech αίσθηση */
+  background-image: 
+    linear-gradient(var(--border-light) 1px, transparent 1px), 
+    linear-gradient(90deg, var(--border-light) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center center;
+  background-attachment: fixed;
+}
+
+/* Ειδική κλάση για αριθμούς (Monospace) */
+.data-num, .mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.container {
+  max-width: 1400px; /* Λίγο πιο φαρδύ για τους πίνακες */
+  margin: 0 auto;
+  padding: 24px;
+  position: relative;
+  z-index: 1;
+}
+
+/* --- 3. HEADER & NAVIGATION --- */
+.terminal-header {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border-light);
+  padding: 16px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  box-shadow: var(--shadow-subtle);
+}
+
+.brand-logo {
+  font-family: var(--font-display);
+  color: var(--text-main);
+  font-size: 1.2rem;
+  font-weight: 900;
+  letter-spacing: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-logo span { color: var(--accent-blue); }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Widgets στο Header */
+.credit-widget, .bankroll-widget {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-surface);
+  padding: 8px 16px;
+  border-radius: 20px; /* Πιο στρογγυλεμένα */
+  border: 1px solid var(--border-light);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+  transition: all 0.3s ease;
+}
+
+.bankroll-widget {
+  border-color: rgba(251, 191, 36, 0.3);
+  cursor: pointer;
+}
+
+.bankroll-widget:hover {
+  background: var(--accent-gold-bg);
+  border-color: var(--accent-gold);
+}
+
+.credit-label, .bankroll-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.bankroll-label { color: var(--accent-gold); }
+
+.credit-value, .bankroll-value {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--accent-green);
+}
+.bankroll-value { color: var(--accent-gold); }
+.credit-value.low { color: var(--accent-red); animation: pulse 2s infinite; }
+
+/* --- 4. PANELS & CARDS (Το βασικό "κουτί") --- */
+.quant-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-subtle);
+  transition: border-color 0.3s ease;
+}
+
+.quant-panel:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.panel-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-main); /* Πιο έντονο χρώμα */
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 12px;
+}
+
+/* --- 5. ΦΟΡΜΕΣ, INPUTS & ΚΟΥΜΠΙΑ --- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 160px;
+}
+
+.input-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.quant-input {
+  background: var(--bg-base);
+  color: var(--text-main);
+  border: 1px solid var(--border-light);
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-main);
+  font-size: 0.9rem;
+  font-weight: 500;
+  outline: none;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.quant-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--accent-blue-glow);
+}
+
+select.quant-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%239ca3af%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px top 50%;
+  background-size: 12px auto;
+  padding-right: 40px;
+}
+
+select.quant-input option {
+  background: var(--bg-surface);
+  color: var(--text-main);
+  padding: 10px;
+}
+
+/* Κουμπιά */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-main);
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn:active { transform: scale(0.98); }
+
+.btn-primary { 
+  background: var(--accent-blue); 
+  color: #000; 
+  box-shadow: 0 4px 14px var(--accent-blue-glow);
+}
+.btn-primary:hover { background: #7dd3fc; box-shadow: 0 6px 20px var(--accent-blue-glow); }
+
+.btn-gold { 
+  background: var(--accent-gold); 
+  color: #000; 
+  box-shadow: 0 4px 14px rgba(251, 191, 36, 0.2);
+}
+.btn-gold:hover { background: #fcd34d; }
+
+.btn-danger { 
+  background: var(--accent-red-bg); 
+  color: var(--accent-red); 
+  border: 1px solid rgba(244, 63, 94, 0.4); 
+}
+.btn-danger:hover { background: var(--accent-red); color: #fff; }
+
+.btn-outline { 
+  background: transparent; 
+  border: 1px solid var(--border-light); 
+  color: var(--text-main); 
+}
+.btn-outline:hover { border-color: var(--text-muted); background: rgba(255,255,255,0.05); }
+
+.btn-purple {
+  background: var(--accent-purple);
+  color: #000;
+  box-shadow: 0 4px 14px rgba(167, 139, 250, 0.2);
+}
+.btn-purple:hover { background: #c4b5fd; }
+
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* --- 6. ΠΙΝΑΚΕΣ ΔΕΔΟΜΕΝΩΝ (DATA TABLES) --- */
+.data-table-wrapper {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-base); /* Σκούρο φόντο για αντίθεση με το panel */
+  box-shadow: inset 0 2px 10px rgba(0,0,0,0.2);
+}
+
+.summary-table, .data-table, .league-mod-table, .audit-table {
+  width: 100%;
+  border-collapse: separate; /* Καλύτερο για borders στα rows */
+  border-spacing: 0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* Headers Πινάκων */
+.summary-table th, .data-table th, .league-mod-table th, .audit-table th {
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 16px 12px;
+  border-bottom: 2px solid var(--border-light);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+/* Κελιά Πινάκων */
+.summary-table td, .data-table td, .league-mod-table td, .audit-table td {
+  padding: 16px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  vertical-align: middle;
+  transition: background 0.2s ease;
+}
+
+/* Hover effect στις γραμμές */
+.summary-table tbody tr:hover td, .audit-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.left-align { text-align: left !important; }
+
+/* Χρωματισμοί Αποτελεσμάτων */
+.color-hit { color: var(--accent-green); font-weight: 700; }
+.color-miss { color: var(--accent-red); font-weight: 700; opacity: 0.8; }
+.color-warn { color: var(--accent-gold); font-weight: 700; }
+
+/* Πλάτη Στηλών */
+.col-match { width: 25%; text-align: left; } 
+.col-score { width: 10%; } 
+.col-1x2 { width: 8%; } 
+.col-o25 { width: 8%; } 
+.col-u25 { width: 8%; } 
+.col-btts { width: 8%; } 
+.col-exact { width: 10%; } 
+.col-conf { width: 8%; } 
+.col-signal { width: 15%; text-align: right; padding-right: 20px !important; }
+
+/* --- 7. TABS (ΚΑΡΤΕΛΕΣ) --- */
+.tabs-wrapper {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 2px solid var(--bg-panel);
+  scrollbar-width: none; /* Firefox */
+  margin-bottom: 20px;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+.tabs-wrapper::-webkit-scrollbar { display: none; } /* Chrome */
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  padding: 12px 24px;
+  font-family: var(--font-main);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: -2px; /* Pull down to overlap border */
+}
+
+.tab-btn:hover {
+  color: var(--text-main);
+  background: rgba(255,255,255,0.03);
+}
+
+.tab-btn.active {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+  background: var(--accent-blue-glow);
+}
+
+.tab-count {
+  display: inline-block;
+  background: var(--bg-panel);
+  color: var(--text-main);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  margin-left: 8px;
+  font-weight: 800;
+}
+
+.tab-btn.active .tab-count {
+  background: var(--accent-blue);
+  color: #000;
+}
+
+/* --- 8. PROGRESS BAR --- */
+.progress-container {
+  margin-bottom: 24px;
+  background: var(--bg-surface);
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+}
+
+.progress-track {
+  height: 8px;
+  background: var(--bg-base);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 12px;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+  width: 0%;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 10px var(--accent-blue-glow);
+}
+
+.progress-text {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-main);
+  text-align: right;
+}
+
+/* --- 9. MODALS & ALERTS --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 15, 25, 0.85); /* Πιο σκοτεινό */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-card, .auth-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  max-width: 460px;
+  width: 100%;
+  box-shadow: var(--shadow-glow);
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  color: var(--text-main);
+  margin-bottom: 8px;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+/* Toasts / Ειδοποιήσεις */
+#errorBox > div, #successBox > div {
+  padding: 16px 20px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: slideInRight 0.3s ease-out;
+  box-shadow: var(--shadow-subtle);
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(30px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+#errorBox > div {
+  background: var(--accent-red-bg);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  color: var(--accent-red);
+}
+
+#successBox > div {
+  background: var(--accent-green-bg);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: var(--accent-green);
+}
+
+/* --- 10. ΕΙΔΙΚΑ ΣΤΟΙΧΕΙΑ (CALIBRATION & AUDIT) --- */
+/* Grid για τις ρυθμίσεις */
+.calib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.calib-item {
+  background: var(--bg-base);
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  transition: border-color 0.2s ease;
+}
+.calib-item:hover { border-color: rgba(255,255,255,0.2); }
+
+.calib-lbl {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.calib-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid var(--border-light);
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+  font-size: 1.3rem;
+  font-weight: 700;
+  padding: 4px 0;
+  outline: none;
+  text-align: center;
+  transition: border-color 0.3s;
+}
+.calib-input:focus { border-color: var(--accent-blue); }
+
+/* Κουτάκια (Pills) στα αποτελέσματα Audit */
+.pred-res-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  background: var(--bg-base);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+}
+
+.pr-val {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-width: 36px;
+  text-align: center;
+}
+
+.pr-pred { background: rgba(255,255,255,0.05); color: var(--text-muted); }
+.pr-res { background: rgba(255,255,255,0.1); color: var(--text-main); }
+.icon-hit { color: var(--accent-green); font-size: 1rem; }
+.icon-miss { color: var(--accent-red); font-size: 1rem; }
+.icon-neutral { color: var(--text-muted); font-size: 1rem; opacity: 0.5; }
+
+/* Match Name στο Audit */
+.audit-match-name { font-weight: 700; color: var(--text-main); font-size: 0.9rem; }
+.audit-match-score {
+  font-family: var(--font-mono);
+  color: var(--accent-gold);
+  font-size: 0.8rem;
+  background: var(--accent-gold-bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+.audit-date { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); display: block; margin-top: 4px; }
+
+/* --- 11. MATCH CARDS & WALL BETS --- */
+/* Θα αφήσουμε τη δομή που δημιουργεί η JS, αλλά θα 
+   ορίσουμε τα classes που χρησιμοποιεί αν χρειάζονται βελτίωση */
+
+.match-card { /* Αν υπάρχει */
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  margin-bottom: 20px;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.3s;
+}
+
+.match-card:hover {
+  border-color: var(--border-focus);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-subtle);
+}
+
+/* Poisson Grid */
+.poisson-grid {
+  display: grid;
+  gap: 2px;
+  margin-top: 12px;
+  background: var(--bg-base);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+}
+
+.poisson-cell {
+  padding: 6px 2px;
+  text-align: center;
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  border-radius: 3px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Scrollbar (Webkit) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-panel);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Animations */
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  animation: pulse 1.5s ease-in-out infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+  box-shadow: 0 0 8px var(--accent-red);
+}
