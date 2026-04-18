@@ -67,12 +67,12 @@ function setProgress(pct,text='') {
   document.getElementById('bar').style.width=Math.round(clamp(pct,0,100))+'%'; 
   document.getElementById('status').textContent=text + (_apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : ''); 
 }
-function setBtnsDisabled(d) { ["btnPre","leagueFilter"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
+function setBtnsDisabled(d) { ["btnPre","leagueFilter","auditLeague"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
 function showErr(msg) { clearTimeout(_errTimer); const box=document.getElementById('errorBox'); box.innerHTML=`<div style="background:var(--accent-red); color:#fff; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(244,63,94,0.3);">⚠️ ${esc(msg)}</div>`; _errTimer=setTimeout(()=>box.innerHTML='',8000); }
 function showOk(msg) { clearTimeout(_okTimer); const box=document.getElementById('successBox'); box.innerHTML=`<div style="background:var(--accent-green); color:#000; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(16,185,129,0.3);">✓ ${esc(msg)}</div>`; _okTimer=setTimeout(()=>box.innerHTML='',4000); }
 function clearAlerts() { document.getElementById('errorBox').innerHTML=''; document.getElementById('successBox').innerHTML=''; }
+function abortScan(msg) { if(msg)showErr(msg); isRunning=false; setBtnsDisabled(false); setLoader(false); }
 
-// --- Poisson ---
 function poissonProb(lambda, k) {
   if(lambda <= 0) return k === 0 ? 1 : 0;
   let logP = -lambda + k * Math.log(lambda);
@@ -259,6 +259,7 @@ function computeCornerConfidence(hS, aS, hXG, aXG) {
   const expectedHomeCorners = hXG * safeNum(hS.corRatio, 3.5);
   const expectedAwayCorners = aXG * safeNum(aS.corRatio, 3.5);
   let expCor = expectedHomeCorners + expectedAwayCorners;
+
   const xgDiff = Math.abs(hXG - aXG);
   const dominanceBonus = xgDiff > 0.8 ? clamp((xgDiff - 0.8) * 1.5, 0, 2.0) : 0;
   expCor += dominanceBonus;
@@ -269,8 +270,12 @@ function computeCornerConfidence(hS, aS, hXG, aXG) {
   const pAbove = 1 - normalCDF(z);
   
   let score = pAbove * 100;
+  
   const baseCor = safeNum(hS.cor, 4.5) + safeNum(aS.cor, 4.5);
-  if (baseCor < engineConfig.minCorners) score -= (engineConfig.minCorners - baseCor) * 8;
+  if (baseCor < engineConfig.minCorners) {
+    score -= (engineConfig.minCorners - baseCor) * 8;
+  }
+  
   return clamp(score, 0, 99);
 }
 
