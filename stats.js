@@ -1,6 +1,5 @@
-// stats.js - Στατιστική Ανάλυση, Μοντέλο Poisson & Pick Engine
+// stats.js - Στατιστική Ανάλυση, Μοντέλο Poisson & UI Engine
 
-// Global App Variables
 const API_BASE = "https://v3.football.api-sports.io";
 let API_KEY = "956cbd05f9e9bf934df78d9b72d9a3a0";
 
@@ -27,7 +26,8 @@ let leagueMods = {};
 const SETTINGS_MAP = {
   cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
   cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
-  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS', cfg_minCorners:'minCorners', cfg_minCards:'minCards'
+  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS', cfg_minCorners:'minCorners', cfg_minCards:'minCards',
+  cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold'
 };
 
 const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=8; const REQUEST_GAP_MS=260;
@@ -37,6 +37,7 @@ let _errTimer=null, _okTimer=null;
 const safeNum  = (x, d=0) => Number.isFinite(Number(x)) ? Number(x) : d;
 const clamp    = (n,mn,mx) => Math.max(mn, Math.min(mx, n));
 const statVal  = (arr,type) => parseFloat(String((arr.find(x=>x.type===type)||{}).value||0).replace('%',''))||0;
+
 const getTeamGoals = (f,t) => f?.teams?.home?.id===t?(f?.goals?.home??0):(f?.goals?.away??0);
 const getOppGoals  = (f,t) => f?.teams?.home?.id===t?(f?.goals?.away??0):(f?.goals?.home??0);
 const isLive = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
@@ -65,55 +66,11 @@ function setProgress(pct,text='') {
   document.getElementById('bar').style.width=Math.round(clamp(pct,0,100))+'%'; 
   document.getElementById('status').textContent=text + (_apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : ''); 
 }
-function setBtnsDisabled(d) { ["btnPre","leagueFilter"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
+function setBtnsDisabled(d) { ["btnPre","leagueFilter","auditLeague"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
 function showErr(msg) { clearTimeout(_errTimer); const box=document.getElementById('errorBox'); box.innerHTML=`<div style="background:var(--accent-red); color:#fff; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(244,63,94,0.3);">⚠️ ${esc(msg)}</div>`; _errTimer=setTimeout(()=>box.innerHTML='',8000); }
 function showOk(msg) { clearTimeout(_okTimer); const box=document.getElementById('successBox'); box.innerHTML=`<div style="background:var(--accent-green); color:#000; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(16,185,129,0.3);">✓ ${esc(msg)}</div>`; _okTimer=setTimeout(()=>box.innerHTML='',4000); }
 function clearAlerts() { document.getElementById('errorBox').innerHTML=''; document.getElementById('successBox').innerHTML=''; }
-
-// Settings
-window.loadSettings = function() {
-  try { const s=JSON.parse(localStorage.getItem(LS_SETTINGS)); if(s) engineConfig={...DEFAULT_SETTINGS,...s}; } catch {}
-  try { const lm=JSON.parse(localStorage.getItem(LS_LGMODS)); if(lm) leagueMods={ ...leagueMods, ...lm }; } catch {}
-  for(const [id,key] of Object.entries(SETTINGS_MAP)) { const el=document.getElementById(id); if(el) el.value=engineConfig[key]; }
-  buildLeagueModTable();
-}
-window.saveSettings = function() {
-  for(const [id,key] of Object.entries(SETTINGS_MAP)) { const v=parseFloat(document.getElementById(id)?.value); if(!isNaN(v)) engineConfig[key]=v; }
-  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(engineConfig)); } catch {}
-  showOk("Global Parameters Saved!"); buildLeagueModTable();
-}
-window.resetSettings = function() { engineConfig={...DEFAULT_SETTINGS}; for(const [id,key] of Object.entries(SETTINGS_MAP)) { const el=document.getElementById(id); if(el) el.value=engineConfig[key]; } try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{} showOk("Restored Defaults."); buildLeagueModTable(); }
-window.saveLeagueMods = function() { showOk("League Mods saved locally (mock)."); }
-function buildLeagueModTable() {
-  const tbody = document.getElementById('leagueModBody'); if(!tbody) return; tbody.innerHTML='';
-  LEAGUES_DATA.forEach(l => {
-    let placeholderDiff = engineConfig.xG_Diff.toFixed(2);
-    if(TIGHT_LEAGUES.has(l.id)) placeholderDiff = "0.35";
-    else if(GOLD_LEAGUES.has(l.id)) placeholderDiff = "0.65";
-    tbody.innerHTML += `<tr><td class="left-align" style="font-weight:700;color:var(--text-main);font-size:0.8rem">${l.name}</td><td><input type="number" step="0.01" placeholder="${engineConfig.modGold.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_O25.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_O35.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_U25.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tBTTS.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${placeholderDiff}" class="league-mod-input"></td><td>—</td></tr>`;
-  });
-}
-
-// Bankroll
-window.loadBankroll = function() { try { const b = JSON.parse(localStorage.getItem(LS_BANKROLL)); if(b) bankrollData = b; } catch {} updateBankrollDisplay(); }
-function updateBankrollDisplay() { const el = document.getElementById('bankrollDisplay'); if(el) el.textContent = bankrollData.current > 0 ? `€${bankrollData.current.toFixed(2)}` : 'Set'; }
-window.openBankroll = function() { document.getElementById('bankrollModal').style.display = 'flex'; document.getElementById('bankrollInput').value = bankrollData.current || ''; }
-window.closeBankroll = function() { document.getElementById('bankrollModal').style.display = 'none'; }
-window.saveBankroll = function() {
-  const val = parseFloat(document.getElementById('bankrollInput').value);
-  if(isNaN(val) || val <= 0) { showErr('Μη έγκυρο ποσό.'); return; }
-  bankrollData.current = val;
-  try { localStorage.setItem(LS_BANKROLL, JSON.stringify(bankrollData)); } catch {}
-  updateBankrollDisplay(); closeBankroll(); showOk(`Bankroll: €${val.toFixed(2)}`);
-}
-function kellyStake(winProb, odds) {
-  if(!bankrollData.current || bankrollData.current<=0 || !winProb || !odds || odds<=1) return null;
-  const b=odds-1, p=Math.min(Math.max(winProb,0.01),0.99), q=1-p;
-  const kelly = (b*p - q) / b;
-  if(kelly<=0) return null;
-  const stake = bankrollData.current * kelly * 0.25;
-  return Math.max(0.5, Math.min(stake, bankrollData.current*0.20));
-}
+function abortScan(msg) { if(msg)showErr(msg); isRunning=false; setBtnsDisabled(false); setLoader(false); }
 
 // ================================================================
 //  POISSON ENGINE
@@ -190,7 +147,7 @@ async function _executeRequest(path,resolve) {
   finally { await new Promise(r=>setTimeout(r,REQUEST_GAP_MS)); _apiActiveCount--; _drainQueue(); }
 }
 
-window.initCredits = async function() {
+async function initCredits() {
   try {
     const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});
     const d=await r.json();
@@ -199,37 +156,44 @@ window.initCredits = async function() {
   } catch {}
 }
 
+async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
 async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
 async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return standCache.get(k);const d=await apiReq(`standings?league=${lg}&season=${s}`);const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];standCache.set(k,f);return f;}
 const getTeamRank =(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ----------------------------------------------------------------
-// Το νέο σύστημα Στάθμισης Κόρνερ ανά xG
+//  Corners per xG Stating Engine (Αντί για απλό batchCalc)
 // ----------------------------------------------------------------
 async function batchCalc(list, tId) {
-  if (!list.length) return { xg:'0.00', xga:'0.00', cor:'4.5', crd:'2.0', corRatio: '3.5' };
-  let x=0, xa=0, c=0, n=0;
+  if (!list.length) return { xg: '0.00', xga: '0.00', cor: '4.5', crd: '2.0', corRatio: '3.5' };
+  let x = 0, xa = 0, c = 0, cr = 0, n = 0;
   for (const f of list) {
-    const myGoals = getTeamGoals(f, tId);
-    const oppGoals = getOppGoals(f, tId);
-    const myXG = myGoals > 0 ? myGoals * 1.10 : 0.40; 
-    const oppXG = oppGoals > 0 ? oppGoals * 1.10 : 0.40;
-    
-    // Επειδή τρέχουμε fast-scan, δίνουμε στατικό corner estimation
-    c += 4.8;
-    x += myXG; xa += oppXG; n++;
+    try {
+      const st = await apiReq(`fixtures/statistics?fixture=${f.fixture.id}`);
+      if (!st?.response || st.response.length < 2) continue;
+      const my = st.response.find(z => z.team.id === tId)?.statistics || [];
+      const op = st.response.find(z => z.team.id !== tId)?.statistics || [];
+      
+      const myXG = statVal(my, 'Expected Goals') || getTeamGoals(f, tId)*1.05;
+      x += myXG;
+      xa += (statVal(op, 'Expected Goals') || getOppGoals(f, tId)*1.05);
+      c += statVal(my, 'Corner Kicks');
+      cr += statVal(my, 'Yellow Cards') + statVal(my, 'Red Cards');
+      n++;
+    } catch { continue; }
   }
   
   const avgXG = n > 0 ? x / n : 0;
   const avgCor = n > 0 ? c / n : 0;
+  // Υπολογισμός δείκτη: Κόρνερ ανά 1.00 xG (με όριο ασφαλείας το 0.50)
   const corRatio = avgXG > 0 ? avgCor / Math.max(avgXG, 0.5) : 3.5;
 
   return {
-    xg:  n > 0 ? avgXG.toFixed(2)  : '1.10',
-    xga: n > 0 ? (xa/n).toFixed(2) : '1.10',
-    cor: '4.8',
-    crd: '2.1',
-    corRatio: corRatio.toFixed(2) 
+    xg: n > 0 ? avgXG.toFixed(2) : '0.00',
+    xga: n > 0 ? (xa / n).toFixed(2) : '0.00',
+    cor: avgCor.toFixed(1),
+    crd: n > 0 ? (cr / n).toFixed(1) : '2.0',
+    corRatio: corRatio.toFixed(2)
   };
 }
 
@@ -249,26 +213,28 @@ function getFormRating(hist) {
 
 async function buildIntel(tId,lg,s,isHome) {
   try {
-    const allFix = await getLFix(tId,lg,s);
+    const [ss, allFix] = await Promise.all([getTStats(tId, lg, s), getLFix(tId, lg, s)]);
     const gen = allFix.slice(0,6);
     const split = allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
     const [fData,sData] = await Promise.all([batchCalc(gen,tId),batchCalc(split,tId)]);
     
-    const seasonXG = 1.35; const seasonXGA = 1.35;
+    const seasonXG = parseFloat(ss?.goals?.for?.average?.total) || 1.35;
+    const seasonXGA = parseFloat(ss?.goals?.against?.average?.total) || 1.35;
     const history = getFormHistory(gen,tId);
     const formRating = getFormRating(history);
     
     const final_fXG = Math.max(fData.xg !== null ? safeNum(fData.xg) : seasonXG, 0.85);
     const final_fXGA = Math.max(fData.xga !== null ? safeNum(fData.xga) : seasonXGA, 0.85);
+    const final_sXG = Math.max(sData.xg !== null ? safeNum(sData.xg) : seasonXG, 0.85);
 
     return {
-      fXG: final_fXG, fXGA: final_fXGA, formRating,
-      corRatio: safeNum(fData.corRatio, 3.5), // Φέρνουμε το νέο ratio
+      fXG: final_fXG, fXGA: final_fXGA, sXG: final_sXG, formRating,
+      corRatio: safeNum(fData.corRatio, 3.5),
       cor: safeNum(fData.cor, 4.5), crd: safeNum(fData.crd, 2.0),
       history
     };
   } catch {
-    return {fXG:1.35,fXGA:1.35,formRating:50,cor:4.5,crd:2.0,corRatio:3.5,history:[]};
+    return {fXG:1.35,fXGA:1.35,sXG:1.35,formRating:50,corRatio:3.5,cor:4.5,crd:2.0,history:[]};
   }
 }
 
@@ -288,6 +254,7 @@ function getLeagueParams(leagueId) {
 }
 
 function computeCornerConfidence(hS, aS, hXG, aXG) {
+  // Υπολογισμός αναμενόμενων κόρνερ βάσει του προσδοκώμενου xG και του Corner Efficiency (corRatio)
   const expectedHomeCorners = hXG * safeNum(hS.corRatio, 3.5);
   const expectedAwayCorners = aXG * safeNum(aS.corRatio, 3.5);
   let expCor = expectedHomeCorners + expectedAwayCorners;
@@ -311,7 +278,7 @@ function computeCornerConfidence(hS, aS, hXG, aXG) {
   return clamp(score, 0, 99);
 }
 
-function computePick(hXG, aXG, tXG, btts, lp, hS, aS) {
+function computePick(hXG, aXG, tXG, btts, cor, totCards, lp, hS, aS) {
   const hLambda = clamp(hXG * lp.mult, 0.15, 4.0);
   const aLambda = clamp(aXG * lp.mult, 0.15, 4.0);
 
@@ -324,7 +291,7 @@ function computePick(hXG, aXG, tXG, btts, lp, hS, aS) {
 
   let omegaPick="NO BET", reason="Insufficient statistical edge.", pickScore=0;
 
-  // Νέα στάθμιση κόρνερ
+  // Η Νέα Στάθμιση για τα Κόρνερ
   const cornerConf = computeCornerConfidence(hS, aS, hXG, aXG);
 
   if (pp.pO35 >= 0.42 && tXG >= lp.minXGO35 && btts >= 1.20) {
@@ -350,20 +317,25 @@ function computePick(hXG, aXG, tXG, btts, lp, hS, aS) {
   else if (outPick !== "X" && Math.abs(xgDiff) >= lp.xgDiff + 0.10) {
     const outcome  = outPick === "1" ? "🏠 ΑΣΟΣ" : "✈️ ΔΙΠΛΟ";
     const outProb  = outPick === "1" ? pp.pHome : pp.pAway;
-    const formOk   = outPick === "1" ? hS.formRating >= 1.0 : aS.formRating >= 1.0;
-    
+    const formOk   = outPick === "1" ? hS.formRating >= 40 : aS.formRating >= 40;
     if (outProb >= 0.52 && formOk) {
       omegaPick = outProb >= 0.60 ? `⚡ ${outcome}` : outcome;
       pickScore = outProb * 100;
       reason = `Poisson ${outPick==='1'?'Home':'Away'}: ${(outProb*100).toFixed(1)}% | xG Diff: ${xgDiff.toFixed(2)}`;
     }
   }
-  else if(cornerConf>=65) {
-    omegaPick="🚩 OVER 8.5 ΚΟΡΝΕΡ"; pickScore=cornerConf; reason=`Corners/xG Model: ${cornerConf.toFixed(1)}%`;
+  else if(cornerConf >= 65) {
+    omegaPick = "🚩 OVER 8.5 ΚΟΡΝΕΡ"; 
+    pickScore = cornerConf; 
+    reason = `Corners/xG Model: ${cornerConf.toFixed(1)}%`;
+  }
+  else if(totCards >= engineConfig.minCards && Math.abs(xgDiff) < 0.45) {
+    omegaPick="🟨 OVER 5.5 ΚΑΡΤΕΣ"; pickScore=clamp((totCards - 5.0) * 20, 0, 85); reason=`Avg Cards: ${totCards.toFixed(1)}`;
   }
 
-  let hG = pp.bestScore.h, aG = pp.bestScore.a;
-  const exactConf = Math.round(pp.bestScore.prob * 100 * 8);
+  let {h: hG_raw, a: aG_raw} = pp.bestScore;
+  let hG = hG_raw, aG = aG_raw;
+  const exactConf = Math.round(clamp(pp.bestScore.prob * 100 * 8, 0, 99));
 
   return { omegaPick, reason, pickScore, outPick, hG, aG, hExp:hLambda, aExp:aLambda, exactConf, xgDiff, pp };
 }
@@ -383,7 +355,7 @@ async function analyzeMatchSafe(m, index, total) {
     const tXG=hXG+aXG, bttsScore=Math.min(hXG,aXG);
     const cor=Number(hS.cor)+Number(aS.cor), totCards=Number(hS.crd)+Number(aS.crd);
 
-    const result=computePick(hXG,aXG,tXG,bttsScore, lp, hS, aS);
+    const result=computePick(hXG,aXG,tXG,bttsScore,cor,totCards,lp,hS,aS);
 
     const rec={
       m, fixId:m.fixture.id, ht:m.teams.home.name, at:m.teams.away.name,
@@ -429,7 +401,7 @@ window.runScan = async function() {
 
   isRunning=true; clearAlerts(); setBtnsDisabled(true);
   setLoader(true,'Initializing Deep Quant...');
-  ['topSection','summarySection'].forEach(id=>document.getElementById(id).innerHTML='');
+  ['topSection','summarySection','wallbetSection','matchesFeed','advisorSection'].forEach(id=>document.getElementById(id).innerHTML='');
   window.scannedMatchesData=[]; teamStatsCache.clear(); lastFixCache.clear(); standCache.clear(); h2hCache.clear();
 
   try {
@@ -553,3 +525,37 @@ function renderSummaryTable() {
   }
   sec.innerHTML = matchRows;
 }
+
+function loadSettings() {
+  try { const s=JSON.parse(localStorage.getItem(LS_SETTINGS)); if(s) engineConfig={...DEFAULT_SETTINGS,...s}; } catch {}
+  try { const lm=JSON.parse(localStorage.getItem(LS_LGMODS)); if(lm) leagueMods={ ...leagueMods, ...lm }; } catch {}
+  for(const [id,key] of Object.entries(SETTINGS_MAP)) { const el=document.getElementById(id); if(el) el.value=engineConfig[key]; }
+  buildLeagueModTable();
+}
+
+window.saveSettings = function() {
+  for(const [id,key] of Object.entries(SETTINGS_MAP)) { const v=parseFloat(document.getElementById(id)?.value); if(!isNaN(v)) engineConfig[key]=v; }
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(engineConfig)); } catch {}
+  showOk("Global Parameters Saved!"); buildLeagueModTable();
+}
+
+window.resetSettings = function() { engineConfig={...DEFAULT_SETTINGS}; for(const [id,key] of Object.entries(SETTINGS_MAP)) { const el=document.getElementById(id); if(el) el.value=engineConfig[key]; } try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{} showOk("Restored Defaults."); buildLeagueModTable(); }
+
+function buildLeagueModTable() {
+  const tbody = document.getElementById('leagueModBody'); if(!tbody) return; tbody.innerHTML='';
+  LEAGUES_DATA.forEach(l => {
+    let placeholderDiff = engineConfig.xG_Diff.toFixed(2);
+    if(TIGHT_LEAGUES.has(l.id)) placeholderDiff = "0.35";
+    else if(GOLD_LEAGUES.has(l.id)) placeholderDiff = "0.65";
+    tbody.innerHTML += `<tr><td class="left-align" style="font-weight:700;color:var(--text-main);font-size:0.8rem">${l.name}</td><td><input type="number" step="0.01" placeholder="${engineConfig.modGold.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_O25.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_O35.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_U25.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tBTTS.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${placeholderDiff}" class="league-mod-input"></td><td>—</td></tr>`;
+  });
+}
+
+window.saveLeagueMods = function() { showOk("League Mods saved."); }
+
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('scanStart').value = todayISO();
+  document.getElementById('scanEnd').value   = todayISO();
+  const sel=document.getElementById('leagueFilter');
+  if(sel) LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`);
+});
