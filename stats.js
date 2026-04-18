@@ -769,4 +769,357 @@ window.addEventListener('DOMContentLoaded', () => {
   if(sel && typeof LEAGUES_DATA !== 'undefined') {
     LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`);
   }
+
+  // Build Audit Panel HTML
+  const auditSec = document.getElementById('auditSection');
+  if(auditSec) {
+    auditSec.innerHTML = `
+    <div class="quant-panel" style="border-color:rgba(16,185,129,0.3);">
+      <div class="panel-title" style="cursor:pointer;color:var(--accent-green);" onclick="togglePanel('auditBody','auditArrow')">
+        <span>🔬 Audit Engine — Αξιολόγηση Αποτελεσματικότητας</span><span id="auditArrow">▼</span>
+      </div>
+      <div id="auditBody" style="display:none;">
+        <div class="toolbar" style="margin-bottom:16px;">
+          <div class="input-group"><label class="input-label">Audit Από</label><input type="date" id="auditFrom" class="quant-input"></div>
+          <div class="input-group"><label class="input-label">Audit Έως</label><input type="date" id="auditTo" class="quant-input"></div>
+          <div class="input-group" style="flex:2;">
+            <label class="input-label">Πρωτάθλημα</label>
+            <select id="auditLeague" class="quant-input">
+              <option value="MY_LEAGUES">⭐ MY LEAGUES</option>
+              <option value="ALL">🌐 Top 24 Leagues</option>
+              ${(typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA : []).map(l=>`<option value="${l.id}">${l.flag||''} ${l.name}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn btn-primary" id="auditRunBtn" onclick="runAudit()" style="height:38px;background:var(--accent-green);border-color:var(--accent-green);color:#000;">▶ Run Audit</button>
+        </div>
+        <div id="auditLoader" style="display:none;" class="progress-container">
+          <div class="progress-track"><div id="auditBar" class="progress-bar" style="background:var(--accent-green);"></div></div>
+          <div class="progress-text" id="auditStatus">Initializing Audit...</div>
+        </div>
+        <div id="auditResults"></div>
+      </div>
+    </div>`;
+
+    // Set default dates: last 14 days
+    const af = document.getElementById('auditFrom');
+    const at = document.getElementById('auditTo');
+    if(af && at) {
+      const d = new Date(); d.setDate(d.getDate()-14);
+      af.value = d.toISOString().split('T')[0];
+      const y = new Date(); y.setDate(y.getDate()-1);
+      at.value = y.toISOString().split('T')[0];
+    }
+  }
 });
+
+// =============================================
+// AUDIT ENGINE
+// =============================================
+
+let isAuditing = false;
+
+function setAuditProgress(pct, text) {
+  const bar = document.getElementById('auditBar');
+  const st  = document.getElementById('auditStatus');
+  if(bar) bar.style.width = Math.round(clamp(pct,0,100)) + '%';
+  if(st)  st.textContent  = text;
+}
+
+window.runAudit = async function() {
+  if(isAuditing) return;
+  const fromEl = document.getElementById('auditFrom');
+  const toEl   = document.getElementById('auditTo');
+  const lgEl   = document.getElementById('auditLeague');
+  if(!fromEl?.value || !toEl?.value) { showErr("Επιλέξτε εύρος ημερομηνιών για Audit."); return; }
+  if(new Date(toEl.value) < new Date(fromEl.value)) { showErr("Η ημ/νία 'Έως' πρέπει να είναι >= 'Από'."); return; }
+
+  isAuditing = true;
+  const auditRunBtn = document.getElementById('auditRunBtn');
+  if(auditRunBtn) auditRunBtn.disabled = true;
+  const auditLoader = document.getElementById('auditLoader');
+  if(auditLoader) auditLoader.style.display = 'block';
+  const auditResults = document.getElementById('auditResults');
+  if(auditResults) auditResults.innerHTML = '';
+
+  const selLg = lgEl?.value || 'MY_LEAGUES';
+  const dates  = getDatesInRange(fromEl.value, toEl.value);
+
+  try {
+    // Step 1: fetch finished fixtures
+    setAuditProgress(5, `Φόρτωση αγώνων (${dates.length} ημέρες)...`);
+    let allFixtures = [];
+    for(let i=0; i<dates.length; i++) {
+      setAuditProgress(5 + (i/dates.length)*30, `Fixtures: ${dates[i]}`);
+      const res = await apiReq(`fixtures?date=${dates[i]}&status=FT`);
+      const dm  = (res.response||[]).filter(m => {
+        if(!isFinished(m.fixture?.status?.short)) return false;
+        if(selLg==='ALL')        return typeof LEAGUE_IDS!=='undefined' && LEAGUE_IDS.includes(m.league.id);
+        if(selLg==='MY_LEAGUES') return typeof MY_LEAGUES_IDS!=='undefined' && MY_LEAGUES_IDS.includes(m.league.id);
+        return m.league.id === parseInt(selLg);
+      });
+      allFixtures.push(...dm);
+      if(allFixtures.length > 500) break;
+    }
+
+    if(!allFixtures.length) { showErr("Δεν βρέθηκαν ολοκληρωμένοι αγώνες για audit."); return; }
+    showOk(`Βρέθηκαν ${allFixtures.length} αγώνες. Τρέχει ανάλυση...`);
+
+    // Step 2: run model + compare with actual results
+    const auditRecords = [];
+    for(let i=0; i<allFixtures.length; i++) {
+      setAuditProgress(35 + (i/allFixtures.length)*60, `Ανάλυση ${i+1}/${allFixtures.length}`);
+      const m = allFixtures[i];
+      try {
+        const [hS, aS] = await Promise.all([
+          buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
+          buildIntel(m.teams.away.id, m.league.id, m.league.season, false)
+        ]);
+        const lp    = getLeagueParams(m.league.id);
+        const hXG   = Number(hS.fXG) * lp.mult;
+        const aXG   = Number(aS.fXG) * lp.mult;
+        const tXG   = hXG + aXG;
+        const btts  = Math.min(hXG, aXG);
+        const res   = computePick(hXG, aXG, tXG, btts, lp, hS, aS, {});
+
+        const aH    = m.goals?.home ?? 0;
+        const aA    = m.goals?.away ?? 0;
+        const aTot  = aH + aA;
+        const aBTTS = aH > 0 && aA > 0;
+        const aOver25 = aTot > 2;
+        const aOver35 = aTot > 3;
+        const aUnder25 = aTot < 3;
+        const aCorners = (m.statistics?.[0]?.statistics?.find(s=>s.type==='Corner Kicks')?.value??null);
+
+        const predOver25  = tXG >= lp.minXGO25 && res.pp.pO25 >= 0.52;
+        const predOver35  = tXG >= lp.minXGO35 && res.pp.pO35 >= 0.42;
+        const predUnder25 = tXG <= lp.maxU25   && res.pp.pU25 >= 0.55;
+        const predBTTS    = btts >= lp.minBTTS  && res.pp.pBTTS >= 0.48;
+        const predExact   = `${res.hG}-${res.aG}`;
+        const actualExact = `${aH}-${aA}`;
+
+        auditRecords.push({
+          lgId: m.league.id, lgName: m.league.name,
+          ht: m.teams.home.name, at: m.teams.away.name,
+          date: m.fixture.date?.split('T')[0] || '',
+          tXG, hXG, aXG, xgDiff: hXG-aXG,
+          predOver25, predOver35, predUnder25, predBTTS,
+          predExact, actualExact,
+          aOver25, aOver35, aUnder25, aBTTS, aTot,
+          aCorners: aCorners !== null ? Number(aCorners) : null,
+          omegaPick: res.omegaPick, pickScore: res.pickScore,
+          cornerConf: computeCornerConfidence(hS, aS, hXG, aXG)
+        });
+      } catch { /* skip */ }
+    }
+
+    setAuditProgress(98, 'Υπολογισμός στατιστικών...');
+    renderAuditResults(auditRecords, selLg);
+    setAuditProgress(100, 'Audit ολοκληρώθηκε.');
+  } catch(e) { showErr("Audit error: " + e.message); }
+  finally {
+    isAuditing = false;
+    if(auditRunBtn) auditRunBtn.disabled = false;
+    if(auditLoader) auditLoader.style.display = 'none';
+  }
+};
+
+function calcAuditStats(records, predKey, actualKey) {
+  let tp=0, fp=0, tn=0, fn=0;
+  records.forEach(r => {
+    const pred = r[predKey], act = r[actualKey];
+    if(pred && act)  tp++;
+    else if(pred && !act) fp++;
+    else if(!pred && !act) tn++;
+    else fn++;
+  });
+  const total   = tp+fp+tn+fn;
+  const correct = tp+tn;
+  const predicted = tp+fp;
+  const precision = predicted > 0 ? tp/predicted : 0;
+  const recall    = (tp+fn) > 0   ? tp/(tp+fn)   : 0;
+  const accuracy  = total > 0     ? correct/total : 0;
+  return { tp, fp, tn, fn, total, predicted, precision, recall, accuracy };
+}
+
+// Find optimal xG threshold for a market
+function findOptimalXgThreshold(records, predKey, actualKey) {
+  const thresholds = [];
+  for(let t=1.0; t<=4.5; t+=0.1) {
+    const filtered = records.filter(r => r.tXG >= t);
+    if(filtered.length < 5) continue;
+    const hits = filtered.filter(r => r[actualKey]).length;
+    const rate  = hits / filtered.length;
+    thresholds.push({ t: parseFloat(t.toFixed(1)), n: filtered.length, rate, hits });
+  }
+  return thresholds;
+}
+
+function renderAuditResults(records, selLg) {
+  const el = document.getElementById('auditResults');
+  if(!el || !records.length) return;
+
+  // ---- Global Stats ----
+  const o25  = calcAuditStats(records, 'predOver25',  'aOver25');
+  const o35  = calcAuditStats(records, 'predOver35',  'aOver35');
+  const u25  = calcAuditStats(records, 'predUnder25', 'aUnder25');
+  const btts = calcAuditStats(records, 'predBTTS',    'aBTTS');
+  const exactHits = records.filter(r=>r.predExact===r.actualExact).length;
+  const exactTotal = records.length;
+  const cornerRecs = records.filter(r=>r.aCorners!==null);
+  const cornerHits = cornerRecs.filter(r=>r.cornerConf>=65 && r.aCorners>8.5).length;
+
+  // ---- Per-League breakdown ----
+  const byLeague = {};
+  records.forEach(r => {
+    if(!byLeague[r.lgId]) byLeague[r.lgId] = { name: r.lgName, records: [] };
+    byLeague[r.lgId].records.push(r);
+  });
+
+  // ---- xG Threshold curves ----
+  const o25Curve  = findOptimalXgThreshold(records, 'predOver25',  'aOver25');
+  const o35Curve  = findOptimalXgThreshold(records, 'predOver35',  'aOver35');
+  const bttsCurve = findOptimalXgThreshold(records, 'predBTTS',    'aBTTS');
+
+  const bestO25  = o25Curve.reduce ((a,b)=>b.rate>a.rate?b:a, {rate:0, t:0, n:0});
+  const bestO35  = o35Curve.reduce ((a,b)=>b.rate>a.rate?b:a, {rate:0, t:0, n:0});
+  const bestBTTS = bttsCurve.reduce((a,b)=>b.rate>a.rate?b:a, {rate:0, t:0, n:0});
+
+  // ---- xG Diff analysis ----
+  const xgDiffBuckets = {};
+  records.forEach(r => {
+    const bucket = Math.floor(Math.abs(r.xgDiff)*10)/10;
+    const key = bucket.toFixed(1);
+    if(!xgDiffBuckets[key]) xgDiffBuckets[key] = { n:0, o25:0, o35:0, btts:0 };
+    xgDiffBuckets[key].n++;
+    if(r.aOver25) xgDiffBuckets[key].o25++;
+    if(r.aOver35) xgDiffBuckets[key].o35++;
+    if(r.aBTTS)   xgDiffBuckets[key].btts++;
+  });
+
+  const pct = v => `${(v*100).toFixed(1)}%`;
+  const bar = (v, max=1, color='var(--accent-green)') => {
+    const w = clamp((v/max)*100,0,100);
+    return `<div style="height:6px;background:var(--border-light);border-radius:3px;margin-top:3px;"><div style="height:6px;width:${w}%;background:${color};border-radius:3px;transition:width 0.4s;"></div></div>`;
+  };
+  const scoreColor = v => v>=0.65?'var(--accent-green)':v>=0.45?'var(--accent-gold)':'var(--accent-red)';
+
+  // ---- Build HTML ----
+  let html = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px;">
+    ${[
+      {label:'Over 2.5', prec:o25.precision, rec:o25.recall, acc:o25.accuracy, n:o25.predicted, hits:o25.tp},
+      {label:'Over 3.5', prec:o35.precision, rec:o35.recall, acc:o35.accuracy, n:o35.predicted, hits:o35.tp},
+      {label:'Under 2.5',prec:u25.precision, rec:u25.recall, acc:u25.accuracy, n:u25.predicted, hits:u25.tp},
+      {label:'BTTS',     prec:btts.precision,rec:btts.recall,acc:btts.accuracy,n:btts.predicted,hits:btts.tp},
+    ].map(s=>`
+      <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;">
+        <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">${s.label}</div>
+        <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:${scoreColor(s.prec)};">${pct(s.prec)}</div>
+        <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">Precision · ${s.hits}/${s.n} προβλέψεις</div>
+        ${bar(s.prec,1,scoreColor(s.prec))}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;font-size:0.65rem;">
+          <div><span style="color:var(--text-muted);">Recall</span> <span style="color:var(--accent-blue);font-family:var(--font-mono);">${pct(s.rec)}</span></div>
+          <div><span style="color:var(--text-muted);">Accuracy</span> <span style="color:var(--accent-blue);font-family:var(--font-mono);">${pct(s.acc)}</span></div>
+        </div>
+      </div>`).join('')}
+    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;">
+      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Ακριβές Σκορ</div>
+      <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-purple);">${exactHits}/${exactTotal}</div>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">Hit Rate: ${pct(exactHits/exactTotal||0)}</div>
+      ${bar(exactHits/exactTotal||0, 1, 'var(--accent-purple)')}
+    </div>
+    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;">
+      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Κόρνερ (>8.5)</div>
+      <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-teal);">${cornerRecs.length?pct(cornerHits/cornerRecs.length):'N/A'}</div>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">${cornerHits}/${cornerRecs.length} αγώνες με δεδομένα</div>
+      ${bar(cornerRecs.length?cornerHits/cornerRecs.length:0, 1, 'var(--accent-teal)')}
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+    ${[
+      {label:'Ιδανικό xG threshold για Over 2.5', best:bestO25,  color:'var(--accent-green)'},
+      {label:'Ιδανικό xG threshold για Over 3.5', best:bestO35,  color:'var(--accent-blue)'},
+      {label:'Ιδανικό xG threshold για BTTS',     best:bestBTTS, color:'var(--accent-gold)'},
+    ].map(t=>`
+      <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;">
+        <div style="font-size:0.65rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">${t.label}</div>
+        <div style="font-size:2rem;font-weight:900;font-family:var(--font-mono);color:${t.color};">xG ≥ ${t.best.t}</div>
+        <div style="font-size:0.7rem;color:var(--text-muted);">Hit rate: <span style="color:${t.color};font-weight:700;">${pct(t.best.rate||0)}</span> σε ${t.best.n||0} αγώνες</div>
+        <div style="margin-top:10px;">${buildMiniCurve(t.best.t, o25Curve, t.color)}</div>
+      </div>`).join('')}
+  </div>
+
+  <div style="margin-bottom:20px;">
+    <div style="font-size:0.75rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">📊 Hit Rates ανά |xG Diff| Bucket</div>
+    <div class="data-table-wrapper">
+      <table class="summary-table" style="font-size:0.72rem;">
+        <thead><tr>
+          <th>|xG Diff|</th><th>Αγώνες</th><th>O2.5 %</th><th>O3.5 %</th><th>BTTS %</th>
+        </tr></thead><tbody>
+        ${Object.entries(xgDiffBuckets).sort((a,b)=>parseFloat(a[0])-parseFloat(b[0])).map(([k,v])=>`
+          <tr>
+            <td class="data-num" style="color:var(--accent-blue);">${k}</td>
+            <td class="data-num">${v.n}</td>
+            <td class="data-num" style="color:${scoreColor(v.o25/v.n)};">${pct(v.o25/v.n)}</td>
+            <td class="data-num" style="color:${scoreColor(v.o35/v.n)};">${pct(v.o35/v.n)}</td>
+            <td class="data-num" style="color:${scoreColor(v.btts/v.n)};">${pct(v.btts/v.n)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="margin-bottom:20px;">
+    <div style="font-size:0.75rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">🏆 Ανάλυση ανά Πρωτάθλημα</div>
+    <div class="data-table-wrapper">
+      <table class="summary-table" style="font-size:0.72rem;">
+        <thead><tr>
+          <th class="left-align">Πρωτάθλημα</th><th>Αγώνες</th>
+          <th>O2.5<br>Prec</th><th>O3.5<br>Prec</th><th>BTTS<br>Prec</th><th>U2.5<br>Prec</th>
+          <th>Exact<br>Hits</th><th>Ιδαν.<br>xG O2.5</th>
+        </tr></thead><tbody>
+        ${Object.values(byLeague).sort((a,b)=>b.records.length-a.records.length).map(lg=>{
+          const lr = lg.records;
+          const lo25  = calcAuditStats(lr,'predOver25','aOver25');
+          const lo35  = calcAuditStats(lr,'predOver35','aOver35');
+          const lu25  = calcAuditStats(lr,'predUnder25','aUnder25');
+          const lbtts = calcAuditStats(lr,'predBTTS','aBTTS');
+          const lexact = lr.filter(r=>r.predExact===r.actualExact).length;
+          const curve = findOptimalXgThreshold(lr,'predOver25','aOver25');
+          const best  = curve.reduce((a,b)=>b.rate>a.rate?b:a,{rate:0,t:'-'});
+          return `<tr>
+            <td class="left-align" style="font-weight:700;color:var(--text-main);">${esc(lg.name)}</td>
+            <td class="data-num">${lr.length}</td>
+            <td class="data-num" style="color:${scoreColor(lo25.precision)};">${pct(lo25.precision)}</td>
+            <td class="data-num" style="color:${scoreColor(lo35.precision)};">${pct(lo35.precision)}</td>
+            <td class="data-num" style="color:${scoreColor(lbtts.precision)};">${pct(lbtts.precision)}</td>
+            <td class="data-num" style="color:${scoreColor(lu25.precision)};">${pct(lu25.precision)}</td>
+            <td class="data-num" style="color:var(--accent-purple);">${lexact}</td>
+            <td class="data-num" style="color:var(--accent-gold);">${best.t}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="font-size:0.65rem;color:var(--text-muted);text-align:center;padding:8px;border-top:1px solid var(--border-light);">
+    Audit βασισμένο σε ${records.length} ολοκληρωμένους αγώνες · Τελευταία ενημέρωση: ${new Date().toLocaleString('el-GR')}
+  </div>`;
+
+  el.innerHTML = html;
+}
+
+function buildMiniCurve(bestT, curve, color) {
+  if(!curve.length) return '';
+  const max = Math.max(...curve.map(c=>c.rate), 0.01);
+  const w = 100 / curve.length;
+  const bars = curve.map((c,i) => {
+    const h = Math.round((c.rate/max)*32);
+    const isB = Math.abs(c.t - bestT) < 0.05;
+    return `<div title="xG≥${c.t}: ${(c.rate*100).toFixed(1)}% (n=${c.n})" style="display:inline-block;width:${w}%;height:${h}px;background:${isB?color:'rgba(255,255,255,0.15)'};border-radius:2px 2px 0 0;vertical-align:bottom;"></div>`;
+  }).join('');
+  return `<div style="display:flex;align-items:flex-end;height:36px;gap:1px;background:var(--border-light);border-radius:4px;padding:2px;">${bars}</div>
+    <div style="display:flex;justify-content:space-between;font-size:0.55rem;color:var(--text-muted);margin-top:2px;"><span>${curve[0]?.t||1.0}</span><span>${curve[Math.floor(curve.length/2)]?.t||''}</span><span>${curve[curve.length-1]?.t||4.5}</span></div>`;
+}
