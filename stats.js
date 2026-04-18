@@ -1,8 +1,6 @@
 // stats.js - Στατιστική Ανάλυση, Μοντέλο Poisson & UI Engine (Με Accordion)
 
-// ================================================================
-//  GLOBAL APP VARIABLES & API SETUP
-// ================================================================
+// Global App Variables 
 const API_BASE = "https://v3.football.api-sports.io";
 let API_KEY = "956cbd05f9e9bf934df78d9b72d9a3a0";
 
@@ -36,9 +34,7 @@ const SETTINGS_MAP = {
 const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=4; const REQUEST_GAP_MS=350;
 let _errTimer=null, _okTimer=null;
 
-// ================================================================
-//  ΒΟΗΘΗΤΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ΚΑΙ UI HELPERS
-// ================================================================
+// --- Βοηθητικές ---
 const safeNum  = (x, d=0) => Number.isFinite(Number(x)) ? Number(x) : d;
 const clamp    = (n,mn,mx) => Math.max(mn, Math.min(mx, n));
 const statVal  = (arr,type) => parseFloat(String((arr.find(x=>x.type===type)||{}).value||0).replace('%',''))||0;
@@ -56,29 +52,27 @@ function getDatesInRange(s,e) {
   return d;
 }
 
+// --- UI Helpers ---
 window.togglePanel = function(panelId,arrowId) {
   const p=document.getElementById(panelId),a=document.getElementById(arrowId);
   if(p.style.display==='none'){p.style.display='block';if(a)a.innerText='▲';}
   else{p.style.display='none';if(a)a.innerText='▼';}
 };
 function setLoader(show,text='') { 
-  const l = document.getElementById('loader'); if(l) l.style.display=show?'block':'none'; 
-  const s = document.getElementById('status'); if(s) s.textContent=text; 
-  const b = document.getElementById('bar'); if(!show && b) b.style.width='0%'; 
+  document.getElementById('loader').style.display=show?'block':'none'; 
+  document.getElementById('status').textContent=text; 
+  if(!show) document.getElementById('bar').style.width='0%'; 
 }
 function setProgress(pct,text='') { 
-  const b = document.getElementById('bar'); if(b) b.style.width=Math.round(clamp(pct,0,100))+'%'; 
-  const s = document.getElementById('status'); if(s) s.textContent=text + (_apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : ''); 
+  document.getElementById('bar').style.width=Math.round(clamp(pct,0,100))+'%'; 
+  document.getElementById('status').textContent=text + (_apiActiveCount > 0 ? ` [${_apiActiveCount} active]` : ''); 
 }
-function setBtnsDisabled(d) { ["btnPre","leagueFilter"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
-function showErr(msg) { clearTimeout(_errTimer); const box=document.getElementById('errorBox'); if(box) box.innerHTML=`<div style="background:var(--accent-red); color:#fff; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(244,63,94,0.3);">⚠️ ${esc(msg)}</div>`; _errTimer=setTimeout(()=>box.innerHTML='',8000); }
-function showOk(msg) { clearTimeout(_okTimer); const box=document.getElementById('successBox'); if(box) box.innerHTML=`<div style="background:var(--accent-green); color:#000; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(16,185,129,0.3);">✓ ${esc(msg)}</div>`; _okTimer=setTimeout(()=>box.innerHTML='',4000); }
-function clearAlerts() { const e = document.getElementById('errorBox'), s = document.getElementById('successBox'); if(e) e.innerHTML=''; if(s) s.innerHTML=''; }
+function setBtnsDisabled(d) { ["btnPre","leagueFilter","auditLeague"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;}); }
+function showErr(msg) { clearTimeout(_errTimer); const box=document.getElementById('errorBox'); box.innerHTML=`<div style="background:var(--accent-red); color:#fff; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(244,63,94,0.3);">⚠️ ${esc(msg)}</div>`; _errTimer=setTimeout(()=>box.innerHTML='',8000); }
+function showOk(msg) { clearTimeout(_okTimer); const box=document.getElementById('successBox'); box.innerHTML=`<div style="background:var(--accent-green); color:#000; padding:12px; border-radius:var(--radius-sm); margin-bottom:15px; font-weight:600; box-shadow:0 4px 12px rgba(16,185,129,0.3);">✓ ${esc(msg)}</div>`; _okTimer=setTimeout(()=>box.innerHTML='',4000); }
+function clearAlerts() { document.getElementById('errorBox').innerHTML=''; document.getElementById('successBox').innerHTML=''; }
 function abortScan(msg) { if(msg)showErr(msg); isRunning=false; setBtnsDisabled(false); setLoader(false); }
 
-// ================================================================
-//  POISSON ENGINE
-// ================================================================
 function poissonProb(lambda, k) {
   if(lambda <= 0) return k === 0 ? 1 : 0;
   let logP = -lambda + k * Math.log(lambda);
@@ -124,9 +118,7 @@ function normalCDF(z) {
   return z >= 0 ? p : 1 - p;
 }
 
-// ================================================================
-//  API QUEUE
-// ================================================================
+// --- API Queue ---
 async function apiReq(path) {
   return new Promise(resolve=>{ _apiQueue.push({path,resolve}); _drainQueue(); });
 }
@@ -169,13 +161,12 @@ window.initCredits = async function() {
 async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
 async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
 async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return standCache.get(k);const d=await apiReq(`standings?league=${lg}&season=${s}`);const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];standCache.set(k,f);return f;}
+async function getHeadToHead(t1,t2,lg,s){const k=`${t1}_${t2}_${lg||'a'}_${s||'a'}`;if(h2hCache.has(k))return h2hCache.get(k);let path=`fixtures/headtohead?h2h=${t1}-${t2}`;if(lg&&s)path+=`&league=${lg}&season=${s}`;const d=await apiReq(path);h2hCache.set(k,d?.response||[]);return d?.response||[];}
 const getTeamRank =(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
-// ================================================================
-//  STATISTICS & xG MODELS
-// ================================================================
+// --- xG & Corners ---
 async function batchCalc(list, tId) {
-  if (!list || !list.length) return { xg: '0.00', xga: '0.00', cor: '4.5', crd: '2.0', corRatio: '3.5' };
+  if (!list || !list.length) return { xg: '1.10', xga: '1.10', cor: '4.5', crd: '2.0', corRatio: '3.5' };
   let totalXG = 0, totalXGA = 0, n = 0;
   for (const f of list) {
     const myGoals = getTeamGoals(f, tId);
@@ -222,12 +213,25 @@ async function buildIntel(tId,lg,s,isHome) {
       fXG: final_fXG, fXGA: final_fXGA, sXG: final_sXG, formRating,
       corRatio: safeNum(fData.corRatio, 3.5),
       cor: safeNum(fData.cor, 4.5), crd: safeNum(fData.crd, 2.0),
-      uiXG: fData.xg, uiXGA: fData.xga, uiSXG: sData.xg, uiSXGA: sData.xga, // Εδώ τα στέλνουμε στο UI
+      uiXG: fData.xg, uiXGA: fData.xga, uiSXG: sData.xg, uiSXGA: sData.xga,
       history
     };
   } catch {
     return {fXG:1.35,fXGA:1.35,sXG:1.35,formRating:50,corRatio:3.5,cor:4.5,crd:2.0, uiXG:'1.35', uiXGA:'1.35', uiSXG:'1.35', uiSXGA:'1.35', history:[]};
   }
+}
+
+function summarizeH2H(fixtures, homeId, awayId) {
+  let hw=0, aw=0, dr=0, hGoals=0, aGoals=0;
+  for (const f of (fixtures || []).slice(0, 8)) {
+    const hg = f?.goals?.home ?? 0, ag = f?.goals?.away ?? 0;
+    const myG = f?.teams?.home?.id === homeId ? hg : ag;
+    const opG = f?.teams?.home?.id === awayId ? hg : ag;
+    hGoals += myG; aGoals += opG;
+    if (myG > opG) hw++; else if (opG > myG) aw++; else dr++;
+  }
+  const total = hw + aw + dr || 1;
+  return { homeWins: hw, awayWins: aw, draws: dr, h2hAvgGoals: parseFloat(((hGoals + aGoals) / total).toFixed(2)) };
 }
 
 function getLeagueParams(leagueId) {
@@ -255,23 +259,29 @@ function computeCornerConfidence(hS, aS, hXG, aXG) {
   const expectedHomeCorners = hXG * safeNum(hS.corRatio, 3.5);
   const expectedAwayCorners = aXG * safeNum(aS.corRatio, 3.5);
   let expCor = expectedHomeCorners + expectedAwayCorners;
+
   const xgDiff = Math.abs(hXG - aXG);
   const dominanceBonus = xgDiff > 0.8 ? clamp((xgDiff - 0.8) * 1.5, 0, 2.0) : 0;
   expCor += dominanceBonus;
+
   const mean = expCor;
   const stdv = Math.sqrt(mean) * 0.85; 
   const z = (8.5 - mean) / stdv; 
   const pAbove = 1 - normalCDF(z);
+  
   let score = pAbove * 100;
+  
   const baseCor = safeNum(hS.cor, 4.5) + safeNum(aS.cor, 4.5);
-  if (baseCor < engineConfig.minCorners) score -= (engineConfig.minCorners - baseCor) * 8;
+  if (baseCor < engineConfig.minCorners) {
+    score -= (engineConfig.minCorners - baseCor) * 8;
+  }
+  
   return clamp(score, 0, 99);
 }
 
-function computePick(hXG, aXG, tXG, btts, lp, hS, aS) {
+function computePick(hXG, aXG, tXG, btts, lp, hS, aS, h2h) {
   const hLambda = clamp(hXG * lp.mult, 0.15, 4.0);
   const aLambda = clamp(aXG * lp.mult, 0.15, 4.0);
-
   const pp = getPoissonProbabilities(hLambda, aLambda);
   const xgDiff = hXG - aXG;
   
@@ -318,24 +328,23 @@ function computePick(hXG, aXG, tXG, btts, lp, hS, aS) {
   return { omegaPick, reason, pickScore, outPick, hG, aG, hExp:hLambda, aExp:aLambda, exactConf, xgDiff, pp };
 }
 
-// ================================================================
-//  SCANNER
-// ================================================================
 async function analyzeMatchSafe(m, index, total) {
   try {
     setProgress(10+((index+1)/total)*88, `Processing ${index+1}/${total}: ${m.teams.home.name}`);
 
-    const [hS,aS,stand] = await Promise.all([
+    const [hS,aS,stand,h2hFix] = await Promise.all([
       buildIntel(m.teams.home.id,m.league.id,m.league.season,true),
       buildIntel(m.teams.away.id,m.league.id,m.league.season,false),
-      getStand(m.league.id,m.league.season)
+      getStand(m.league.id,m.league.season),
+      getHeadToHead(m.teams.home.id, m.teams.away.id, m.league.id, m.league.season)
     ]);
 
     const lp=getLeagueParams(m.league.id);
     const hXG=Number(hS.fXG)*lp.mult, aXG=Number(aS.fXG)*lp.mult;
     const tXG=hXG+aXG, bttsScore=Math.min(hXG,aXG);
+    const h2h = summarizeH2H(h2hFix, m.teams.home.id, m.teams.away.id);
 
-    const result=computePick(hXG,aXG,tXG,bttsScore, lp, hS, aS);
+    const result=computePick(hXG,aXG,tXG,bttsScore, lp, hS, aS, h2h);
 
     const rec={
       m, fixId:m.fixture.id, ht:m.teams.home.name, at:m.teams.away.name,
@@ -345,7 +354,7 @@ async function analyzeMatchSafe(m, index, total) {
       omegaPick:result.omegaPick, strength:result.pickScore, reason:result.reason,
       hExp:result.hExp, aExp:result.aExp, pp:result.pp,
       hr:getTeamRank(stand,m.teams.home.id)??99, ar:getTeamRank(stand,m.teams.away.id)??99,
-      isBomb:false, hS, aS
+      isBomb:false, hS, aS, h2h
     };
     window.scannedMatchesData.push(rec);
   } catch(err) {
@@ -392,15 +401,13 @@ window.runScan = async function() {
 
     for(let i=0;i<all.length;i++) await analyzeMatchSafe(all[i],i,all.length);
 
-    rebuildTopLists(); renderTopSections(); renderSummaryTable();
+    rebuildTopLists(); renderTopSections(); renderSummaryTable(); renderMatchesFeed();
     showOk(`Scan ολοκληρώθηκε. ${all.length} αγώνες αναλύθηκαν.`);
   } catch(e){ showErr(e.message); }
   finally { isRunning=false; setLoader(false); setBtnsDisabled(false); }
 }
 
-// ================================================================
-//  ACCORDION ΚΑΙ UI RENDERING
-// ================================================================
+// --- Accordion Logic & Rendering ---
 window.toggleMatchDetails = function(id) {
   const details = document.getElementById('details-' + id);
   if(details) { details.style.display = details.style.display === 'none' ? 'block' : 'none'; }
@@ -491,6 +498,7 @@ function getMatchCardHTML(d) {
           <div class="stat-row"><span class="stat-lbl">Form xG</span><span class="stat-val">${d.hS?.uiXG||'0.00'} <span style="color:var(--text-muted)">vs</span> ${d.aS?.uiXG||'0.00'}</span></div>
           <div class="stat-row"><span class="stat-lbl">Split xG</span><span class="stat-val">${d.hS?.uiSXG||'0.00'} <span style="color:var(--text-muted)">vs</span> ${d.aS?.uiSXG||'0.00'}</span></div>
           <div class="stat-row"><span class="stat-lbl">Exp. Cards</span><span class="stat-val">${Number(d.hS?.crd||0).toFixed(1)} <span style="color:var(--text-muted)">vs</span> ${Number(d.aS?.crd||0).toFixed(1)}</span></div>
+          <div class="stat-row" style="border-top:1px solid var(--border-light);margin-top:6px;padding-top:6px;"><span class="stat-lbl" style="color:var(--text-muted)">H2H (Last 8)</span><span class="stat-val" style="font-size:0.65rem">${d.h2h?`${d.h2h.homeWins}W - ${d.h2h.draws}D - ${d.h2h.awayWins}W`:'N/A'}</span></div>
         </div>
       </div>
       <div class="stat-box" style="margin-top:12px;">
@@ -499,6 +507,14 @@ function getMatchCardHTML(d) {
       </div>
     </div>
   </div>`;
+}
+
+function renderMatchesFeed() {
+  const feed = document.getElementById('matchesFeed');
+  if (!feed) return;
+  const sd = window.scannedMatchesData || [];
+  if (!sd.length) { feed.innerHTML = ''; return; }
+  feed.innerHTML = sd.map(d => getMatchCardHTML(d)).join('');
 }
 
 function rebuildTopLists() {
@@ -661,10 +677,77 @@ function buildLeagueModTable() {
 
 window.saveLeagueMods = function() { showOk("League Mods saved."); }
 
-// ================================================================
-//  ΑΡΧΙΚΟΠΟΙΗΣΗ - ΕΛΕΓΧΟΣ PIN
-// ================================================================
+window.resimulateMatches = function() {
+  if (!window.scannedMatchesData || !window.scannedMatchesData.length) {
+    showErr("Δεν υπάρχουν δεδομένα για επανάληψη. Τρέξτε πρώτα το Model Scan.");
+    return;
+  }
+  // Re-apply computePick with updated engineConfig to existing data
+  window.scannedMatchesData = window.scannedMatchesData.map(rec => {
+    try {
+      const lp = getLeagueParams(rec.leagueId);
+      const hXG = Number(rec.hS?.fXG || 1.1) * lp.mult;
+      const aXG = Number(rec.aS?.fXG || 1.1) * lp.mult;
+      const tXG = hXG + aXG;
+      const btts = Math.min(hXG, aXG);
+      const result = computePick(hXG, aXG, tXG, btts, lp, rec.hS || {}, rec.aS || {}, rec.h2h);
+      return {
+        ...rec, tXG, btts: btts, outPick: result.outPick, xgDiff: result.xgDiff,
+        exact: `${result.hG}-${result.aG}`, exactConf: result.exactConf,
+        omegaPick: result.omegaPick, strength: result.pickScore, reason: result.reason,
+        hExp: result.hExp, aExp: result.aExp, pp: result.pp
+      };
+    } catch { return rec; }
+  });
+  rebuildTopLists(); renderTopSections(); renderSummaryTable(); renderMatchesFeed();
+  showOk("Re-simulation complete με τις νέες παραμέτρους.");
+};
+
+window.openBankroll = function() {
+  try { const b = JSON.parse(localStorage.getItem(LS_BANKROLL)); if (b) bankrollData = b; } catch {}
+  const modal = document.getElementById('bankrollModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    const inp = document.getElementById('bankrollInput');
+    if (inp && bankrollData.current) inp.value = bankrollData.current;
+    renderBankrollHistory();
+  }
+};
+
+window.closeBankroll = function() {
+  const modal = document.getElementById('bankrollModal');
+  if (modal) modal.style.display = 'none';
+};
+
+window.saveBankroll = function() {
+  const inp = document.getElementById('bankrollInput');
+  const val = parseFloat(inp?.value);
+  if (!val || val <= 0) { showErr("Εισάγετε έγκυρο ποσό."); return; }
+  bankrollData.history = bankrollData.history || [];
+  bankrollData.history.unshift({ amount: val, date: todayISO() });
+  if (bankrollData.history.length > 10) bankrollData.history.pop();
+  bankrollData.current = val;
+  try { localStorage.setItem(LS_BANKROLL, JSON.stringify(bankrollData)); } catch {}
+  const disp = document.getElementById('bankrollDisplay');
+  if (disp) disp.textContent = `€${val.toFixed(2)}`;
+  renderBankrollHistory();
+  showOk(`Bankroll ορίστηκε σε €${val.toFixed(2)}`);
+};
+
+function renderBankrollHistory() {
+  const el = document.getElementById('bankrollHistory');
+  if (!el || !bankrollData.history?.length) return;
+  el.innerHTML = `<div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Ιστορικό</div>` +
+    bankrollData.history.map(h => `<div style="display:flex;justify-content:space-between;font-size:0.75rem;padding:4px 0;border-bottom:1px solid var(--border-light);"><span style="color:var(--text-muted)">${h.date}</span><span style="color:var(--accent-gold);font-family:var(--font-mono)">€${Number(h.amount).toFixed(2)}</span></div>`).join('');
+}
+
 window.addEventListener('DOMContentLoaded', () => {
+  // Load saved bankroll
+  try {
+    const b = JSON.parse(localStorage.getItem(LS_BANKROLL));
+    if (b) { bankrollData = b; const disp = document.getElementById('bankrollDisplay'); if (disp && bankrollData.current) disp.textContent = `€${Number(bankrollData.current).toFixed(2)}`; }
+  } catch {}
+
   const pinInput = document.getElementById('pin');
   if (pinInput) {
     pinInput.addEventListener('input', function() {
