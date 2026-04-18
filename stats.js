@@ -1,38 +1,5 @@
 // stats.js - Στατιστική Ανάλυση, Μοντέλο Poisson & UI Engine
 
-const API_BASE = "https://v3.football.api-sports.io";
-let API_KEY = "956cbd05f9e9bf934df78d9b72d9a3a0";
-
-const LS_PREDS = "omega_preds_v5.0";
-const LS_SETTINGS = "omega_settings_v5.0";
-const LS_LGMODS = "omega_lgmods_v5.0";
-const LS_BANKROLL = "omega_bankroll_v5.0";
-
-let teamStatsCache = new Map(), lastFixCache = new Map(), standCache = new Map(), h2hCache = new Map();
-let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], combo2:[], outcomes:[], over25:[], over35:[], under25:[] };
-window.scannedMatchesData = [];
-let bankrollData = { current: 0, history: [] };
-
-const DEFAULT_SETTINGS = {
-  wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
-  tXG_O25:2.70, tXG_O35:3.25, tXG_U25:1.80, tBTTS_U25:0.65,
-  xG_Diff:0.55, tBTTS:1.10, modTrap:0.90, modTight:0.95, modGold:1.15,
-  minCorners: 10.5, minCards: 5.8
-};
-let engineConfig = {...DEFAULT_SETTINGS};
-let leagueMods = {};
-
-const SETTINGS_MAP = {
-  cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
-  cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
-  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS', cfg_minCorners:'minCorners', cfg_minCards:'minCards',
-  cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold'
-};
-
-const _apiQueue=[]; let _apiActiveCount=0; const MAX_CONCURRENT=8; const REQUEST_GAP_MS=260;
-let _errTimer=null, _okTimer=null;
-
 // --- Βοηθητικές Μαθηματικές Συναρτήσεις ---
 const safeNum  = (x, d=0) => Number.isFinite(Number(x)) ? Number(x) : d;
 const clamp    = (n,mn,mx) => Math.max(mn, Math.min(mx, n));
@@ -141,7 +108,11 @@ async function _executeRequest(path,resolve) {
   await new Promise(r=>setTimeout(r,Math.random()*100));
   try {
     const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY}});
-    if(typeof currentCredits==='number'){currentCredits--; document.getElementById('creditDisplay').textContent=currentCredits;}
+    if(typeof currentCredits==='number'){
+      currentCredits--; 
+      const el = document.getElementById('creditDisplay');
+      if(el) el.textContent = currentCredits;
+    }
     resolve(r.ok ? await r.json() : {response:[]});
   } catch { resolve({response:[]}); }
   finally { await new Promise(r=>setTimeout(r,REQUEST_GAP_MS)); _apiActiveCount--; _drainQueue(); }
@@ -152,7 +123,8 @@ async function initCredits() {
     const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});
     const d=await r.json();
     currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);
-    document.getElementById('creditDisplay').textContent=currentCredits;
+    const el = document.getElementById('creditDisplay');
+    if(el) el.textContent = currentCredits;
   } catch {}
 }
 
@@ -162,7 +134,7 @@ async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return s
 const getTeamRank =(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ----------------------------------------------------------------
-//  Corners per xG Stating Engine (Αντί για απλό batchCalc)
+//  Corners per xG Stating Engine
 // ----------------------------------------------------------------
 async function batchCalc(list, tId) {
   if (!list.length) return { xg: '0.00', xga: '0.00', cor: '4.5', crd: '2.0', corRatio: '3.5' };
@@ -185,7 +157,6 @@ async function batchCalc(list, tId) {
   
   const avgXG = n > 0 ? x / n : 0;
   const avgCor = n > 0 ? c / n : 0;
-  // Υπολογισμός δείκτη: Κόρνερ ανά 1.00 xG (με όριο ασφαλείας το 0.50)
   const corRatio = avgXG > 0 ? avgCor / Math.max(avgXG, 0.5) : 3.5;
 
   return {
@@ -241,10 +212,16 @@ async function buildIntel(tId,lg,s,isHome) {
 function getLeagueParams(leagueId) {
   const lm = leagueMods[leagueId] || {};
   let defaultXgDiff = engineConfig.xG_Diff;
-  if (TIGHT_LEAGUES.has(leagueId)) defaultXgDiff = 0.35;
-  else if (GOLD_LEAGUES.has(leagueId)) defaultXgDiff = 0.65;
+  if (typeof TIGHT_LEAGUES !== 'undefined' && TIGHT_LEAGUES.has(leagueId)) defaultXgDiff = 0.35;
+  else if (typeof GOLD_LEAGUES !== 'undefined' && GOLD_LEAGUES.has(leagueId)) defaultXgDiff = 0.65;
+  
+  let defaultMult = 1.00;
+  if (typeof GOLD_LEAGUES !== 'undefined' && GOLD_LEAGUES.has(leagueId)) defaultMult = engineConfig.modGold;
+  else if (typeof TRAP_LEAGUES !== 'undefined' && TRAP_LEAGUES.has(leagueId)) defaultMult = engineConfig.modTrap;
+  else if (typeof TIGHT_LEAGUES !== 'undefined' && TIGHT_LEAGUES.has(leagueId)) defaultMult = engineConfig.modTight;
+
   return {
-    mult:     lm.mult     !== undefined ? lm.mult     : (GOLD_LEAGUES.has(leagueId) ? engineConfig.modGold : TRAP_LEAGUES.has(leagueId) ? engineConfig.modTrap : TIGHT_LEAGUES.has(leagueId) ? engineConfig.modTight : 1.00),
+    mult:     lm.mult     !== undefined ? lm.mult     : defaultMult,
     minXGO25: lm.minXGO25 !== undefined ? lm.minXGO25 : engineConfig.tXG_O25,
     minXGO35: lm.minXGO35 !== undefined ? lm.minXGO35 : engineConfig.tXG_O35,
     maxU25:   lm.maxU25   !== undefined ? lm.maxU25   : engineConfig.tXG_U25,
@@ -254,7 +231,6 @@ function getLeagueParams(leagueId) {
 }
 
 function computeCornerConfidence(hS, aS, hXG, aXG) {
-  // Υπολογισμός αναμενόμενων κόρνερ βάσει του προσδοκώμενου xG και του Corner Efficiency (corRatio)
   const expectedHomeCorners = hXG * safeNum(hS.corRatio, 3.5);
   const expectedAwayCorners = aXG * safeNum(aS.corRatio, 3.5);
   let expCor = expectedHomeCorners + expectedAwayCorners;
@@ -278,7 +254,7 @@ function computeCornerConfidence(hS, aS, hXG, aXG) {
   return clamp(score, 0, 99);
 }
 
-function computePick(hXG, aXG, tXG, btts, cor, totCards, lp, hS, aS) {
+function computePick(hXG, aXG, tXG, btts, lp, hS, aS) {
   const hLambda = clamp(hXG * lp.mult, 0.15, 4.0);
   const aLambda = clamp(aXG * lp.mult, 0.15, 4.0);
 
@@ -291,8 +267,8 @@ function computePick(hXG, aXG, tXG, btts, cor, totCards, lp, hS, aS) {
 
   let omegaPick="NO BET", reason="Insufficient statistical edge.", pickScore=0;
 
-  // Η Νέα Στάθμιση για τα Κόρνερ
   const cornerConf = computeCornerConfidence(hS, aS, hXG, aXG);
+  const totCards = safeNum(hS.crd, 2.0) + safeNum(aS.crd, 2.0);
 
   if (pp.pO35 >= 0.42 && tXG >= lp.minXGO35 && btts >= 1.20) {
     omegaPick = "🚀 OVER 3.5 GOALS";
@@ -355,7 +331,7 @@ async function analyzeMatchSafe(m, index, total) {
     const tXG=hXG+aXG, bttsScore=Math.min(hXG,aXG);
     const cor=Number(hS.cor)+Number(aS.cor), totCards=Number(hS.crd)+Number(aS.crd);
 
-    const result=computePick(hXG,aXG,tXG,bttsScore,cor,totCards,lp,hS,aS);
+    const result=computePick(hXG,aXG,tXG,bttsScore, lp, hS, aS);
 
     const rec={
       m, fixId:m.fixture.id, ht:m.teams.home.name, at:m.teams.away.name,
@@ -384,8 +360,8 @@ async function fetchFixturesForDates(dates,selLg) {
     const res=await apiReq(`fixtures?date=${dates[i]}`);
     const dm=(res.response||[]).filter(m=>{
       if(selLg==='WORLD') return true;
-      if(selLg==='ALL')   return LEAGUE_IDS.includes(m.league.id);
-      if(selLg==='MY_LEAGUES') return MY_LEAGUES_IDS.includes(m.league.id);
+      if(selLg==='ALL')   return typeof LEAGUE_IDS !== 'undefined' && LEAGUE_IDS.includes(m.league.id);
+      if(selLg==='MY_LEAGUES') return typeof MY_LEAGUES_IDS !== 'undefined' && MY_LEAGUES_IDS.includes(m.league.id);
       return m.league.id===parseInt(selLg);
     });
     all.push(...dm); if(all.length>350) break;
@@ -401,7 +377,7 @@ window.runScan = async function() {
 
   isRunning=true; clearAlerts(); setBtnsDisabled(true);
   setLoader(true,'Initializing Deep Quant...');
-  ['topSection','summarySection','wallbetSection','matchesFeed','advisorSection'].forEach(id=>document.getElementById(id).innerHTML='');
+  ['topSection','summarySection'].forEach(id=>{ const el = document.getElementById(id); if(el) el.innerHTML=''; });
   window.scannedMatchesData=[]; teamStatsCache.clear(); lastFixCache.clear(); standCache.clear(); h2hCache.clear();
 
   try {
@@ -465,7 +441,8 @@ function renderTopSections() {
     html+=`</div></div>`;
   });
   html+=`</div>`;
-  document.getElementById('topSection').innerHTML=html;
+  const topSec = document.getElementById('topSection');
+  if(topSec) topSec.innerHTML=html;
 }
 
 function renderSummaryTable() {
@@ -526,7 +503,7 @@ function renderSummaryTable() {
   sec.innerHTML = matchRows;
 }
 
-function loadSettings() {
+window.loadSettings = function() {
   try { const s=JSON.parse(localStorage.getItem(LS_SETTINGS)); if(s) engineConfig={...DEFAULT_SETTINGS,...s}; } catch {}
   try { const lm=JSON.parse(localStorage.getItem(LS_LGMODS)); if(lm) leagueMods={ ...leagueMods, ...lm }; } catch {}
   for(const [id,key] of Object.entries(SETTINGS_MAP)) { const el=document.getElementById(id); if(el) el.value=engineConfig[key]; }
@@ -543,10 +520,11 @@ window.resetSettings = function() { engineConfig={...DEFAULT_SETTINGS}; for(cons
 
 function buildLeagueModTable() {
   const tbody = document.getElementById('leagueModBody'); if(!tbody) return; tbody.innerHTML='';
+  if (typeof LEAGUES_DATA === 'undefined') return;
   LEAGUES_DATA.forEach(l => {
     let placeholderDiff = engineConfig.xG_Diff.toFixed(2);
-    if(TIGHT_LEAGUES.has(l.id)) placeholderDiff = "0.35";
-    else if(GOLD_LEAGUES.has(l.id)) placeholderDiff = "0.65";
+    if(typeof TIGHT_LEAGUES !== 'undefined' && TIGHT_LEAGUES.has(l.id)) placeholderDiff = "0.35";
+    else if(typeof GOLD_LEAGUES !== 'undefined' && GOLD_LEAGUES.has(l.id)) placeholderDiff = "0.65";
     tbody.innerHTML += `<tr><td class="left-align" style="font-weight:700;color:var(--text-main);font-size:0.8rem">${l.name}</td><td><input type="number" step="0.01" placeholder="${engineConfig.modGold.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_O25.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_O35.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tXG_U25.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${engineConfig.tBTTS.toFixed(2)}" class="league-mod-input"></td><td><input type="number" step="0.05" placeholder="${placeholderDiff}" class="league-mod-input"></td><td>—</td></tr>`;
   });
 }
@@ -554,8 +532,26 @@ function buildLeagueModTable() {
 window.saveLeagueMods = function() { showOk("League Mods saved."); }
 
 window.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('scanStart').value = todayISO();
-  document.getElementById('scanEnd').value   = todayISO();
+  const pinInput = document.getElementById('pin');
+  if (pinInput) {
+    pinInput.addEventListener('input', function() {
+      if(this.value === "106014") {
+        document.getElementById('auth').style.display = 'none';
+        document.getElementById('app').style.display  = 'block';
+        if(typeof loadSettings === 'function') loadSettings();
+        if(typeof loadBankroll === 'function') loadBankroll();
+        if(typeof initCredits === 'function') initCredits();
+      }
+    });
+  }
+  
+  const scanStart = document.getElementById('scanStart');
+  const scanEnd = document.getElementById('scanEnd');
+  if(scanStart) scanStart.value = todayISO();
+  if(scanEnd) scanEnd.value = todayISO();
+  
   const sel=document.getElementById('leagueFilter');
-  if(sel) LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`);
+  if(sel && typeof LEAGUES_DATA !== 'undefined') {
+    LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`);
+  }
 });
