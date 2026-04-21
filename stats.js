@@ -1069,21 +1069,7 @@ window.runAudit = async function() {
         const aOver25 = aTot > 2;
         const aOver35 = aTot > 3;
         const aUnder25 = aTot < 3;
-
-        // ── Fetch actual corner data from fixture statistics ──
-        let aCorners = null;
-        try {
-          const fixSt = await getFixStats(m.fixture.id);
-          if(fixSt && fixSt.length >= 2) {
-            const hTeamId = m.teams.home.id;
-            const aTeamId = m.teams.away.id;
-            const hCor = extractFixStatFor(fixSt, hTeamId, 'Corner Kicks');
-            const aCor = extractFixStatFor(fixSt, aTeamId, 'Corner Kicks');
-            if(hCor !== null && aCor !== null) aCorners = hCor + aCor;
-            else if(hCor !== null) aCorners = hCor;
-            else if(aCor !== null) aCorners = aCor;
-          }
-        } catch { /* no corner data */ }
+        const aCorners = (m.statistics?.[0]?.statistics?.find(s=>s.type==='Corner Kicks')?.value??null);
 
         const predOver25  = tXG >= lp.minXGO25 && res.pp.pO25 >= 0.52;
         const predOver35  = tXG >= lp.minXGO35 && res.pp.pO35 >= 0.42;
@@ -1091,10 +1077,6 @@ window.runAudit = async function() {
         const predBTTS    = btts >= lp.minBTTS  && res.pp.pBTTS >= 0.48;
         const predExact   = `${res.hG}-${res.aG}`;
         const actualExact = `${aH}-${aA}`;
-
-        const cornerConf  = computeCornerConfidence(hS, aS, hXG, aXG);
-        // predCorners: signal fired if cornerConf >= minCorners threshold
-        const predCorners = cornerConf >= engineConfig.minCorners * 100 / 10.5;
 
         auditRecords.push({
           lgId: m.league.id, lgName: m.league.name,
@@ -1105,11 +1087,8 @@ window.runAudit = async function() {
           predExact, actualExact,
           aOver25, aOver35, aUnder25, aBTTS, aTot,
           aCorners: aCorners !== null ? Number(aCorners) : null,
-          aOver85Cor: aCorners !== null ? aCorners > 8.5 : null,
           omegaPick: res.omegaPick, pickScore: res.pickScore,
-          cornerConf,
-          predCorners,
-          expCorners: hS._expCorners ?? null,
+          cornerConf: computeCornerConfidence(hS, aS, hXG, aXG),
           _hS: hS, _aS: aS  // store for re-evaluation
         });
       } catch { /* skip */ }
@@ -1167,7 +1146,6 @@ function recomputeAuditRecords(records) {
       const tXG   = hXG + aXG;
       const btts  = Math.min(hXG, aXG);
       const res   = computePick(hXG, aXG, tXG, btts, lp, r._hS, r._aS, {});
-      const cornerConf = computeCornerConfidence(r._hS, r._aS, hXG, aXG);
       return {
         ...r, tXG, hXG, aXG, xgDiff: hXG - aXG,
         predOver25:  tXG >= lp.minXGO25 && res.pp.pO25  >= 0.52,
@@ -1176,9 +1154,7 @@ function recomputeAuditRecords(records) {
         predBTTS:    btts >= lp.minBTTS && res.pp.pBTTS >= 0.48,
         predExact:   `${res.hG}-${res.aG}`,
         omegaPick:   res.omegaPick, pickScore: res.pickScore,
-        cornerConf,
-        predCorners: cornerConf >= engineConfig.minCorners * 100 / 10.5,
-        expCorners:  r._hS?._expCorners ?? r.expCorners ?? null
+        cornerConf:  computeCornerConfidence(r._hS, r._aS, hXG, aXG)
       };
     } catch { return r; }
   });
@@ -1192,14 +1168,12 @@ window.applyAuditSuggestions = function() {
   const newBTTS = readF('sug_tBTTS');
   const newU25  = readF('sug_tXG_U25');
   const newDiff = readF('sug_xG_Diff');
-  const newMinCorners = readF('sug_minCorners');
 
   if(newO25  !== null && !isNaN(newO25))  { engineConfig.tXG_O25 = newO25;  const el=document.getElementById('cfg_tXG_O25');  if(el) el.value=newO25; }
   if(newO35  !== null && !isNaN(newO35))  { engineConfig.tXG_O35 = newO35;  const el=document.getElementById('cfg_tXG_O35');  if(el) el.value=newO35; }
   if(newBTTS !== null && !isNaN(newBTTS)) { engineConfig.tBTTS   = newBTTS; const el=document.getElementById('cfg_tBTTS');    if(el) el.value=newBTTS; }
   if(newU25  !== null && !isNaN(newU25))  { engineConfig.tXG_U25 = newU25;  const el=document.getElementById('cfg_tXG_U25');  if(el) el.value=newU25; }
   if(newDiff !== null && !isNaN(newDiff)) { engineConfig.xG_Diff = newDiff; const el=document.getElementById('cfg_xG_Diff'); if(el) el.value=newDiff; }
-  if(newMinCorners !== null && !isNaN(newMinCorners)) { engineConfig.minCorners = newMinCorners; const el=document.getElementById('cfg_minCorners'); if(el) el.value=newMinCorners; }
 
   // Apply per-league mod suggestions
   if(typeof LEAGUES_DATA !== 'undefined') {
@@ -1243,33 +1217,8 @@ function renderAuditResults(records, selLg, isInitial=true) {
   const btts = calcAuditStats(records, 'predBTTS',    'aBTTS');
   const exactHits = records.filter(r=>r.predExact===r.actualExact).length;
   const exactTotal = records.length;
-
-  // ---- Corner stats: only records where we have actual corner data ----
-  const cornerRecs = records.filter(r => r.aCorners !== null && r.aOver85Cor !== null);
-  const cornerPredRecs = cornerRecs.filter(r => r.predCorners);
-  const cornerHits = cornerPredRecs.filter(r => r.aOver85Cor).length;
-  const cornerPrec = cornerPredRecs.length > 0 ? cornerHits / cornerPredRecs.length : 0;
-  // Recall: of all games that actually had >8.5 corners, how many did we predict?
-  const actualOver85 = cornerRecs.filter(r => r.aOver85Cor).length;
-  const cornerRecall = actualOver85 > 0 ? cornerPredRecs.filter(r => r.aOver85Cor).length / actualOver85 : 0;
-  const cornerAcc = cornerRecs.length > 0 ? cornerRecs.filter(r => r.predCorners === r.aOver85Cor).length / cornerRecs.length : 0;
-
-  // ---- Corner threshold curve: find optimal cornerConf threshold ----
-  function findOptimalCornerThreshold(recs) {
-    const thresholds = [];
-    for(let t = 30; t <= 90; t += 5) {
-      const filtered = recs.filter(r => r.cornerConf >= t);
-      if(filtered.length < 3) continue;
-      const hits = filtered.filter(r => r.aOver85Cor).length;
-      const rate  = hits / filtered.length;
-      thresholds.push({ t, n: filtered.length, rate, hits });
-    }
-    return thresholds;
-  }
-  const cornerCurve = findOptimalCornerThreshold(cornerRecs);
-  const bestCorner  = cornerCurve.reduce((a,b) => b.rate > a.rate && b.n >= 3 ? b : a, { rate: 0, t: 65, n: 0 });
-  // Convert bestCorner.t (cornerConf %) to minCorners equivalent: minCorners = t * 10.5 / 100
-  const suggestedMinCorners = parseFloat((bestCorner.t * 10.5 / 100).toFixed(1));
+  const cornerRecs = records.filter(r=>r.aCorners!==null);
+  const cornerHits = cornerRecs.filter(r=>r.cornerConf>=65 && r.aCorners>8.5).length;
 
   // ---- Per-League breakdown ----
   const byLeague = {};
@@ -1333,7 +1282,6 @@ function renderAuditResults(records, selLg, isInitial=true) {
         {id:'sug_tBTTS',    label:'Min xG (BTTS)',   val:bestBTTS.t,       cur:engineConfig.tBTTS,    color:'var(--accent-gold)'},
         {id:'sug_tXG_U25',  label:'Max xG (U2.5)',   val:null,             cur:engineConfig.tXG_U25,  color:'var(--accent-teal)'},
         {id:'sug_xG_Diff',  label:'xG Diff (1X2)',   val:suggestedDiff,    cur:engineConfig.xG_Diff,  color:'var(--accent-purple)'},
-        {id:'sug_minCorners',label:'Min Corners Conf',val:suggestedMinCorners!==null?suggestedMinCorners:null, cur:engineConfig.minCorners, color:'var(--accent-teal)'},
       ].map(s => {
         const sugVal = s.val !== null && s.val !== 0 ? Number(s.val).toFixed(2) : Number(s.cur).toFixed(2);
         const changed = s.val && Math.abs(s.val - s.cur) >= 0.05;
@@ -1402,18 +1350,11 @@ function renderAuditResults(records, selLg, isInitial=true) {
       <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">Hit Rate: ${pct(exactHits/exactTotal||0)}</div>
       ${bar(exactHits/exactTotal||0, 1, 'var(--accent-purple)')}
     </div>
-    <div style="background:var(--bg-base);border:1px solid ${cornerRecs.length>0?'rgba(20,184,166,0.3)':'var(--border-light)'};border-radius:var(--radius-sm);padding:14px;">
-      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">🚩 Κόρνερ &gt;8.5</div>
-      ${cornerRecs.length > 0 ? `
-      <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:${scoreColor(cornerPrec)};">${pct(cornerPrec)}</div>
-      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">Precision · ${cornerHits}/${cornerPredRecs.length} προβλέψεις</div>
-      ${bar(cornerPrec, 1, scoreColor(cornerPrec))}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;font-size:0.65rem;">
-        <div><span style="color:var(--text-muted);">Recall</span> <span style="color:var(--accent-teal);font-family:var(--font-mono);">${pct(cornerRecall)}</span></div>
-        <div><span style="color:var(--text-muted);">Accuracy</span> <span style="color:var(--accent-teal);font-family:var(--font-mono);">${pct(cornerAcc)}</span></div>
-      </div>
-      <div style="font-size:0.6rem;color:var(--text-muted);margin-top:6px;">${cornerRecs.length} αγώνες με δεδομένα · Thresh: ${engineConfig.minCorners}</div>
-      ` : `<div style="font-size:0.85rem;color:var(--text-muted);margin-top:8px;">N/A — Δεν υπάρχουν δεδομένα κόρνερ</div>`}
+    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;">
+      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Κόρνερ (>8.5)</div>
+      <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-teal);">${cornerRecs.length?pct(cornerHits/cornerRecs.length):'N/A'}</div>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">${cornerHits}/${cornerRecs.length} αγώνες με δεδομένα</div>
+      ${bar(cornerRecs.length?cornerHits/cornerRecs.length:0, 1, 'var(--accent-teal)')}
     </div>
   </div>
 
@@ -1430,51 +1371,6 @@ function renderAuditResults(records, selLg, isInitial=true) {
         <div style="margin-top:10px;">${buildMiniCurve(t.best.t, o25Curve, t.color)}</div>
       </div>`).join('')}
   </div>
-
-  ${cornerRecs.length >= 5 ? `
-  <div style="margin-bottom:20px;background:var(--bg-base);border:1px solid rgba(20,184,166,0.25);border-radius:var(--radius-sm);padding:16px;">
-    <div style="font-size:0.75rem;font-weight:800;color:var(--accent-teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;">🚩 Corner Model — Optimal CornerConf Threshold</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
-      <div>
-        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Βέλτιστο Threshold</div>
-        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-teal);">≥${bestCorner.t}%</div>
-        <div style="font-size:0.65rem;color:var(--text-muted);">(minCorners≈${suggestedMinCorners})</div>
-      </div>
-      <div>
-        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Hit Rate</div>
-        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${scoreColor(bestCorner.rate)};">${pct(bestCorner.rate||0)}</div>
-        <div style="font-size:0.65rem;color:var(--text-muted);">σε ${bestCorner.n||0} σήματα</div>
-      </div>
-      <div>
-        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Τρέχον</div>
-        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-gold);">${engineConfig.minCorners}</div>
-        <div style="font-size:0.65rem;color:var(--text-muted);">minCorners config</div>
-      </div>
-      <div>
-        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Αγώνες με δεδομένα</div>
-        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${cornerRecs.length}</div>
-        <div style="font-size:0.65rem;color:var(--text-muted);">από ${records.length} total</div>
-      </div>
-    </div>
-    <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Precision ανά CornerConf Bucket (%)</div>
-    <div style="display:flex;align-items:flex-end;height:50px;gap:2px;">
-      ${cornerCurve.map(c=>{
-        const h = Math.round((c.rate/Math.max(...cornerCurve.map(x=>x.rate),0.01))*46);
-        const isBest = c.t === bestCorner.t;
-        const col = isBest ? 'var(--accent-teal)' : c.rate >= 0.65 ? 'rgba(20,184,166,0.5)' : 'rgba(255,255,255,0.15)';
-        return `<div title="≥${c.t}%: ${(c.rate*100).toFixed(1)}% (n=${c.n})" style="flex:1;height:${h}px;background:${col};border-radius:2px 2px 0 0;position:relative;cursor:default;${isBest?'box-shadow:0 0 6px rgba(20,184,166,0.7);':''}"></div>`;
-      }).join('')}
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:0.55rem;color:var(--text-muted);margin-top:3px;">
-      ${cornerCurve.length>0?`<span>≥${cornerCurve[0].t}%</span><span>≥${cornerCurve[Math.floor(cornerCurve.length/2)]?.t||''}%</span><span>≥${cornerCurve[cornerCurve.length-1].t}%</span>`:''}
-    </div>
-    <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;">
-      ${cornerCurve.filter((c,i)=>i%2===0||c.t===bestCorner.t).map(c=>`
-        <span style="font-size:0.62rem;background:${c.t===bestCorner.t?'rgba(20,184,166,0.15)':'var(--bg-panel)'};border:1px solid ${c.t===bestCorner.t?'rgba(20,184,166,0.4)':'var(--border-light)'};padding:2px 8px;border-radius:10px;color:${c.t===bestCorner.t?'var(--accent-teal)':'var(--text-muted)'};">
-          ≥${c.t}%: <span style="font-family:var(--font-mono);font-weight:700;color:${scoreColor(c.rate)};">${(c.rate*100).toFixed(0)}%</span> <span style="opacity:0.6">(${c.n})</span>
-        </span>`).join('')}
-    </div>
-  </div>` : ''}
 
   <div style="margin-bottom:20px;">
     <div style="font-size:0.75rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">📊 Hit Rates ανά |xG Diff| Bucket</div>
@@ -1504,7 +1400,6 @@ function renderAuditResults(records, selLg, isInitial=true) {
           <th class="left-align">Πρωτάθλημα</th><th>Αγώνες</th>
           <th>O2.5<br>Prec</th><th>O3.5<br>Prec</th><th>BTTS<br>Prec</th><th>U2.5<br>Prec</th>
           <th>Exact<br>Hits</th><th>Ιδαν.<br>xG O2.5</th>
-          <th style="color:var(--accent-teal);">🚩 Cor<br>Prec</th><th style="color:var(--accent-teal);">Avg<br>Cor</th>
         </tr></thead><tbody>
         ${Object.values(byLeague).sort((a,b)=>b.records.length-a.records.length).map(lg=>{
           const lr = lg.records;
@@ -1515,12 +1410,6 @@ function renderAuditResults(records, selLg, isInitial=true) {
           const lexact = lr.filter(r=>r.predExact===r.actualExact).length;
           const curve = findOptimalXgThreshold(lr,'predOver25','aOver25');
           const best  = curve.reduce((a,b)=>b.rate>a.rate?b:a,{rate:0,t:'-'});
-          // Per-league corner stats
-          const lCorRecs = lr.filter(r=>r.aCorners!==null && r.aOver85Cor!==null);
-          const lCorPred = lCorRecs.filter(r=>r.predCorners);
-          const lCorHits = lCorPred.filter(r=>r.aOver85Cor).length;
-          const lCorPrec = lCorPred.length > 0 ? lCorHits / lCorPred.length : null;
-          const lAvgCor  = lCorRecs.length > 0 ? (lCorRecs.reduce((s,r)=>s+r.aCorners,0)/lCorRecs.length) : null;
           return `<tr>
             <td class="left-align" style="font-weight:700;color:var(--text-main);">${esc(lg.name)}</td>
             <td class="data-num">${lr.length}</td>
@@ -1530,8 +1419,6 @@ function renderAuditResults(records, selLg, isInitial=true) {
             <td class="data-num" style="color:${scoreColor(lu25.precision)};">${pct(lu25.precision)}</td>
             <td class="data-num" style="color:var(--accent-purple);">${lexact}</td>
             <td class="data-num" style="color:var(--accent-gold);">${best.t}</td>
-            <td class="data-num" style="color:${lCorPrec!==null?scoreColor(lCorPrec):'var(--text-muted)'};">${lCorPrec!==null?`${pct(lCorPrec)}<span style="font-size:0.55rem;opacity:0.7"> (${lCorPred.length})</span>`:'—'}</td>
-            <td class="data-num" style="color:${lAvgCor!==null?(lAvgCor>8.5?'var(--accent-green)':lAvgCor>7?'var(--accent-gold)':'var(--accent-red)'):'var(--text-muted)'};">${lAvgCor!==null?lAvgCor.toFixed(1):'—'}</td>
           </tr>`;
         }).join('')}
         </tbody>
