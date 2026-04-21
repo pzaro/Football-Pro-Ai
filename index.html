@@ -386,7 +386,6 @@
 </div>
 
 <script src="leagues.js"></script>
-<script src="stats.js"></script>
 
 <script>
 // ================================================================
@@ -649,7 +648,7 @@ window.applyAdvisorItem = function(settingKey, val, leagueId) {
     saveLeagueMods(true);
     showOk(`Applied ${val} to League Profile.`);
   } else {
-    const keyMap = { tXG_O25: 'cfg_tXG_O25', tXG_O35: 'cfg_tXG_O35', tBTTS: 'cfg_tBTTS', xG_Diff: 'cfg_xG_Diff' };
+    const keyMap = { tXG_O25: 'cfg_tXG_O25', tXG_O35: 'cfg_tXG_O35', tBTTS: 'cfg_tBTTS', xG_Diff: 'cfg_xG_Diff', minCorners: 'cfg_minCorners' };
     const inputId = keyMap[settingKey];
     engineConfig[settingKey] = val;
     if(inputId) { const el = document.getElementById(inputId); if(el) { el.value = val; flashElement(el); } }
@@ -1350,7 +1349,7 @@ async function runCustomAudit() {
     if(lgFilter!=='ALL') cands=cands.filter(x=>String(x.leagueId)===lgFilter);
     if(!cands.length){document.getElementById('auditSection').innerHTML=`<div class="quant-panel">No historical data for selection.</div>`;return;}
 
-    let rows=[], stats={games:0,outHit:0,validOut:0,o25Tot:0,o25Hit:0,o35Tot:0,o35Hit:0,u25Tot:0,u25Hit:0,exHit:0,bttsTot:0,bttsHit:0};
+    let rows=[], stats={games:0,outHit:0,validOut:0,o25Tot:0,o25Hit:0,o35Tot:0,o35Hit:0,u25Tot:0,u25Hit:0,exHit:0,bttsTot:0,bttsHit:0,corTot:0,corHit:0};
     const perLgStats = {};
 
     for(let i=0;i<cands.length;i++){
@@ -1363,6 +1362,24 @@ async function runCustomAudit() {
       const pOut=p.outPick||'-', pEx=p.exactScorePred||'-', pOmega=p.omegaPick||'-';
       const hitOut=pOut===aOut, hitEx=pEx===aExact;
 
+      // Fetch actual corners from fixture statistics
+      let aCorners=null;
+      try {
+        const fst=await apiReq(`fixtures/statistics?fixture=${p.fixtureId}`);
+        const fstArr=fst?.response||[];
+        if(fstArr.length>=2){
+          const sumCor = (tId) => { const ts=fstArr.find(s=>s?.team?.id===tId); const e=(ts?.statistics||[]).find(s=>s.type==='Corner Kicks'); const v=e?.value; return (v!==null&&v!==undefined&&v!=='')?parseFloat(v)||0:null; };
+          const hId=fix.teams?.home?.id, aId=fix.teams?.away?.id;
+          const hC=sumCor(hId), aC=sumCor(aId);
+          if(hC!==null&&aC!==null) aCorners=hC+aC;
+          else if(hC!==null) aCorners=hC;
+          else if(aC!==null) aCorners=aC;
+        }
+      } catch{}
+
+      const isCornerPred = pOmega.includes('ΚΟΡΝΕΡ');
+      const corHit = isCornerPred && aCorners!==null ? aCorners>8.5 : null;
+
       stats.games++;
       if(pOut==='1'||pOut==='2'){stats.validOut++;if(hitOut)stats.outHit++;}
       if(hitEx)stats.exHit++;
@@ -1370,17 +1387,19 @@ async function runCustomAudit() {
       if(p.predOver35) {stats.o35Tot++;if(atot>3.5)stats.o35Hit++;}
       if(p.predUnder25){stats.u25Tot++;if(atot<2.5)stats.u25Hit++;}
       if(p.predBTTS)   {stats.bttsTot++;if(aBtts)stats.bttsHit++;}
+      if(isCornerPred&&aCorners!==null){stats.corTot++;if(aCorners>8.5)stats.corHit++;}
 
       if(p.leagueId) {
-        if(!perLgStats[p.leagueId]) perLgStats[p.leagueId]={o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,outT:0,outH:0};
+        if(!perLgStats[p.leagueId]) perLgStats[p.leagueId]={o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,outT:0,outH:0,corT:0,corH:0};
         const ls=perLgStats[p.leagueId];
         if(p.predOver25) {ls.o25T++;if(atot>2.5)ls.o25H++;}
         if(p.predOver35) {ls.o35T++;if(atot>3.5)ls.o35H++;}
         if(p.predUnder25){ls.u25T++;if(atot<2.5)ls.u25H++;}
         if(p.predBTTS)   {ls.bttsT++;if(aBtts)ls.bttsH++;}
         if(pOut==='1'||pOut==='2'){ls.outT++;if(hitOut)ls.outH++;}
+        if(isCornerPred&&aCorners!==null){ls.corT++;if(aCorners>8.5)ls.corH++;}
       }
-      rows.push({date:p.date.slice(0,10),lg:p.league,match:`${p.homeTeam} vs ${p.awayTeam}`,pOut,aOut,hitOut,pO25:p.predOver25,aO25:atot>2.5,pO35:p.predOver35,aO35:atot>3.5,pU25:p.predUnder25,aU25:atot<2.5,pBtts:p.predBTTS,aBtts,pEx,aEx:aExact,hitEx,omega:pOmega});
+      rows.push({date:p.date.slice(0,10),lg:p.league,match:`${p.homeTeam} vs ${p.awayTeam}`,pOut,aOut,hitOut,pO25:p.predOver25,aO25:atot>2.5,pO35:p.predOver35,aO35:atot>3.5,pU25:p.predUnder25,aU25:atot<2.5,pBtts:p.predBTTS,aBtts,pEx,aEx:aExact,hitEx,omega:pOmega,aCorners,corHit});
     }
 
     if(!stats.games){document.getElementById('auditSection').innerHTML=`<div class="quant-panel">No completed matches found.</div>`;return;}
@@ -1391,7 +1410,9 @@ async function runCustomAudit() {
         o25:  perLgStats[lid].o25T>0  ?(perLgStats[lid].o25H/perLgStats[lid].o25T)*100:0,
         o35:  perLgStats[lid].o35T>0  ?(perLgStats[lid].o35H/perLgStats[lid].o35T)*100:0,
         btts: perLgStats[lid].bttsT>0 ?(perLgStats[lid].bttsH/perLgStats[lid].bttsT)*100:0,
-        out:  perLgStats[lid].outT>0  ?(perLgStats[lid].outH/perLgStats[lid].outT)*100:0
+        out:  perLgStats[lid].outT>0  ?(perLgStats[lid].outH/perLgStats[lid].outT)*100:0,
+        cor:  perLgStats[lid].corT>0  ?(perLgStats[lid].corH/perLgStats[lid].corT)*100:0,
+        corT: perLgStats[lid].corT
       };
     }
     buildLeagueModTable(finalLgRates);
@@ -1402,8 +1423,9 @@ async function runCustomAudit() {
     const u25Rate  = stats.u25Tot>0   ?(stats.u25Hit/stats.u25Tot)*100:0;
     const bttsRate = stats.bttsTot>0  ?(stats.bttsHit/stats.bttsTot)*100:0;
     const exRate   = (stats.exHit/stats.games)*100;
+    const corRate  = stats.corTot>0   ?(stats.corHit/stats.corTot)*100:0;
 
-    const TARGET_1X2=80, TARGET_O25=80, TARGET_O35=70, TARGET_BTTS=70, TARGET_U25=70;
+    const TARGET_1X2=80, TARGET_O25=80, TARGET_O35=70, TARGET_BTTS=70, TARGET_U25=70, TARGET_COR=65;
     let suggestions=[];
     const currentO25  = lgFilter!=='ALL'&&leagueMods[lgFilter]?.minXGO25!==undefined?Number(leagueMods[lgFilter].minXGO25):Number(engineConfig.tXG_O25);
     const currentO35  = lgFilter!=='ALL'&&leagueMods[lgFilter]?.minXGO35!==undefined?Number(leagueMods[lgFilter].minXGO35):Number(engineConfig.tXG_O35);
@@ -1414,6 +1436,7 @@ async function runCustomAudit() {
     if(stats.o25Tot>0   && o25Rate<TARGET_O25) suggestions.push({key:'tXG_O25',label:'Min xG (O2.5)',rate:o25Rate,tgt:TARGET_O25,oldV:currentO25,newV:(currentO25+0.15).toFixed(2)});
     if(stats.o35Tot>0   && o35Rate<TARGET_O35) suggestions.push({key:'tXG_O35',label:'Min xG (O3.5)',rate:o35Rate,tgt:TARGET_O35,oldV:currentO35,newV:(currentO35+0.15).toFixed(2)});
     if(stats.bttsTot>0  && bttsRate<TARGET_BTTS) suggestions.push({key:'tBTTS',label:'Min xG (BTTS)',rate:bttsRate,tgt:TARGET_BTTS,oldV:currentBTTS,newV:(currentBTTS+0.10).toFixed(2)});
+    if(stats.corTot>=3  && corRate<TARGET_COR) suggestions.push({key:'minCorners',label:'🚩 Corner Threshold',rate:corRate,tgt:TARGET_COR,oldV:engineConfig.minCorners,newV:Math.min(engineConfig.minCorners+0.5,12.0).toFixed(1)});
 
     let advisorHtml='';
     if(suggestions.length>0){
@@ -1463,7 +1486,7 @@ async function runCustomAudit() {
         <span class="audit-pick-actual">→ ${actual}</span>
       </div>`;
     };
-    const auditOmega = (omega, isFin, atot, ah, aa) => {
+    const auditOmega = (omega, isFin, atot, ah, aa, aCorners) => {
       if(!omega || omega==='NO BET') return `<span class="audit-omega-cell audit-omega-void">NO BET</span>`;
       if(!isFin) return `<span class="audit-omega-cell audit-omega-void">${esc(omega.split(' ').slice(0,3).join(' '))}</span>`;
       let hit = null;
@@ -1475,34 +1498,37 @@ async function runCustomAudit() {
       else if(omega.includes('GOAL'))     hit = aBtts;
       else if(omega.includes('ΑΣΟΣ'))     hit = aOut==='1';
       else if(omega.includes('ΔΙΠΛΟ'))    hit = aOut==='2';
-      else if(omega.includes('ΚΑΡΤΕΣ')||omega.includes('ΚΟΡΝΕΡ')) hit = null;
-      if(hit===null) return `<span class="audit-omega-cell audit-omega-void">${esc(omega.split(' ').slice(0,3).join(' '))}</span>`;
-      return `<span class="audit-omega-cell ${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'} ${esc(omega.split(' ').slice(0,3).join(' '))}</span>`;
+      else if(omega.includes('ΚΟΡΝΕΡ'))   hit = aCorners!==null ? aCorners>8.5 : null;
+      else if(omega.includes('ΚΑΡΤΕΣ'))   hit = null;
+      if(hit===null) return `<span class="audit-omega-cell audit-omega-void">${esc(omega.split(' ').slice(0,3).join(' '))}${omega.includes('ΚΟΡΝΕΡ')&&aCorners!==null?` <span style="font-size:0.6rem;opacity:0.7">(${aCorners}cor)</span>`:''}</span>`;
+      return `<span class="audit-omega-cell ${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'} ${esc(omega.split(' ').slice(0,3).join(' '))}${omega.includes('ΚΟΡΝΕΡ')&&aCorners!==null?` <span style="font-size:0.6rem;opacity:0.7">(${aCorners})</span>`:''}</span>`;
     };
 
     document.getElementById('auditSection').innerHTML=`
       <div class="quant-panel">
         <div class="panel-title">📊 Audit Telemetry (${s} → ${e})</div>
-        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px;text-align:center">
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:20px;text-align:center">
           <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(outRate,80)}</div><div class="stat-lbl">1X2<br><span style="font-family:'Fira Code',monospace">${stats.validOut}</span> sig.</div></div>
           <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(o25Rate,80)}</div><div class="stat-lbl">O2.5<br><span style="font-family:'Fira Code',monospace">${stats.o25Tot}</span> sig.</div></div>
           <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(o35Rate,70)}</div><div class="stat-lbl">O3.5<br><span style="font-family:'Fira Code',monospace">${stats.o35Tot}</span> sig.</div></div>
           <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(u25Rate,70)}</div><div class="stat-lbl">U2.5<br><span style="font-family:'Fira Code',monospace">${stats.u25Tot}</span> sig.</div></div>
           <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;">${fmtR(bttsRate,70)}</div><div class="stat-lbl">BTTS<br><span style="font-family:'Fira Code',monospace">${stats.bttsTot}</span> sig.</div></div>
+          <div class="stat-box" style="border-color:rgba(20,184,166,0.3)"><div class="stat-val" style="font-size:1.3rem;color:${stats.corTot>0?(corRate>=65?'var(--accent-green)':corRate>=50?'var(--accent-gold)':'var(--accent-red)'):'var(--text-muted)'}">${stats.corTot>0?Number(corRate).toFixed(1)+'%':'N/A'}</div><div class="stat-lbl" style="color:var(--accent-teal)">🚩 COR<br><span style="font-family:'Fira Code',monospace">${stats.corTot}</span> sig.</div></div>
           <div class="stat-box"><div class="stat-val" style="font-size:1.3rem;color:var(--accent-blue)">${Number(exRate).toFixed(1)}%</div><div class="stat-lbl">EXACT<br><span style="font-family:'Fira Code',monospace">${stats.games}</span> m.</div></div>
         </div>
         <div class="data-table-wrapper">
           <table class="data-table">
             <thead><tr>
               <th class="left-align" style="width:9%">Date</th>
-              <th class="left-align" style="width:22%">Fixture</th>
-              <th style="width:8%">Score</th>
-              <th style="width:7%">1X2</th>
-              <th style="width:7%">O2.5</th>
-              <th style="width:7%">O3.5</th>
-              <th style="width:7%">U2.5</th>
-              <th style="width:7%">BTTS</th>
-              <th style="width:9%">Exact</th>
+              <th class="left-align" style="width:20%">Fixture</th>
+              <th style="width:7%">Score</th>
+              <th style="width:6%">1X2</th>
+              <th style="width:6%">O2.5</th>
+              <th style="width:6%">O3.5</th>
+              <th style="width:6%">U2.5</th>
+              <th style="width:6%">BTTS</th>
+              <th style="width:6%">Exact</th>
+              <th style="width:7%;color:var(--accent-teal)">🚩 Cor</th>
               <th style="width:17%">Signal</th>
             </tr></thead>
             <tbody>
@@ -1512,7 +1538,11 @@ async function runCustomAudit() {
               const ah_n = parseInt(ah_s)||0, aa_n = parseInt(aa_s)||0;
               const atot = ah_n + aa_n;
               const trClass = r.omega==='NO BET' ? 'audit-tr-void' : isFin ?
-                (r.pO25&&r.aO25 || r.pO35&&r.aO35 || r.pU25&&r.aU25 || r.pBtts&&r.aBtts || r.hitOut ? 'audit-tr-hit' : 'audit-tr-miss') : '';
+                (r.pO25&&r.aO25 || r.pO35&&r.aO35 || r.pU25&&r.aU25 || r.pBtts&&r.aBtts || r.hitOut || r.corHit===true ? 'audit-tr-hit' : 'audit-tr-miss') : '';
+              // Corner cell: show actual total if available
+              const corCell = r.aCorners!==null
+                ? `<span style="font-family:'Fira Code',monospace;font-size:0.8rem;font-weight:700;color:${r.aCorners>8.5?'var(--accent-teal)':'var(--text-muted)'}">${r.aCorners}</span>`
+                : `<span style="color:var(--text-muted);font-size:0.7rem;">—</span>`;
               return `<tr class="${trClass}">
                 <td class="data-num left-align" style="font-size:0.72rem;color:var(--text-muted)">${r.date}</td>
                 <td class="left-align" style="font-weight:600;font-size:0.8rem">${esc(r.match)}<div style="font-size:0.62rem;color:var(--text-muted);margin-top:2px">${esc(r.lg||'')}</div></td>
@@ -1525,7 +1555,8 @@ async function runCustomAudit() {
                 <td>${auditBool(r.pU25, r.aU25)}</td>
                 <td>${auditBool(r.pBtts, r.aBtts)}</td>
                 <td>${auditExact(r.pEx, r.aEx)}</td>
-                <td style="text-align:center">${auditOmega(r.omega, isFin, atot, ah_n, aa_n)}</td>
+                <td style="text-align:center">${corCell}</td>
+                <td style="text-align:center">${auditOmega(r.omega, isFin, atot, ah_n, aa_n, r.aCorners)}</td>
               </tr>`;
             }).join('')}
             </tbody>
