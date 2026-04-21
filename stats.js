@@ -15,15 +15,6 @@ let latestTopLists = { exact:[], combo1:[], combo2:[], outcomes:[], over25:[], o
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
-// ── Live Tracker State ──────────────────────────────────────────────────────
-let liveTrackerInterval  = null;   // setInterval handle
-let isLiveTracking       = false;
-let liveTrackerLeagues   = 'MY_LEAGUES';
-let liveMatchesState     = {};     // fixId → { prev signal, prev score, rec }
-let liveAlerts           = [];     // signal flip log
-const LIVE_POLL_MS       = 60000;  // 60 seconds
-const LS_LIVE_ALERTS     = 'omega_live_alerts_v5.0';
-
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
   tXG_O25:2.70, tXG_O35:3.25, tXG_U25:1.80, tBTTS_U25:0.65,
@@ -483,393 +474,6 @@ function computePick(hXG, aXG, tXG, btts, lp, hS, aS, h2h) {
   const exactConf = Math.round(clamp(pp.bestScore.prob * 100 * 8, 0, 99));
 
   return { omegaPick, reason, pickScore, outPick, hG, aG, hExp:hLambda, aExp:aLambda, exactConf, xgDiff, pp };
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// IN-PLAY xG ADJUSTMENT ENGINE
-// Adjusts pre-match lambdas based on current score + elapsed time.
-// Methodology:
-//   1. Goals scored → Bayesian update: each goal is evidence of
-//      higher attacking strength; update lambda proportionally
-//   2. Elapsed-time decay: remaining time fraction shrinks expected
-//      goals proportionally (linear model, 90 min baseline)
-//   3. Market-specific confidence decay:
-//      - Over 2.5: drops steeply after 70' if still 0-0 or 1-0
-//      - Under 2.5: grows strongly after 60' if ≤1 goal
-//      - BTTS: grows if one team has scored, drops if 0-0 at 75'+
-// ═══════════════════════════════════════════════════════════════════
-
-function inPlayLambdaAdjust(baseLambda, goalsScored, goalsAgainst, elapsed) {
-  // Remaining time fraction (clamp between 0 and 1)
-  const remaining = clamp((90 - (elapsed || 0)) / 90, 0, 1);
-
-  // Bayesian goal-rate update: each goal scored shifts lambda up by ~0.15
-  // each goal conceded doesn't change our scoring lambda (independent)
-  const goalBoost  = goalsScored  * 0.15;
-  const adjustedLambda = (baseLambda + goalBoost) * remaining;
-
-  return Math.max(adjustedLambda, 0.05);
-}
-
-function inPlayMarketDecay(pp, elapsed, hGoals, aGoals, origPick) {
-  const totGoals = hGoals + aGoals;
-  const e = elapsed || 0;
-  const remaining = clamp((90 - e) / 90, 0, 1);
-
-  let decayedO25  = pp.pO25;
-  let decayedO35  = pp.pO35;
-  let decayedU25  = pp.pU25;
-  let decayedBTTS = pp.pBTTS;
-
-  // Already settled markets (goals can't un-happen)
-  if(totGoals >= 3) { decayedO25 = 1.0; decayedO35 = totGoals >= 4 ? 1.0 : pp.pO35; }
-  if(totGoals >= 4) { decayedO35 = 1.0; }
-  if(totGoals <= 2 && e >= 85) decayedU25 = totGoals < 3 ? 1.0 : 0.0;
-  if(hGoals >= 1 && aGoals >= 1) decayedBTTS = 1.0;
-
-  // Time-based scaling for unsettled markets
-  if(totGoals < 3 && e > 60) {
-    // Each minute after 60 without the 3rd goal → over 2.5 confidence erodes
-    const erosion = clamp((e - 60) / 30, 0, 0.7);
-    decayedO25 *= (1 - erosion * 0.6);
-    decayedO35 *= (1 - erosion * 0.8);
-  }
-  if(totGoals === 0 && e > 70) {
-    // 0-0 at 70'+ → under 2.5 strengthens dramatically
-    const boost = clamp((e - 70) / 20, 0, 0.9);
-    decayedU25 = Math.min(decayedU25 + boost * 0.4, 0.98);
-  }
-  if(aGoals === 0 && e > 75) {
-    // If away team hasn't scored at 75'+ → BTTS fades
-    const fade = clamp((e - 75) / 15, 0, 0.8);
-    decayedBTTS *= (1 - fade * 0.5);
-  }
-  if(hGoals === 0 && e > 75) {
-    const fade = clamp((e - 75) / 15, 0, 0.8);
-    decayedBTTS *= (1 - fade * 0.5);
-  }
-
-  return {
-    pO25:  clamp(decayedO25,  0, 1),
-    pO35:  clamp(decayedO35,  0, 1),
-    pU25:  clamp(decayedU25,  0, 1),
-    pBTTS: clamp(decayedBTTS, 0, 1),
-  };
-}
-
-function computeInPlayPick(baseRec, liveFixture) {
-  if(!baseRec || !liveFixture) return null;
-
-  const hGoals  = liveFixture.goals?.home  ?? 0;
-  const aGoals  = liveFixture.goals?.away  ?? 0;
-  const elapsed = liveFixture.fixture?.status?.elapsed ?? 0;
-  const status  = liveFixture.fixture?.status?.short   ?? '';
-
-  if(!isLive(status)) return null;
-
-  const lp = getLeagueParams(baseRec.leagueId);
-
-  // Adjusted lambdas for remaining time
-  const hLambdaAdj = inPlayLambdaAdjust(baseRec.hExp, hGoals, aGoals, elapsed);
-  const aLambdaAdj = inPlayLambdaAdjust(baseRec.aExp, aGoals, hGoals, elapsed);
-  const ppAdj      = getPoissonProbabilities(hLambdaAdj, aLambdaAdj);
-
-  // Apply market-specific time-decay on top of Poisson
-  const decayed = inPlayMarketDecay(ppAdj, elapsed, hGoals, aGoals, baseRec.omegaPick);
-
-  // Re-derive pick from decayed probabilities
-  const totGoals = hGoals + aGoals;
-  let inPlayPick = 'NO BET ⏱';
-  let inPlayConf = 0;
-  let inPlayReason = '';
-
-  if(totGoals >= 3 || decayed.pO35 >= 0.70) {
-    inPlayPick = '🚀 OVER 3.5 GOALS'; inPlayConf = decayed.pO35 * 100;
-    inPlayReason = `${totGoals >= 4 ? '4+ goals scored' : `P(O3.5): ${(decayed.pO35*100).toFixed(0)}%`} · ${elapsed}'`;
-  } else if(totGoals >= 2 || decayed.pO25 >= 0.72) {
-    inPlayPick = '🔥 OVER 2.5 GOALS'; inPlayConf = decayed.pO25 * 100;
-    inPlayReason = `${totGoals === 2 ? '2 goals scored' : `P(O2.5): ${(decayed.pO25*100).toFixed(0)}%`} · ${elapsed}'`;
-  } else if(decayed.pU25 >= 0.72 && elapsed >= 60) {
-    inPlayPick = '🔒 UNDER 2.5 GOALS'; inPlayConf = decayed.pU25 * 100;
-    inPlayReason = `${totGoals} goals · ${elapsed}' · P(U2.5): ${(decayed.pU25*100).toFixed(0)}%`;
-  } else if(decayed.pBTTS >= 0.68 && hGoals === 1 && aGoals === 0 && elapsed <= 70) {
-    inPlayPick = '🎯 BTTS (Away to score)'; inPlayConf = decayed.pBTTS * 100;
-    inPlayReason = `Home leads 1-0 · ${elapsed}' · P(BTTS): ${(decayed.pBTTS*100).toFixed(0)}%`;
-  } else if(decayed.pBTTS >= 0.68 && aGoals === 1 && hGoals === 0 && elapsed <= 70) {
-    inPlayPick = '🎯 BTTS (Home to score)'; inPlayConf = decayed.pBTTS * 100;
-    inPlayReason = `Away leads 1-0 · ${elapsed}' · P(BTTS): ${(decayed.pBTTS*100).toFixed(0)}%`;
-  } else if(elapsed < 30) {
-    // Early — keep pre-match signal, slightly decay confidence
-    const decay = 1 - (elapsed / 90) * 0.3;
-    inPlayPick   = baseRec.omegaPick;
-    inPlayConf   = (baseRec.strength || 0) * decay;
-    inPlayReason = `Pre-match signal · ${elapsed}' remaining: ${(90-elapsed)}'`;
-  } else {
-    inPlayReason = `Insufficient edge at ${elapsed}'`;
-  }
-
-  return {
-    inPlayPick, inPlayConf: clamp(inPlayConf, 0, 99), inPlayReason,
-    hGoals, aGoals, elapsed, status,
-    decayed, ppAdj
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// LIVE TRACKER ENGINE
-// ═══════════════════════════════════════════════════════════════════
-
-window.startLiveTracker = async function() {
-  if(isLiveTracking) return;
-  const lgEl = document.getElementById('liveTrackerLeague');
-  liveTrackerLeagues = lgEl?.value || 'MY_LEAGUES';
-  isLiveTracking = true;
-  _updateLiveTrackerUI();
-  await _liveTrackerTick();  // immediate first run
-  liveTrackerInterval = setInterval(_liveTrackerTick, LIVE_POLL_MS);
-};
-
-window.stopLiveTracker = function() {
-  if(liveTrackerInterval) { clearInterval(liveTrackerInterval); liveTrackerInterval = null; }
-  isLiveTracking = false;
-  _updateLiveTrackerUI();
-  const status = document.getElementById('liveTrackerStatus');
-  if(status) status.textContent = 'Tracker stopped.';
-};
-
-async function _liveTrackerTick() {
-  const statusEl  = document.getElementById('liveTrackerStatus');
-  const lastEl    = document.getElementById('liveTrackerLastPoll');
-  const countEl   = document.getElementById('liveMatchCount');
-
-  if(statusEl) statusEl.textContent = 'Polling live fixtures...';
-
-  try {
-    // Fetch all live fixtures
-    const res = await apiReq('fixtures?live=all');
-    const all  = (res.response || []).filter(m => {
-      if(liveTrackerLeagues === 'ALL')        return typeof LEAGUE_IDS !== 'undefined' && LEAGUE_IDS.includes(m.league.id);
-      if(liveTrackerLeagues === 'MY_LEAGUES') return typeof MY_LEAGUES_IDS !== 'undefined' && MY_LEAGUES_IDS.includes(m.league.id);
-      return m.league.id === parseInt(liveTrackerLeagues);
-    });
-
-    if(countEl) countEl.textContent = all.length;
-
-    // For each live fixture, check if we have pre-match intel, compute in-play signal
-    const liveRecs = [];
-    for(const lf of all) {
-      const fixId = lf.fixture.id;
-      // Try to find pre-match record from scan data
-      const preMatch = (window.scannedMatchesData || []).find(r => r.fixId === fixId);
-
-      let inPlay = null;
-      if(preMatch) {
-        inPlay = computeInPlayPick(preMatch, lf);
-      } else {
-        // No pre-match data → fetch minimal intel on the fly
-        try {
-          const [hS, aS] = await Promise.all([
-            buildIntel(lf.teams.home.id, lf.league.id, lf.league.season, true),
-            buildIntel(lf.teams.away.id, lf.league.id, lf.league.season, false)
-          ]);
-          const lp  = getLeagueParams(lf.league.id);
-          const hXG = Number(hS.fXG) * lp.mult;
-          const aXG = Number(aS.fXG) * lp.mult;
-          const tXG = hXG + aXG;
-          const res2 = computePick(hXG, aXG, tXG, Math.min(hXG,aXG), lp, hS, aS, {});
-          const synthetic = {
-            fixId, ht: lf.teams.home.name, at: lf.teams.away.name,
-            lg: lf.league.name, leagueId: lf.league.id,
-            hExp: res2.hExp, aExp: res2.aExp,
-            omegaPick: res2.omegaPick, strength: res2.pickScore,
-            tXG, hS, aS
-          };
-          inPlay = computeInPlayPick(synthetic, lf);
-        } catch { /* skip */ }
-      }
-
-      // Detect signal flips
-      const prev = liveMatchesState[fixId];
-      if(prev && inPlay && prev.inPlayPick !== inPlay.inPlayPick) {
-        const alert = {
-          time:     new Date().toLocaleTimeString('el-GR'),
-          fixId,
-          ht:       lf.teams.home.name,
-          at:       lf.teams.away.name,
-          elapsed:  lf.fixture.status.elapsed,
-          from:     prev.inPlayPick,
-          to:       inPlay.inPlayPick,
-          score:    `${lf.goals.home}-${lf.goals.away}`
-        };
-        liveAlerts.unshift(alert);
-        if(liveAlerts.length > 20) liveAlerts.pop();
-        _flashSignalAlert(alert);
-        try { localStorage.setItem(LS_LIVE_ALERTS, JSON.stringify(liveAlerts.slice(0,20))); } catch {}
-      }
-
-      // Update state
-      liveMatchesState[fixId] = { ...inPlay, lf };
-      liveRecs.push({ lf, inPlay, preMatch });
-    }
-
-    _renderLiveDashboard(liveRecs);
-    _renderLiveAlerts();
-
-    if(statusEl) statusEl.textContent = `Ενεργό — επόμενο poll σε ${LIVE_POLL_MS/1000}s`;
-    if(lastEl) lastEl.textContent = new Date().toLocaleTimeString('el-GR');
-
-  } catch(e) {
-    if(statusEl) statusEl.textContent = `Poll error: ${e.message}`;
-  }
-}
-
-function _updateLiveTrackerUI() {
-  const startBtn = document.getElementById('liveStartBtn');
-  const stopBtn  = document.getElementById('liveStopBtn');
-  const dot      = document.getElementById('liveStatusDot');
-  if(startBtn) startBtn.disabled = isLiveTracking;
-  if(stopBtn)  stopBtn.disabled  = !isLiveTracking;
-  if(dot) {
-    dot.style.background  = isLiveTracking ? 'var(--accent-green)' : 'var(--accent-red)';
-    dot.style.boxShadow   = isLiveTracking ? '0 0 8px var(--accent-green)' : 'none';
-    dot.title             = isLiveTracking ? 'Tracking active' : 'Stopped';
-  }
-}
-
-function _flashSignalAlert(alert) {
-  const box = document.getElementById('liveAlertFlash');
-  if(!box) return;
-  box.innerHTML = `<div style="background:rgba(251,191,36,0.15);border:1px solid var(--accent-gold);border-radius:var(--radius-sm);padding:10px 14px;font-size:0.75rem;">
-    🔔 <strong>SIGNAL FLIP</strong> · ${esc(alert.ht)} vs ${esc(alert.at)} · ${alert.elapsed}' · ${esc(alert.score)}
-    <br><span style="color:var(--accent-red)">${esc(alert.from)}</span> → <span style="color:var(--accent-green)">${esc(alert.to)}</span>
-  </div>`;
-  setTimeout(() => { if(box) box.innerHTML = ''; }, 8000);
-  // Show alert log section
-  const logSec = document.getElementById('liveAlertSection');
-  if(logSec) logSec.style.display = 'block';
-}
-
-function _renderLiveDashboard(liveRecs) {
-  const el = document.getElementById('liveDashboard');
-  if(!el) return;
-
-  if(!liveRecs.length) {
-    el.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:32px 0;font-size:0.8rem;">Δεν υπάρχουν live αγώνες αυτή τη στιγμή για τα επιλεγμένα πρωταθλήματα.</div>`;
-    return;
-  }
-
-  // Sort: signal flips first, then by elapsed desc
-  liveRecs.sort((a,b) => {
-    const aFlip = a.inPlay && liveMatchesState[a.lf.fixture.id]?.inPlayPick !== a.preMatch?.omegaPick ? 1 : 0;
-    const bFlip = b.inPlay && liveMatchesState[b.lf.fixture.id]?.inPlayPick !== b.preMatch?.omegaPick ? 1 : 0;
-    if(bFlip !== aFlip) return bFlip - aFlip;
-    return (b.lf.fixture.status.elapsed||0) - (a.lf.fixture.status.elapsed||0);
-  });
-
-  el.innerHTML = liveRecs.map(({lf, inPlay, preMatch}) => {
-    const hG     = lf.goals?.home ?? 0;
-    const aG     = lf.goals?.away ?? 0;
-    const el_min = lf.fixture.status.elapsed || 0;
-    const status = lf.fixture.status.short;
-    const isHT   = status === 'HT';
-
-    const conf   = inPlay ? clamp(inPlay.inPlayConf, 0, 99) : 0;
-    const confColor = conf >= 70 ? 'var(--accent-green)' : conf >= 45 ? 'var(--accent-gold)' : 'var(--accent-red)';
-    const pick   = inPlay?.inPlayPick || 'NO BET ⏱';
-    const reason = inPlay?.inPlayReason || '';
-    const isNoBet = pick.includes('NO BET');
-    const pickColor = isNoBet ? 'var(--text-muted)' :
-                      pick.includes('UNDER') ? 'var(--accent-teal)' :
-                      pick.includes('OVER 3.5') ? 'var(--accent-purple)' :
-                      pick.includes('BTTS') ? 'var(--accent-gold)' : 'var(--accent-green)';
-
-    // Signal flip badge
-    const preMatchPick = preMatch?.omegaPick || '';
-    const isFlip = inPlay && !isNoBet && preMatchPick && preMatchPick !== pick && !preMatchPick.includes('NO BET');
-    const flipBadge = isFlip
-      ? `<span style="font-size:0.6rem;background:rgba(251,191,36,0.2);color:var(--accent-gold);border:1px solid var(--accent-gold);border-radius:4px;padding:1px 6px;font-weight:700;margin-left:6px;">FLIP</span>`
-      : '';
-
-    // Time bar
-    const timeProgress = isHT ? 50 : clamp(el_min / 90 * 100, 0, 100);
-    const htLabel = isHT ? 'HT' : `${el_min}'`;
-
-    // Decayed market probabilities for mini indicators
-    const d = inPlay?.decayed;
-
-    return `
-    <div class="match-card" id="live-card-${lf.fixture.id}" style="border-color:${isFlip ? 'var(--accent-gold)' : isNoBet ? 'var(--border-light)' : 'rgba(16,185,129,0.25)'};">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:160px;">
-          <div class="match-league">
-            <span class="live-dot"></span>
-            <span class="league-badge">${esc(status)}</span>
-            <span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span>
-          </div>
-          <div style="font-weight:700;font-size:0.95rem;margin:6px 0 2px;">${esc(lf.teams.home.name)}</div>
-          <div style="font-weight:600;font-size:0.85rem;color:var(--text-muted);">${esc(lf.teams.away.name)}</div>
-        </div>
-
-        <div style="text-align:center;min-width:80px;">
-          <div style="font-size:2rem;font-weight:900;font-family:'Fira Code',monospace;color:var(--accent-green);line-height:1;">${hG} - ${aG}</div>
-          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">${htLabel}</div>
-          <div style="margin-top:6px;background:var(--bg-base);border-radius:4px;overflow:hidden;height:4px;">
-            <div style="height:4px;width:${timeProgress}%;background:var(--accent-green);transition:width 1s;border-radius:4px;"></div>
-          </div>
-        </div>
-
-        <div style="flex:1;min-width:160px;text-align:right;">
-          <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">In-Play Signal${flipBadge}</div>
-          <div style="font-size:0.85rem;font-weight:800;color:${pickColor};">${esc(pick)}</div>
-          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px;">${esc(reason)}</div>
-          <div style="margin-top:6px;">
-            <div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:0.65rem;">
-              <span style="color:var(--text-muted);">Conf</span>
-              <span style="font-family:'Fira Code',monospace;color:${confColor};font-weight:700;">${conf.toFixed(0)}%</span>
-            </div>
-            <div style="background:var(--bg-base);border-radius:3px;height:5px;margin-top:3px;">
-              <div style="height:5px;width:${conf}%;background:${confColor};border-radius:3px;transition:width 0.5s;"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      ${d ? `
-      <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
-        ${[
-          {lbl:'O2.5', v: d.pO25, c:'var(--accent-green)'},
-          {lbl:'O3.5', v: d.pO35, c:'var(--accent-purple)'},
-          {lbl:'U2.5', v: d.pU25, c:'var(--accent-teal)'},
-          {lbl:'BTTS', v: d.pBTTS,c:'var(--accent-gold)'},
-        ].map(m => {
-          const pct = Math.round(m.v * 100);
-          return `<div style="flex:1;min-width:55px;background:var(--bg-base);border-radius:6px;padding:6px 8px;text-align:center;">
-            <div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">${m.lbl}</div>
-            <div style="font-size:0.9rem;font-weight:900;font-family:'Fira Code',monospace;color:${pct>=65?m.c:'var(--text-muted)'};">${pct}%</div>
-          </div>`;
-        }).join('')}
-        ${preMatchPick && !isNoBet ? `
-        <div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;">
-          <div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Pre-match</div>
-          <div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div>
-        </div>` : ''}
-      </div>` : ''}
-    </div>`;
-  }).join('');
-}
-
-function _renderLiveAlerts() {
-  const el = document.getElementById('liveAlertLog');
-  if(!el || !liveAlerts.length) return;
-  el.innerHTML = liveAlerts.map(a => `
-    <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:0.7rem;flex-wrap:wrap;">
-      <span style="color:var(--text-muted);font-family:'Fira Code',monospace;min-width:55px;">${a.time}</span>
-      <span style="font-weight:700;color:var(--text-main);">${esc(a.ht)} vs ${esc(a.at)}</span>
-      <span style="color:var(--text-muted);">${a.elapsed}' · ${a.score}</span>
-      <span style="color:var(--accent-red);">${esc(a.from)}</span>
-      <span style="color:var(--text-muted);">→</span>
-      <span style="color:var(--accent-green);">${esc(a.to)}</span>
-    </div>`).join('');
 }
 
 async function analyzeMatchSafe(m, index, total) {
@@ -1345,59 +949,6 @@ window.addEventListener('DOMContentLoaded', () => {
     LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.flag||''} ${l.country} — ${l.name}</option>`);
   }
 
-  // Build Live Tracker Panel HTML
-  const liveSecEl = document.getElementById('advisorSection');
-  if(liveSecEl) {
-    liveSecEl.innerHTML = `
-    <div class="quant-panel" style="border-color:rgba(16,185,129,0.5);">
-      <div class="panel-title" style="cursor:pointer;color:var(--accent-green);" onclick="togglePanel('liveTrackerBody','liveTrackerArrow')">
-        <span style="display:flex;align-items:center;gap:10px;">
-          <span id="liveStatusDot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent-red);flex-shrink:0;transition:background 0.3s,box-shadow 0.3s;"></span>
-          📡 Live Tracker — In-Play Signal Monitor
-          <span id="liveMatchCount" style="font-family:'Fira Code',monospace;font-size:0.75rem;background:rgba(16,185,129,0.15);color:var(--accent-green);padding:2px 8px;border-radius:10px;border:1px solid rgba(16,185,129,0.3);">0</span>
-          <span style="font-size:0.65rem;color:var(--text-muted);">live now</span>
-        </span>
-        <span id="liveTrackerArrow">▼</span>
-      </div>
-      <div id="liveTrackerBody" style="display:none;">
-        <div class="toolbar" style="margin-bottom:16px;">
-          <div class="input-group" style="flex:2;">
-            <label class="input-label">Πρωταθλήματα</label>
-            <select id="liveTrackerLeague" class="quant-input">
-              <option value="MY_LEAGUES">⭐ MY LEAGUES</option>
-              <option value="ALL">🌐 Top 24 Leagues</option>
-              ${(typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA : []).map(l=>`<option value="${l.id}">${l.flag||''} ${l.country} — ${l.name}</option>`).join('')}
-            </select>
-          </div>
-          <button id="liveStartBtn" class="btn btn-primary" onclick="startLiveTracker()" style="height:38px;background:var(--accent-green);border-color:var(--accent-green);color:#000;font-weight:800;">▶ Start Tracking</button>
-          <button id="liveStopBtn"  class="btn btn-outline"  onclick="stopLiveTracker()"  style="height:38px;" disabled>⏹ Stop</button>
-          <div style="display:flex;flex-direction:column;justify-content:center;gap:2px;">
-            <div style="font-size:0.65rem;color:var(--text-muted);">Status: <span id="liveTrackerStatus" style="color:var(--accent-blue);">Inactive</span></div>
-            <div style="font-size:0.65rem;color:var(--text-muted);">Last poll: <span id="liveTrackerLastPoll" style="font-family:'Fira Code',monospace;">—</span></div>
-          </div>
-        </div>
-
-        <div id="liveAlertFlash" style="margin-bottom:12px;"></div>
-
-        <div id="liveDashboard" style="display:flex;flex-direction:column;gap:12px;"></div>
-
-        <div id="liveAlertSection" style="margin-top:20px;display:none;">
-          <div style="font-size:0.72rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
-            <span>🔔 Signal Flip Log</span>
-            <button onclick="liveAlerts=[];_renderLiveAlerts();document.getElementById('liveAlertSection').style.display='none';" style="background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:0.7rem;">Clear</button>
-          </div>
-          <div id="liveAlertLog"></div>
-        </div>
-      </div>
-    </div>`;
-
-    // Show alert section when alerts arrive
-    const origFlash = _flashSignalAlert;
-  }
-
-  // Load saved live alerts
-  try { const la = JSON.parse(localStorage.getItem(LS_LIVE_ALERTS)); if(Array.isArray(la)) liveAlerts = la; } catch {}
-
   // Build Audit Panel HTML
   const auditSec = document.getElementById('auditSection');
   if(auditSec) {
@@ -1518,7 +1069,21 @@ window.runAudit = async function() {
         const aOver25 = aTot > 2;
         const aOver35 = aTot > 3;
         const aUnder25 = aTot < 3;
-        const aCorners = (m.statistics?.[0]?.statistics?.find(s=>s.type==='Corner Kicks')?.value??null);
+
+        // ── Fetch actual corner data from fixture statistics ──
+        let aCorners = null;
+        try {
+          const fixSt = await getFixStats(m.fixture.id);
+          if(fixSt && fixSt.length >= 2) {
+            const hTeamId = m.teams.home.id;
+            const aTeamId = m.teams.away.id;
+            const hCor = extractFixStatFor(fixSt, hTeamId, 'Corner Kicks');
+            const aCor = extractFixStatFor(fixSt, aTeamId, 'Corner Kicks');
+            if(hCor !== null && aCor !== null) aCorners = hCor + aCor;
+            else if(hCor !== null) aCorners = hCor;
+            else if(aCor !== null) aCorners = aCor;
+          }
+        } catch { /* no corner data */ }
 
         const predOver25  = tXG >= lp.minXGO25 && res.pp.pO25 >= 0.52;
         const predOver35  = tXG >= lp.minXGO35 && res.pp.pO35 >= 0.42;
@@ -1526,6 +1091,10 @@ window.runAudit = async function() {
         const predBTTS    = btts >= lp.minBTTS  && res.pp.pBTTS >= 0.48;
         const predExact   = `${res.hG}-${res.aG}`;
         const actualExact = `${aH}-${aA}`;
+
+        const cornerConf  = computeCornerConfidence(hS, aS, hXG, aXG);
+        // predCorners: signal fired if cornerConf >= minCorners threshold
+        const predCorners = cornerConf >= engineConfig.minCorners * 100 / 10.5;
 
         auditRecords.push({
           lgId: m.league.id, lgName: m.league.name,
@@ -1536,8 +1105,11 @@ window.runAudit = async function() {
           predExact, actualExact,
           aOver25, aOver35, aUnder25, aBTTS, aTot,
           aCorners: aCorners !== null ? Number(aCorners) : null,
+          aOver85Cor: aCorners !== null ? aCorners > 8.5 : null,
           omegaPick: res.omegaPick, pickScore: res.pickScore,
-          cornerConf: computeCornerConfidence(hS, aS, hXG, aXG),
+          cornerConf,
+          predCorners,
+          expCorners: hS._expCorners ?? null,
           _hS: hS, _aS: aS  // store for re-evaluation
         });
       } catch { /* skip */ }
@@ -1595,6 +1167,7 @@ function recomputeAuditRecords(records) {
       const tXG   = hXG + aXG;
       const btts  = Math.min(hXG, aXG);
       const res   = computePick(hXG, aXG, tXG, btts, lp, r._hS, r._aS, {});
+      const cornerConf = computeCornerConfidence(r._hS, r._aS, hXG, aXG);
       return {
         ...r, tXG, hXG, aXG, xgDiff: hXG - aXG,
         predOver25:  tXG >= lp.minXGO25 && res.pp.pO25  >= 0.52,
@@ -1603,7 +1176,9 @@ function recomputeAuditRecords(records) {
         predBTTS:    btts >= lp.minBTTS && res.pp.pBTTS >= 0.48,
         predExact:   `${res.hG}-${res.aG}`,
         omegaPick:   res.omegaPick, pickScore: res.pickScore,
-        cornerConf:  computeCornerConfidence(r._hS, r._aS, hXG, aXG)
+        cornerConf,
+        predCorners: cornerConf >= engineConfig.minCorners * 100 / 10.5,
+        expCorners:  r._hS?._expCorners ?? r.expCorners ?? null
       };
     } catch { return r; }
   });
@@ -1617,12 +1192,14 @@ window.applyAuditSuggestions = function() {
   const newBTTS = readF('sug_tBTTS');
   const newU25  = readF('sug_tXG_U25');
   const newDiff = readF('sug_xG_Diff');
+  const newMinCorners = readF('sug_minCorners');
 
   if(newO25  !== null && !isNaN(newO25))  { engineConfig.tXG_O25 = newO25;  const el=document.getElementById('cfg_tXG_O25');  if(el) el.value=newO25; }
   if(newO35  !== null && !isNaN(newO35))  { engineConfig.tXG_O35 = newO35;  const el=document.getElementById('cfg_tXG_O35');  if(el) el.value=newO35; }
   if(newBTTS !== null && !isNaN(newBTTS)) { engineConfig.tBTTS   = newBTTS; const el=document.getElementById('cfg_tBTTS');    if(el) el.value=newBTTS; }
   if(newU25  !== null && !isNaN(newU25))  { engineConfig.tXG_U25 = newU25;  const el=document.getElementById('cfg_tXG_U25');  if(el) el.value=newU25; }
   if(newDiff !== null && !isNaN(newDiff)) { engineConfig.xG_Diff = newDiff; const el=document.getElementById('cfg_xG_Diff'); if(el) el.value=newDiff; }
+  if(newMinCorners !== null && !isNaN(newMinCorners)) { engineConfig.minCorners = newMinCorners; const el=document.getElementById('cfg_minCorners'); if(el) el.value=newMinCorners; }
 
   // Apply per-league mod suggestions
   if(typeof LEAGUES_DATA !== 'undefined') {
@@ -1666,8 +1243,33 @@ function renderAuditResults(records, selLg, isInitial=true) {
   const btts = calcAuditStats(records, 'predBTTS',    'aBTTS');
   const exactHits = records.filter(r=>r.predExact===r.actualExact).length;
   const exactTotal = records.length;
-  const cornerRecs = records.filter(r=>r.aCorners!==null);
-  const cornerHits = cornerRecs.filter(r=>r.cornerConf>=65 && r.aCorners>8.5).length;
+
+  // ---- Corner stats: only records where we have actual corner data ----
+  const cornerRecs = records.filter(r => r.aCorners !== null && r.aOver85Cor !== null);
+  const cornerPredRecs = cornerRecs.filter(r => r.predCorners);
+  const cornerHits = cornerPredRecs.filter(r => r.aOver85Cor).length;
+  const cornerPrec = cornerPredRecs.length > 0 ? cornerHits / cornerPredRecs.length : 0;
+  // Recall: of all games that actually had >8.5 corners, how many did we predict?
+  const actualOver85 = cornerRecs.filter(r => r.aOver85Cor).length;
+  const cornerRecall = actualOver85 > 0 ? cornerPredRecs.filter(r => r.aOver85Cor).length / actualOver85 : 0;
+  const cornerAcc = cornerRecs.length > 0 ? cornerRecs.filter(r => r.predCorners === r.aOver85Cor).length / cornerRecs.length : 0;
+
+  // ---- Corner threshold curve: find optimal cornerConf threshold ----
+  function findOptimalCornerThreshold(recs) {
+    const thresholds = [];
+    for(let t = 30; t <= 90; t += 5) {
+      const filtered = recs.filter(r => r.cornerConf >= t);
+      if(filtered.length < 3) continue;
+      const hits = filtered.filter(r => r.aOver85Cor).length;
+      const rate  = hits / filtered.length;
+      thresholds.push({ t, n: filtered.length, rate, hits });
+    }
+    return thresholds;
+  }
+  const cornerCurve = findOptimalCornerThreshold(cornerRecs);
+  const bestCorner  = cornerCurve.reduce((a,b) => b.rate > a.rate && b.n >= 3 ? b : a, { rate: 0, t: 65, n: 0 });
+  // Convert bestCorner.t (cornerConf %) to minCorners equivalent: minCorners = t * 10.5 / 100
+  const suggestedMinCorners = parseFloat((bestCorner.t * 10.5 / 100).toFixed(1));
 
   // ---- Per-League breakdown ----
   const byLeague = {};
@@ -1731,6 +1333,7 @@ function renderAuditResults(records, selLg, isInitial=true) {
         {id:'sug_tBTTS',    label:'Min xG (BTTS)',   val:bestBTTS.t,       cur:engineConfig.tBTTS,    color:'var(--accent-gold)'},
         {id:'sug_tXG_U25',  label:'Max xG (U2.5)',   val:null,             cur:engineConfig.tXG_U25,  color:'var(--accent-teal)'},
         {id:'sug_xG_Diff',  label:'xG Diff (1X2)',   val:suggestedDiff,    cur:engineConfig.xG_Diff,  color:'var(--accent-purple)'},
+        {id:'sug_minCorners',label:'Min Corners Conf',val:suggestedMinCorners!==null?suggestedMinCorners:null, cur:engineConfig.minCorners, color:'var(--accent-teal)'},
       ].map(s => {
         const sugVal = s.val !== null && s.val !== 0 ? Number(s.val).toFixed(2) : Number(s.cur).toFixed(2);
         const changed = s.val && Math.abs(s.val - s.cur) >= 0.05;
@@ -1799,11 +1402,18 @@ function renderAuditResults(records, selLg, isInitial=true) {
       <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">Hit Rate: ${pct(exactHits/exactTotal||0)}</div>
       ${bar(exactHits/exactTotal||0, 1, 'var(--accent-purple)')}
     </div>
-    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;">
-      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Κόρνερ (>8.5)</div>
-      <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-teal);">${cornerRecs.length?pct(cornerHits/cornerRecs.length):'N/A'}</div>
-      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">${cornerHits}/${cornerRecs.length} αγώνες με δεδομένα</div>
-      ${bar(cornerRecs.length?cornerHits/cornerRecs.length:0, 1, 'var(--accent-teal)')}
+    <div style="background:var(--bg-base);border:1px solid ${cornerRecs.length>0?'rgba(20,184,166,0.3)':'var(--border-light)'};border-radius:var(--radius-sm);padding:14px;">
+      <div style="font-size:0.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">🚩 Κόρνερ &gt;8.5</div>
+      ${cornerRecs.length > 0 ? `
+      <div style="font-size:1.6rem;font-weight:900;font-family:var(--font-mono);color:${scoreColor(cornerPrec)};">${pct(cornerPrec)}</div>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">Precision · ${cornerHits}/${cornerPredRecs.length} προβλέψεις</div>
+      ${bar(cornerPrec, 1, scoreColor(cornerPrec))}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;font-size:0.65rem;">
+        <div><span style="color:var(--text-muted);">Recall</span> <span style="color:var(--accent-teal);font-family:var(--font-mono);">${pct(cornerRecall)}</span></div>
+        <div><span style="color:var(--text-muted);">Accuracy</span> <span style="color:var(--accent-teal);font-family:var(--font-mono);">${pct(cornerAcc)}</span></div>
+      </div>
+      <div style="font-size:0.6rem;color:var(--text-muted);margin-top:6px;">${cornerRecs.length} αγώνες με δεδομένα · Thresh: ${engineConfig.minCorners}</div>
+      ` : `<div style="font-size:0.85rem;color:var(--text-muted);margin-top:8px;">N/A — Δεν υπάρχουν δεδομένα κόρνερ</div>`}
     </div>
   </div>
 
@@ -1820,6 +1430,51 @@ function renderAuditResults(records, selLg, isInitial=true) {
         <div style="margin-top:10px;">${buildMiniCurve(t.best.t, o25Curve, t.color)}</div>
       </div>`).join('')}
   </div>
+
+  ${cornerRecs.length >= 5 ? `
+  <div style="margin-bottom:20px;background:var(--bg-base);border:1px solid rgba(20,184,166,0.25);border-radius:var(--radius-sm);padding:16px;">
+    <div style="font-size:0.75rem;font-weight:800;color:var(--accent-teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;">🚩 Corner Model — Optimal CornerConf Threshold</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
+      <div>
+        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Βέλτιστο Threshold</div>
+        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-teal);">≥${bestCorner.t}%</div>
+        <div style="font-size:0.65rem;color:var(--text-muted);">(minCorners≈${suggestedMinCorners})</div>
+      </div>
+      <div>
+        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Hit Rate</div>
+        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${scoreColor(bestCorner.rate)};">${pct(bestCorner.rate||0)}</div>
+        <div style="font-size:0.65rem;color:var(--text-muted);">σε ${bestCorner.n||0} σήματα</div>
+      </div>
+      <div>
+        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Τρέχον</div>
+        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-gold);">${engineConfig.minCorners}</div>
+        <div style="font-size:0.65rem;color:var(--text-muted);">minCorners config</div>
+      </div>
+      <div>
+        <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Αγώνες με δεδομένα</div>
+        <div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${cornerRecs.length}</div>
+        <div style="font-size:0.65rem;color:var(--text-muted);">από ${records.length} total</div>
+      </div>
+    </div>
+    <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Precision ανά CornerConf Bucket (%)</div>
+    <div style="display:flex;align-items:flex-end;height:50px;gap:2px;">
+      ${cornerCurve.map(c=>{
+        const h = Math.round((c.rate/Math.max(...cornerCurve.map(x=>x.rate),0.01))*46);
+        const isBest = c.t === bestCorner.t;
+        const col = isBest ? 'var(--accent-teal)' : c.rate >= 0.65 ? 'rgba(20,184,166,0.5)' : 'rgba(255,255,255,0.15)';
+        return `<div title="≥${c.t}%: ${(c.rate*100).toFixed(1)}% (n=${c.n})" style="flex:1;height:${h}px;background:${col};border-radius:2px 2px 0 0;position:relative;cursor:default;${isBest?'box-shadow:0 0 6px rgba(20,184,166,0.7);':''}"></div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:0.55rem;color:var(--text-muted);margin-top:3px;">
+      ${cornerCurve.length>0?`<span>≥${cornerCurve[0].t}%</span><span>≥${cornerCurve[Math.floor(cornerCurve.length/2)]?.t||''}%</span><span>≥${cornerCurve[cornerCurve.length-1].t}%</span>`:''}
+    </div>
+    <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;">
+      ${cornerCurve.filter((c,i)=>i%2===0||c.t===bestCorner.t).map(c=>`
+        <span style="font-size:0.62rem;background:${c.t===bestCorner.t?'rgba(20,184,166,0.15)':'var(--bg-panel)'};border:1px solid ${c.t===bestCorner.t?'rgba(20,184,166,0.4)':'var(--border-light)'};padding:2px 8px;border-radius:10px;color:${c.t===bestCorner.t?'var(--accent-teal)':'var(--text-muted)'};">
+          ≥${c.t}%: <span style="font-family:var(--font-mono);font-weight:700;color:${scoreColor(c.rate)};">${(c.rate*100).toFixed(0)}%</span> <span style="opacity:0.6">(${c.n})</span>
+        </span>`).join('')}
+    </div>
+  </div>` : ''}
 
   <div style="margin-bottom:20px;">
     <div style="font-size:0.75rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">📊 Hit Rates ανά |xG Diff| Bucket</div>
@@ -1849,6 +1504,7 @@ function renderAuditResults(records, selLg, isInitial=true) {
           <th class="left-align">Πρωτάθλημα</th><th>Αγώνες</th>
           <th>O2.5<br>Prec</th><th>O3.5<br>Prec</th><th>BTTS<br>Prec</th><th>U2.5<br>Prec</th>
           <th>Exact<br>Hits</th><th>Ιδαν.<br>xG O2.5</th>
+          <th style="color:var(--accent-teal);">🚩 Cor<br>Prec</th><th style="color:var(--accent-teal);">Avg<br>Cor</th>
         </tr></thead><tbody>
         ${Object.values(byLeague).sort((a,b)=>b.records.length-a.records.length).map(lg=>{
           const lr = lg.records;
@@ -1859,6 +1515,12 @@ function renderAuditResults(records, selLg, isInitial=true) {
           const lexact = lr.filter(r=>r.predExact===r.actualExact).length;
           const curve = findOptimalXgThreshold(lr,'predOver25','aOver25');
           const best  = curve.reduce((a,b)=>b.rate>a.rate?b:a,{rate:0,t:'-'});
+          // Per-league corner stats
+          const lCorRecs = lr.filter(r=>r.aCorners!==null && r.aOver85Cor!==null);
+          const lCorPred = lCorRecs.filter(r=>r.predCorners);
+          const lCorHits = lCorPred.filter(r=>r.aOver85Cor).length;
+          const lCorPrec = lCorPred.length > 0 ? lCorHits / lCorPred.length : null;
+          const lAvgCor  = lCorRecs.length > 0 ? (lCorRecs.reduce((s,r)=>s+r.aCorners,0)/lCorRecs.length) : null;
           return `<tr>
             <td class="left-align" style="font-weight:700;color:var(--text-main);">${esc(lg.name)}</td>
             <td class="data-num">${lr.length}</td>
@@ -1868,6 +1530,8 @@ function renderAuditResults(records, selLg, isInitial=true) {
             <td class="data-num" style="color:${scoreColor(lu25.precision)};">${pct(lu25.precision)}</td>
             <td class="data-num" style="color:var(--accent-purple);">${lexact}</td>
             <td class="data-num" style="color:var(--accent-gold);">${best.t}</td>
+            <td class="data-num" style="color:${lCorPrec!==null?scoreColor(lCorPrec):'var(--text-muted)'};">${lCorPrec!==null?`${pct(lCorPrec)}<span style="font-size:0.55rem;opacity:0.7"> (${lCorPred.length})</span>`:'—'}</td>
+            <td class="data-num" style="color:${lAvgCor!==null?(lAvgCor>8.5?'var(--accent-green)':lAvgCor>7?'var(--accent-gold)':'var(--accent-red)'):'var(--text-muted)'};">${lAvgCor!==null?lAvgCor.toFixed(1):'—'}</td>
           </tr>`;
         }).join('')}
         </tbody>
