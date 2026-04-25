@@ -1,157 +1,118 @@
 <!DOCTYPE html>
 <html lang="el">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover"/>
-<title>APEX OMEGA v5.0 — AI Quant Terminal</title>
-<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>APEX OMEGA v5.0 - AI Quant Terminal</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<header class="terminal-header">
-  <div class="brand-logo">APEX<span>OMEGA</span><span class="version-tag">v5.0 AI</span></div>
+<div class="terminal-header">
+  <div class="brand-logo">APEX<span>OMEGA</span> <span style="font-size:0.6rem;color:var(--text-muted);font-family:'Fira Code',monospace;margin-left:4px;">v5.0 AI</span></div>
   <div class="header-right">
     <div class="bankroll-widget" onclick="openBankroll()" title="Bankroll Manager">
       <span class="bankroll-label">💰 Bankroll</span>
       <span id="bankrollDisplay" class="bankroll-value">—</span>
     </div>
     <div class="credit-widget">
-      <span class="credit-label">⚡ Credits</span>
+      <span class="credit-label">API Credits</span>
       <span id="creditDisplay" class="credit-value">—</span>
     </div>
-    <button class="btn btn-ghost btn-sm" id="btnSyncLive" onclick="syncLiveScores()" title="Live Sync (1 Credit)">
-      <span class="live-dot"></span>Sync
-    </button>
-  </div>
-</header>
-
-<!-- LIVE TICKER -->
-<div id="tickerBar" class="ticker-bar" style="display:none;">
-  <div class="ticker-label"><span class="live-dot" style="width:5px;height:5px;"></span>LIVE</div>
-  <div class="ticker-track"><div class="ticker-inner" id="tickerInner"></div></div>
-  <div class="ticker-controls">
-    <span class="ticker-ctrl-label">SPD</span>
-    <input type="range" id="tickerSpeed" min="10" max="150" value="45" class="ticker-range" oninput="setTickerSpeed(this.value)">
   </div>
 </div>
 
-<!-- BANKROLL MODAL -->
 <div id="bankrollModal" class="modal-overlay" style="display:none">
   <div class="modal-card">
     <div class="modal-title">💰 Bankroll Manager</div>
-    <p class="modal-subtitle">Κεφάλαιο για Kelly Criterion στάκινγκ.</p>
-    <input type="number" id="bankrollInput" class="modal-input" placeholder="1000.00" step="0.01" min="1">
-    <div class="modal-actions">
-      <button class="btn btn-gold" onclick="saveBankroll()">Αποθήκευση</button>
-      <button class="btn btn-ghost" onclick="closeBankroll()">Κλείσιμο</button>
+    <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:16px;">Κεφάλαιο για Kelly Criterion στάκινγκ.</div>
+    <input type="number" id="bankrollInput" class="modal-input" placeholder="1000.00" step="0.01">
+    <div style="display:flex; gap:10px; margin-bottom:20px;">
+      <button class="btn btn-gold" style="flex:1;" onclick="saveBankroll()">Αποθήκευση</button>
+      <button class="modal-close" onclick="closeBankroll()">Κλείσιμο</button>
     </div>
     <div id="bankrollHistory"></div>
   </div>
 </div>
 
-<!-- AUTH -->
-<div id="auth" class="auth-screen">
+<div id="auth">
   <div class="auth-card">
-    <div class="auth-logo">APEX<span>OMEGA</span></div>
-    <div class="auth-subtitle">v5.0 · AI Quant Edition</div>
-    <input type="password" id="pin" class="auth-input" placeholder="• • • • • •" maxlength="8" autocomplete="off" inputmode="numeric">
-    <div id="authError" class="auth-error"></div>
+    <div class="brand-logo" style="justify-content: center; font-size: 2.2rem; margin-bottom: 10px;">APEX<span>OMEGA</span></div>
+    <div style="font-weight: 600; color: var(--accent-blue);">v5.0 · AI Edition</div>
+    <input type="password" id="pin" class="auth-input" placeholder="• • • •" maxlength="8" autocomplete="off" inputmode="numeric">
+    <div id="authError" style="margin-top:12px; font-size:0.75rem; color:var(--accent-red); min-height:20px; font-weight:600;"></div>
   </div>
 </div>
 
-<!-- MAIN APP -->
 <div id="app" style="display:none">
-  <div class="container">
+  
+  <div class="ticker-wrapper" id="tickerBar" style="display:none;">
+    <div class="ticker-label"><span class="live-dot" style="width:6px;height:6px;margin-right:4px;"></span>LIVE SIGNALS</div>
+    <div class="ticker-track" id="tickerTrack">
+      <div class="ticker-inner" id="tickerInner"></div>
+    </div>
+  </div>
 
-    <!-- ENGINE PARAMETERS -->
-    <div class="quant-panel panel-purple">
-      <div class="panel-title clickable" onclick="togglePanel('globalCalibPanel','globalArrow')">
-        <span>⚙️ Global Engine Parameters</span>
-        <span id="globalArrow" class="arrow">▼</span>
+  <div class="container">
+    <div class="quant-panel" style="border-color: rgba(139, 92, 246, 0.4);">
+      <div class="panel-title" style="cursor:pointer; color: var(--accent-purple);" onclick="togglePanel('globalCalibPanel','globalArrow')">
+        <span>⚙️ Global Engine Parameters</span><span id="globalArrow">▼</span>
       </div>
       <div id="globalCalibPanel" style="display:none;">
         <div class="calib-grid">
-          <div class="calib-item"><span class="calib-lbl">Shots On Target</span><input type="number" step="0.01" id="cfg_wShotsOn" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Shots Off Target</span><input type="number" step="0.01" id="cfg_wShotsOff" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Corners Weight</span><input type="number" step="0.01" id="cfg_wCorners" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Goals Weight</span><input type="number" step="0.01" id="cfg_wGoals" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Min xG (O2.5)</span><input type="number" step="0.05" id="cfg_tXG_O25" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Min xG (O3.5)</span><input type="number" step="0.05" id="cfg_tXG_O35" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl" style="color:var(--accent-teal)">Max xG (U2.5)</span><input type="number" step="0.05" id="cfg_tXG_U25" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Shots on Target</span><input type="number" step="0.01" id="cfg_wShotsOn" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Shots off Target</span><input type="number" step="0.01" id="cfg_wShotsOff" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Corners</span><input type="number" step="0.01" id="cfg_wCorners" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Recent Goals</span><input type="number" step="0.01" id="cfg_wGoals" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Min Total xG (O2.5)</span><input type="number" step="0.05" id="cfg_tXG_O25" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Min Total xG (O3.5)</span><input type="number" step="0.05" id="cfg_tXG_O35" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl" style="color:var(--accent-teal)">Max Total xG (U2.5)</span><input type="number" step="0.05" id="cfg_tXG_U25" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Min xG (BTTS)</span><input type="number" step="0.05" id="cfg_tBTTS" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">xG Diff (1X2)</span><input type="number" step="0.05" id="cfg_xG_Diff" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">BTTS Max (U2.5)</span><input type="number" step="0.05" id="cfg_tBTTS_U25" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Min Corners</span><input type="number" step="0.5" id="cfg_minCorners" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Trap Mult.</span><input type="number" step="0.01" id="cfg_modTrap" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Tight Mult.</span><input type="number" step="0.01" id="cfg_modTight" class="calib-input"></div>
-          <div class="calib-item"><span class="calib-lbl">Gold Mult.</span><input type="number" step="0.01" id="cfg_modGold" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Max btts (U2.5)</span><input type="number" step="0.05" id="cfg_tBTTS_U25" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Trap Leagues</span><input type="number" step="0.01" id="cfg_modTrap" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Tight Leagues</span><input type="number" step="0.01" id="cfg_modTight" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl">Gold Leagues</span><input type="number" step="0.01" id="cfg_modGold" class="calib-input"></div>
         </div>
         <div class="toolbar">
-          <button class="btn btn-primary" onclick="saveSettings()">💾 Save Config</button>
-          <button class="btn btn-outline" onclick="resimulateMatches()">🔄 Re-Simulate</button>
-          <button class="btn btn-ghost" onclick="resetSettings()">↺ Defaults</button>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Global Config</button>
+          <button class="btn btn-outline" onclick="resimulateMatches()">Re-Simulate</button>
         </div>
       </div>
     </div>
 
-    <!-- SCAN PANEL -->
     <div class="quant-panel">
       <div class="toolbar">
-        <div class="input-group">
-          <label class="input-label">Date From</label>
-          <input type="date" id="scanStart" class="quant-input">
-        </div>
-        <div class="input-group">
-          <label class="input-label">Date To</label>
-          <input type="date" id="scanEnd" class="quant-input">
-        </div>
-        <div class="input-group" style="flex:2">
-          <label class="input-label">League Filter</label>
+        <div class="input-group"><label class="input-label">Date From</label><input type="date" id="scanStart" class="quant-input"></div>
+        <div class="input-group"><label class="input-label">Date To</label><input type="date" id="scanEnd" class="quant-input"></div>
+        <div class="input-group" style="flex:2"><label class="input-label">Filter</label>
           <select id="leagueFilter" class="quant-input">
             <option value="MY_LEAGUES">⭐ MY LEAGUES (High Yield)</option>
-            <option value="ALL">🌐 Top 30 Leagues</option>
-            <option value="WORLD">🌍 Global Coverage</option>
+            <option value="ALL">🌐 Top Leagues</option>
           </select>
         </div>
       </div>
-      <div class="toolbar" style="margin-top:14px;justify-content:flex-end;gap:10px;">
-        <button class="btn btn-ghost" onclick="exportData()">💾 Export</button>
+      <div class="toolbar" style="margin-top: 15px; justify-content: flex-end;">
+        <button class="btn btn-outline" onclick="exportData()">💾 EXPORT</button>
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
-        <button class="btn btn-ghost" onclick="document.getElementById('importFile').click()">📂 Import</button>
-        <button class="btn btn-primary" id="btnPre" onclick="runScan()">▶ Run Scan</button>
+        <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">📂 IMPORT</button>
+        <button class="btn btn-primary" id="btnPre" onclick="runScan()" style="height: 38px;">▶ Run Scan</button>
       </div>
     </div>
 
-    <!-- AUDIT PANEL -->
     <div class="quant-panel">
       <div class="panel-title">🗄️ Smart Audit &amp; AI Advisor</div>
       <div class="toolbar">
-        <div class="input-group">
-          <label class="input-label">Audit From</label>
-          <input type="date" id="auditStart" class="quant-input">
-        </div>
-        <div class="input-group">
-          <label class="input-label">Audit To</label>
-          <input type="date" id="auditEnd" class="quant-input">
-        </div>
-        <div class="input-group">
-          <label class="input-label">League</label>
-          <select id="auditLeague" class="quant-input">
-            <option value="ALL">Global (All)</option>
-          </select>
-        </div>
-        <div class="input-group" style="flex:0;">
-          <button class="btn btn-purple" style="height:42px;" onclick="runCustomAudit()">Run Audit</button>
-        </div>
-        <div class="input-group" style="flex:0;">
-          <button class="btn btn-danger" style="height:42px;" onclick="clearVault()">Purge</button>
-        </div>
+        <div class="input-group"><label class="input-label">Audit From</label><input type="date" id="auditStart" class="quant-input"></div>
+        <div class="input-group"><label class="input-label">Audit To</label><input type="date" id="auditEnd" class="quant-input"></div>
+        <div class="input-group"><label class="input-label">League</label><select id="auditLeague" class="quant-input"><option value="ALL">Global</option></select></div>
+        <div class="input-group" style="flex:0;"><button class="btn btn-purple" style="height: 38px;" onclick="runCustomAudit()">Run Audit</button></div>
+        <div class="input-group" style="flex:0;"><button class="btn btn-danger" style="height: 38px;" onclick="clearVault()">Purge Data</button></div>
       </div>
     </div>
 
-    <div id="errorBox"></div>
-    <div id="successBox"></div>
+    <div id="errorBox"></div><div id="successBox"></div>
     <div id="loader" style="display:none" class="progress-container">
       <div class="progress-track"><div id="bar" class="progress-bar"></div></div>
       <div class="progress-text" id="status">Initializing...</div>
@@ -161,7 +122,6 @@
     <div id="topSection"></div>
     <div id="summarySection"></div>
     <div id="auditSection"></div>
-
   </div>
 </div>
 
