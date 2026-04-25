@@ -43,7 +43,6 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const safeNum  = (x,d=0) => Number.isFinite(Number(x))?Number(x):d;
 const clamp    = (n,mn,mx) => Math.max(mn,Math.min(mx,n));
-const statVal  = (arr,type) => parseFloat(String((arr.find(x=>x.type===type)||{}).value||0).replace('%',''))||0;
 const getTeamGoals = (f,t) => f?.teams?.home?.id===t?(f?.goals?.home??0):(f?.goals?.away??0);
 const getOppGoals  = (f,t) => f?.teams?.home?.id===t?(f?.goals?.away??0):(f?.goals?.home??0);
 const isLive     = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
@@ -96,7 +95,7 @@ function renderBankrollHistory(){
 }
 
 window.exportData=function(){if(!window.scannedMatchesData?.length){showErr("Δεν υπάρχουν δεδομένα.");return;}const blob=new Blob([JSON.stringify(window.scannedMatchesData)],{type:'application/json'});const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:`apex_export_${todayISO()}.json`});a.click();URL.revokeObjectURL(a.href);showOk("Export OK!");};
-window.importData=function(ev){const file=ev.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=e=>{try{const imported=JSON.parse(e.target.result);if(!Array.isArray(imported))throw new Error("Invalid");window.scannedMatchesData=imported;rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();showOk(`Imported ${imported.length} αγώνες.`);}catch{showErr("Σφάλμα αρχείου.");}ev.target.value='';};reader.readAsText(file);};
+window.importData=function(ev){const file=ev.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=e=>{try{const imported=JSON.parse(e.target.result);if(!Array.isArray(imported))throw new Error("Invalid");window.scannedMatchesData=imported;rebuildTopLists();renderTopSections();renderSummaryTable();showOk(`Imported ${imported.length} αγώνες.`);}catch{showErr("Σφάλμα αρχείου.");}ev.target.value='';};reader.readAsText(file);};
 
 // ================================================================
 //  MATH / POISSON
@@ -139,20 +138,45 @@ async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2h
 const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ================================================================
-//  INTEL BUILDER & CORNER MODEL
+//  INTEL BUILDER & HEURISTIC CORNER ESTIMATOR (FIXED)
 // ================================================================
 async function batchCalc(list,tId){
-  if(!list?.length)return{xg:'1.10',xga:'1.10',cor:'4.8',crd:'2.1',corRatio:'3.5'};
+  if(!list?.length)return{xg:'1.10',xga:'1.10',cor:'4.5',crd:'2.0',corRatio:'3.5'};
   let tXG=0,tXGA=0,tCor=0,tCrd=0,n=0;
+  
   for(const f of list){
-    const myG=getTeamGoals(f,tId),opG=getOppGoals(f,tId);
-    tXG+=myG>0?myG*1.10:0.42; tXGA+=opG>0?opG*1.10:0.42;
-    const myIsHome=f.teams?.home?.id===tId;
-    const myStats=(myIsHome?f.statistics?.[0]:f.statistics?.[1])?.statistics||[];
-    tCor+=statVal(myStats,'Corner Kicks'); tCrd+=statVal(myStats,'Yellow Cards')+statVal(myStats,'Red Cards'); n++;
+    const myG=getTeamGoals(f,tId), opG=getOppGoals(f,tId);
+    
+    // Calculate xG 
+    tXG  += myG > 0 ? myG * 1.10 : 0.42; 
+    tXGA += opG > 0 ? opG * 1.10 : 0.42;
+    
+    // HEURISTIC ESTIMATOR: 
+    // Το API-Sports δεν δίνει κόρνερ/κάρτες στο Bulk Fetch.
+    // Τα υπολογίζουμε δυναμικά βάσει της παραγωγικότητας της ομάδας (Γκολ).
+    // Βάση Κόρνερ: 3.5 + (1.2 για κάθε γκολ που βάζει) + (0.3 για κάθε γκολ που δέχεται)
+    const simCor = 3.5 + (myG * 1.2) + (opG * 0.3);
+    const simCrd = 1.5 + (opG * 0.8) + (myG * 0.2);
+    
+    tCor += simCor; 
+    tCrd += simCrd; 
+    n++;
   }
-  const avgXG=n>0?tXG/n:1.10;
-  return{xg:avgXG.toFixed(2),xga:n>0?(tXGA/n).toFixed(2):'1.10',cor:n>0?(tCor/n).toFixed(1):'4.8',crd:n>0?(tCrd/n).toFixed(1):'2.1',corRatio:n>0?Math.max(tCor/n/Math.max(avgXG,0.5),2.5).toFixed(2):'3.5'};
+  
+  const avgXG = n > 0 ? tXG / n : 1.10;
+  const avgCor = n > 0 ? tCor / n : 4.5;
+  const avgCrd = n > 0 ? tCrd / n : 2.0;
+  
+  // Το τακτικό Ratio (Πόσα κόρνερ παράγει ανά 1 xG)
+  const ratio = avgXG > 0 ? avgCor / Math.max(avgXG, 0.5) : 3.5;
+  
+  return {
+    xg: avgXG.toFixed(2), 
+    xga: n > 0 ? (tXGA/n).toFixed(2) : '1.10',
+    cor: avgCor.toFixed(1), 
+    crd: avgCrd.toFixed(1), 
+    corRatio: clamp(ratio, 2.0, 5.5).toFixed(2)
+  };
 }
 
 function getFormHistory(fixtures,teamId){return fixtures.map(f=>{const my=getTeamGoals(f,teamId),op=getOppGoals(f,teamId);return my>op?{res:'W',cls:'W'}:my<op?{res:'L',cls:'L'}:{res:'D',cls:'D'};}).reverse();}
@@ -164,7 +188,13 @@ async function buildIntel(tId,lg,s,isHome){
     const gen=allFix.slice(0,6);const split=allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
     const[fData,sData]=await Promise.all([batchCalc(gen,tId),batchCalc(split,tId)]);
     const sXG=parseFloat(ss?.goals?.for?.average?.total)||1.35, sXGA=parseFloat(ss?.goals?.against?.average?.total)||1.35;
-    return{fXG:Math.max(safeNum(fData.xg,sXG),0.80),fXGA:Math.max(safeNum(fData.xga,sXGA),0.80),sXG:Math.max(safeNum(sData.xg,sXG),0.80),formRating:getFormRating(getFormHistory(gen,tId)),corRatio:safeNum(fData.corRatio,3.5),cor:safeNum(fData.cor,4.8),crd:safeNum(fData.crd,2.1),uiXG:fData.xg,uiXGA:fData.xga,uiSXG:sData.xg,uiSXGA:sData.xga,history:getFormHistory(gen,tId)};
+    return{
+      fXG:Math.max(safeNum(fData.xg,sXG),0.80), fXGA:Math.max(safeNum(fData.xga,sXGA),0.80), sXG:Math.max(safeNum(sData.xg,sXG),0.80),
+      formRating:getFormRating(getFormHistory(gen,tId)),
+      corRatio:safeNum(fData.corRatio, 3.5), cor:safeNum(fData.cor, 4.8), crd:safeNum(fData.crd, 2.1),
+      uiXG:fData.xg, uiXGA:fData.xga, uiSXG:sData.xg, uiSXGA:sData.xga,
+      history:getFormHistory(gen,tId)
+    };
   }catch{return{fXG:1.35,fXGA:1.35,sXG:1.35,formRating:50,corRatio:3.5,cor:4.8,crd:2.1,uiXG:'1.35',uiXGA:'1.35',uiSXG:'1.35',uiSXGA:'1.35',history:[]};}
 }
 
@@ -265,54 +295,10 @@ window.runScan=async function(){
     for(let i=0;i<all.length;i++) await analyzeMatchSafe(all[i],i,all.length);
     
     saveToVault(window.scannedMatchesData);
-    rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();updateAuditLeagueFilter();
+    rebuildTopLists();renderTopSections();renderSummaryTable();
     showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
-
-// ================================================================
-//  LIVE SYNC & TICKER
-// ================================================================
-window.syncLiveScores=async function(){
-  if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
-  try{
-    const res=await apiReq('fixtures?live=all');const liveArr=res.response||[];
-    if(!liveArr.length){showOk('Δεν υπάρχουν live αγώνες.');return;}
-    const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));let n=0;
-    window.scannedMatchesData.forEach(d=>{
-      if(!liveMap.has(d.fixId))return;const ld=liveMap.get(d.fixId);
-      d.m.goals=ld.goals;d.m.fixture.status=ld.fixture.status;
-      const evts=ld.events||[];let cor=0,yel=0,red=0;
-      evts.forEach(ev=>{const t=(ev.type||'').toLowerCase(),det=(ev.detail||'').toLowerCase();if(t==='corner')cor++;else if(t==='card'){if(det.includes('yellow'))yel++;else if(det.includes('red')&&!det.includes('yellow'))red++;}});
-      if(evts.length>0){d.liveCorners=cor;d.liveYellows=yel;d.liveReds=red;}n++;
-    });
-    renderSummaryTable();tickerRefresh();showOk(`✅ 1 Credit · Synced ${n} live αγώνες`);
-  }catch(e){showErr('Sync error: '+e.message);}finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
-};
-
-let _autoSyncTimer=null;
-function startAutoSync(){if(_autoSyncTimer)clearInterval(_autoSyncTimer);_autoSyncTimer=setInterval(()=>{const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));if(hasLive&&!isRunning)syncLiveScores();},90000);}
-
-let _tickerRaf=null,_tickerPx=45;
-function tickerRefresh(){
-  const bar=document.getElementById('tickerBar'),inner=document.getElementById('tickerInner');if(!bar||!inner)return;
-  const data=window.scannedMatchesData||[];if(!data.length)return;
-  const strong = data.filter(d=>d.strength >= 60);
-  if(!strong.length){bar.style.display='none';return;}
-  const items=strong.map(d=>{
-    const sh=d.m?.fixture?.status?.short||'',live=isLive(sh),fin=isFinished(sh);
-    const gh=d.m?.goals?.home??'?',ga=d.m?.goals?.away??'?';
-    const scoreHtml=(live||fin)?`<span class="t-score ${live?'t-live':''}">${gh}-${ga}${live&&d.m?.fixture?.status?.elapsed?` <small style="color:var(--accent-green);font-size:0.5em">${d.m.fixture.status.elapsed}'</small>`:''}</span>`:'';
-    const pickHtml=!d.omegaPick?.includes('NO BET')?`<span class="t-pick">${esc((d.omegaPick||'').split(' ').slice(0,2).join(' '))}</span>`:'';
-    const corHtml=d.liveCorners!==undefined?`<span class="t-cor">🚩${d.liveCorners}</span>`:'';
-    return `<div class="ticker-item">${live?'<span class="live-dot" style="width:5px;height:5px;"></span>':''}${esc(d.ht)} <span style="opacity:0.4">vs</span> ${esc(d.at)} ${scoreHtml}${pickHtml}${corHtml}</div>`;
-  }).join('');
-  inner.innerHTML=items+items;bar.style.display='flex';
-  if(_tickerRaf)cancelAnimationFrame(_tickerRaf);
-  let pos=0,last=null;
-  function step(ts){if(last===null)last=ts;const dt=Math.min((ts-last)/1000,0.1);last=ts;pos+=_tickerPx*dt;const half=inner.scrollWidth/2;if(pos>=half)pos=0;inner.style.transform=`translateX(-${pos.toFixed(1)}px)`;_tickerRaf=requestAnimationFrame(step);}
-  _tickerRaf=requestAnimationFrame(step);
-}
 
 // ================================================================
 //  TOP LISTS & TABS
@@ -369,7 +355,7 @@ window.switchTab=function(id){document.querySelectorAll('.tab-btn').forEach(b=>b
 window.scrollToMatch=function(id){const el=document.getElementById(id);if(!el)return;el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='2px solid var(--accent-blue)';setTimeout(()=>el.style.outline='',2000);};
 
 // ================================================================
-//  SUMMARY TABLE & ACCORDION RENDERING (ΤΑ ΠΑΝΤΑ ΕΔΩ!)
+//  SUMMARY TABLE & ACCORDION RENDERING
 // ================================================================
 window.toggleMatchDetails = function(id) {
   const el = document.getElementById('details-' + id);
@@ -392,12 +378,11 @@ function renderSummaryTable() {
       const scoreStr=(live||fin)?`${ah}-${aa}`:'-'; const scoreCol=live?'var(--accent-green)':fin?'var(--text-main)':'var(--text-muted)';
       const conf=clamp(safeNum(x.strength),0,100); const confCol=conf>=65?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--text-muted)';
       let omCol=x.omegaPick?.includes('NO BET')?'var(--text-muted)':'var(--text-main)';
-      const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.56rem;color:var(--accent-teal);margin-top:2px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
       const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
       
       rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
         <td class="col-match left-align" style="font-weight:600;">${live?'<span class="live-dot" style="width:6px;height:6px;margin-right:4px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}</td>
-        <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}</td>
+        <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}</td>
         <td class="col-1x2 data-num">${x.outPick}</td>
         <td class="col-o25 data-num">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
         <td class="col-u25 data-num">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
@@ -408,36 +393,36 @@ function renderSummaryTable() {
       </tr>
       
       <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
-        <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);">
-          <div style="display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;">
+        <td colspan=\"9\" style=\"padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);\">
+          <div style=\"display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;\">
             
-            <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-              <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Home vs Away Breakdown</h4>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
-              <div style="display:flex;gap:2px;margin-top:6px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:2px;margin-top:3px;">${formDots(x.aS?.history)}</div>
+            <div style=\"flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);\">
+              <h4 style=\"color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;\">Home vs Away Breakdown</h4>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Form xG</span><span class=\"data-num\">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Split xG</span><span class=\"data-num\">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Exp. Cards</span><span class=\"data-num\">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px; color:var(--text-muted);\"><span>H2H (Last 8)</span><span class=\"data-num\">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
+              <div style=\"display:flex;gap:2px;margin-top:6px;\">${formDots(x.hS?.history)}</div><div style=\"display:flex;gap:2px;margin-top:3px;\">${formDots(x.aS?.history)}</div>
             </div>
 
-            <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-              <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">🚩 Advanced Corner Model</h4>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Home Avg / Ratio</span><span class="data-num">${Number(x.hS?.cor||0).toFixed(1)} | ${(Number(x.hS?.corRatio)||3.5).toFixed(2)}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Away Avg / Ratio</span><span class="data-num">${Number(x.aS?.cor||0).toFixed(1)} | ${(Number(x.aS?.corRatio)||3.5).toFixed(2)}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--accent-green);"><span>P(Over 8.5)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
+            <div style=\"flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);\">
+              <h4 style=\"color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;\">🚩 Advanced Corner Model</h4>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Home Avg / Ratio</span><span class=\"data-num\">${Number(x.hS?.cor||0).toFixed(1)} | ${(Number(x.hS?.corRatio)||3.5).toFixed(2)}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Away Avg / Ratio</span><span class=\"data-num\">${Number(x.aS?.cor||0).toFixed(1)} | ${(Number(x.aS?.corRatio)||3.5).toFixed(2)}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-gold);\"><span>Exp. Corners (Tot)</span><span class=\"data-num\">${(Number(x.expCor)||0).toFixed(1)}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px; color:var(--accent-green);\"><span>P(Over 8.5)</span><span class=\"data-num\">${(x.cornerConf||0).toFixed(1)}%</span></div>
             </div>
 
-            <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-              <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Game Projections</h4>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson U2.5</span><span class="data-num" style="color:var(--accent-teal)">${x.pp?pct(x.pp.pU25):'—'}</span></div>
+            <div style=\"flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);\">
+              <h4 style=\"color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;\">Game Projections</h4>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Lambda xG</span><span class=\"data-num\" style=\"color:var(--accent-blue)\">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>xG Diff</span><span class=\"data-num\" style=\"color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}\">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Poisson O2.5</span><span class=\"data-num\" style=\"color:var(--accent-blue)\">${x.pp?pct(x.pp.pO25):'—'}</span></div>
+              <div style=\"display:flex; justify-content:space-between; margin-bottom:5px;\"><span>Poisson U2.5</span><span class=\"data-num\" style=\"color:var(--accent-teal)\">${x.pp?pct(x.pp.pU25):'—'}</span></div>
             </div>
 
-            <div style="flex:1; min-width:320px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-              <h4 style="color:var(--text-muted); text-align:center; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;">📊 Poisson Score Matrix</h4>
+            <div style=\"flex:1; min-width:320px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);\">
+              <h4 style=\"color:var(--text-muted); text-align:center; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;\">📊 Poisson Score Matrix</h4>
               ${pHtml}
             </div>
 
@@ -454,7 +439,7 @@ function renderSummaryTable() {
 }
 
 // ================================================================
-//  AUDIT & VAULT (Mini Curves)
+//  AUDIT & VAULT
 // ================================================================
 window.runCustomAudit=async function(){const s=document.getElementById('auditStart').value,e=document.getElementById('auditEnd').value;if(!s||!e){showErr('Επιλέξτε ημερομηνίες.');return;}if(isRunning)return;isRunning=true;setBtnsDisabled(true);setLoader(true,'Running Audit...');document.getElementById('auditSection').innerHTML='';try{const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const endD=new Date(e);endD.setDate(endD.getDate()+1);const lgFilter=document.getElementById('auditLeague')?.value||'ALL';let cands=store.filter(x=>{const d=new Date(x.date);return d>=new Date(s)&&d<endD;});if(lgFilter!=='ALL')cands=cands.filter(x=>String(x.leagueId)===lgFilter);if(!cands.length){document.getElementById('auditSection').innerHTML=`<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;">Δεν υπάρχουν δεδομένα.</div>`;return;}let stats={games:0,outHit:0,validOut:0,o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,exHit:0};const rows=[],curveData=[];for(let i=0;i<cands.length;i++){const p=cands[i];setProgress(Math.round(((i+1)/cands.length)*100),`Auditing: ${p.homeTeam}`);const fr=await apiReq(`fixtures?id=${p.fixtureId}`);const fix=fr?.response?.[0];if(!fix||!isFinished(fix?.fixture?.status?.short))continue;const ah=safeNum(fix.goals.home),aa=safeNum(fix.goals.away);const aTot=ah+aa,aExact=`${ah}-${aa}`,aOut=ah>aa?'1':ah<aa?'2':'X',aBtts=ah>0&&aa>0;stats.games++;if(p.outPick==='1'||p.outPick==='2'){stats.validOut++;if(p.outPick===aOut)stats.outHit++;}if(p.predOver25){stats.o25T++;if(aTot>2.5)stats.o25H++;}if(p.predOver35){stats.o35T++;if(aTot>3.5)stats.o35H++;}if(p.predUnder25){stats.u25T++;if(aTot<2.5)stats.u25H++;}if(p.predBTTS){stats.bttsT++;if(aBtts)stats.bttsH++;}if(p.exactScorePred===aExact)stats.exHit++;curveData.push({tXG:p.tXG||2.5,hitO25:aTot>2.5?1:0});rows.push({p,ah,aa,aTot,aExact,aOut,aBtts});}const rv=(h,t)=>t>0?h/t*100:0;const col=v=>v>=80?'var(--accent-green)':v>=60?'var(--accent-gold)':'var(--accent-red)';const statsCards=[{lbl:'1X2',h:stats.outHit,t:stats.validOut},{lbl:'O2.5',h:stats.o25H,t:stats.o25T},{lbl:'O3.5',h:stats.o35H,t:stats.o35T},{lbl:'U2.5',h:stats.u25H,t:stats.u25T},{lbl:'BTTS',h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];let html=`<div class="quant-panel"><div class="panel-title">📊 Audit Results — ${cands.length} predictions</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:20px;">${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-panel);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;text-align:center;"><div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;">${m.lbl}</div><div style="font-size:1.5rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.6rem;color:var(--text-muted);margin-top:3px;">${m.h}/${m.t}</div></div>`;}).join('')}</div><div style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve</div>${buildMiniCurve(engineConfig.tXG_O25,curveData)}</div>`;document.getElementById('auditSection').innerHTML=html;showOk('Audit ολοκληρώθηκε.');}catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}};
 function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-16px; left:50%; transform:translateX(-50%); font-size:0.5rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:2px; margin-bottom:15px;">${bars}</div>`;}
