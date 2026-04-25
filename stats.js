@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.0 — MASTER ENGINE (All Features + Post-Match Evolution)
+// APEX OMEGA v5.0 — MASTER ENGINE (Calibrated for Max ROI)
 // Poisson · xG · Corners · Live Sync · Audit · Bankroll · Evolution Tracker
 // ==========================================================================
 
@@ -18,11 +18,12 @@ let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], u
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
+// 🎯 CALIBRATED ENGINE DEFAULTS (Based on Telemetry)
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
-  tXG_O25:2.70,  tXG_O35:3.25,   tXG_U25:1.80,  tBTTS_U25:0.65,
-  xG_Diff:0.55,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.15,
-  minCorners:10.5, minCards:5.8
+  tXG_O25:2.75,  tXG_O35:3.30,   tXG_U25:1.80,  tBTTS_U25:0.65, // +0.05 αυστηρότητα στα Over
+  xG_Diff:0.48,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.15, // -0.07 στο xG Diff για να βρίσκει περισσότερα σημεία (1X2)
+  minCorners:10.5, minCards:6.1 // Αυστηρότερο όριο στις κάρτες
 };
 let engineConfig = { ...DEFAULT_SETTINGS };
 let leagueMods   = {};
@@ -206,7 +207,7 @@ function computeCornerConfidence(hS,aS,hXG,aXG){
 }
 
 // ================================================================
-//  PICK ENGINE
+//  PICK ENGINE (CALIBRATED)
 // ================================================================
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
@@ -219,13 +220,18 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
   
   let omegaPick='NO BET',reason='Insufficient statistical edge.',pickScore=0;
+  
   if(pp.pO35>=0.42&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
-  else if(pp.pO25>=0.52&&tXG>=lp.minXGO25&&btts>=0.85){omegaPick='🔥 OVER 2.5 GOALS';pickScore=pp.pO25*100;reason=`Poisson O2.5: ${pct(pp.pO25)} | tXG:${tXG.toFixed(2)}`;}
-  else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
-  else if(btts>=lp.minBTTS&&pp.pBTTS>=0.48&&hXG>=0.90&&aXG>=0.90){omegaPick='🎯 GOAL/GOAL (BTTS)';pickScore=pp.pBTTS*100;reason=`BTTS: ${pct(pp.pBTTS)}`;}
-  else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff+0.10){
+  // Αυστηρότερο Over 2.5: Ζητάμε pO25 >= 54% και btts >= 0.90 (αποφυγή False Positives τύπου Hertha-Kiel)
+  else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 OVER 2.5 GOALS';pickScore=pp.pO25*100;reason=`Poisson O2.5: ${pct(pp.pO25)} | tXG:${tXG.toFixed(2)}`;}
+  // Ασφαλέστερο Under 2.5
+  else if(pp.pU25>=0.56&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
+  // Αυστηρότερο BTTS
+  else if(btts>=lp.minBTTS&&pp.pBTTS>=0.50&&hXG>=0.95&&aXG>=0.95){omegaPick='🎯 GOAL/GOAL (BTTS)';pickScore=pp.pBTTS*100;reason=`BTTS: ${pct(pp.pBTTS)}`;}
+  // Πιο ευέλικτο 1X2: Το xgDiff+0.05 (αντί για 0.10) βρίσκει τα κρυμμένα φαβορί
+  else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff+0.05){
     const outcome=outPick==='1'?'🏠 ΑΣΟΣ':'✈️ ΔΙΠΛΟ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
-    if(outProb>=0.52&&formOk){omegaPick=outProb>=0.60?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Home':'Away'}: ${pct(outProb)}`;}
+    if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Home':'Away'}: ${pct(outProb)}`;}
   }
   else if(cornerRes.conf>=65){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
   else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 OVER 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Avg Cards: ${totCards.toFixed(1)}`;}
@@ -548,7 +554,9 @@ function saveToVault(data){try{let store=JSON.parse(localStorage.getItem(LS_PRED
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const sel=document.getElementById('auditLeague');if(!sel)return;const known=new Set(store.map(x=>x.leagueId));sel.innerHTML='<option value="ALL">Global (All)</option>';(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).forEach(l=>{if(known.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
 
-// SETTINGS & INIT
+// ================================================================
+//  SETTINGS & INIT
+// ================================================================
 window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
 window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved!');};
 window.resimulateMatches=function(){if(!window.scannedMatchesData.length)return;window.scannedMatchesData.forEach(d=>{if(!d.hS)return;const lp=getLeagueParams(d.leagueId);const hXG=Number(d.hS.fXG)*lp.mult,aXG=Number(d.aS.fXG)*lp.mult;const tXG=hXG+aXG,btts=Math.min(hXG,aXG);const res=computePick(hXG,aXG,tXG,btts,lp,d.hS,d.aS);Object.assign(d,{tXG,btts,outPick:res.outPick,xgDiff:res.xgDiff,exact:`${res.hG}-${res.aG}`,exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,hExp:res.hExp,aExp:res.aExp,pp:res.pp,lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor});});rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');};
