@@ -193,6 +193,21 @@
     .lm-badge-warn { background:rgba(245,158,11,0.18); color:var(--accent-gold); }
     .lm-badge-crit { background:rgba(244,63,94,0.18);  color:var(--accent-red); }
     .lm-badge-ok   { background:rgba(16,185,129,0.15); color:var(--accent-green); }
+    /* ── Ticker ── */
+    #tickerBar { background: rgba(11,15,25,0.95); border-bottom: 1px solid rgba(14,165,233,0.2); overflow: hidden; height: 32px; display: flex; align-items: center; position: sticky; top: 57px; z-index: 999; }
+    .ticker-label { font-size: 0.6rem; font-weight: 800; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 1px; padding: 0 12px; white-space: nowrap; border-right: 1px solid rgba(14,165,233,0.25); height: 100%; display: flex; align-items: center; flex-shrink: 0; background: rgba(14,165,233,0.08); }
+    .ticker-track { flex: 1; overflow: hidden; position: relative; height: 100%; }
+    .ticker-inner { display: flex; align-items: center; gap: 0; white-space: nowrap; will-change: transform; }
+    .ticker-item { font-size: 0.68rem; font-family: 'Fira Code', monospace; padding: 0 18px; border-right: 1px solid rgba(255,255,255,0.06); height: 32px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); flex-shrink: 0; }
+    .ticker-item .t-score { font-weight: 700; color: var(--text-main); }
+    .ticker-item .t-live  { color: var(--accent-green); }
+    .ticker-item .t-fin   { color: var(--text-muted); }
+    .ticker-item .t-pick  { font-size: 0.58rem; padding: 1px 5px; border-radius: 3px; background: rgba(14,165,233,0.12); color: var(--accent-blue); font-weight: 700; }
+    .ticker-item .t-cor   { color: var(--accent-teal); font-weight: 700; }
+    .ticker-speed-ctrl { display: flex; align-items: center; gap: 6px; padding: 0 10px; border-left: 1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
+    .ticker-speed-ctrl label { font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; }
+    .ticker-speed-ctrl input { width: 60px; accent-color: var(--accent-blue); cursor: pointer; }
+    @keyframes tickerScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
   </style>
 </head>
 <body>
@@ -208,6 +223,18 @@
       <span class="credit-label">API Credits</span>
       <span id="creditDisplay" class="credit-value">—</span>
     </div>
+  </div>
+</div>
+
+<!-- LIVE TICKER -->
+<div id="tickerBar" style="display:none;">
+  <div class="ticker-label">⚡ LIVE</div>
+  <div class="ticker-track" id="tickerTrack">
+    <div class="ticker-inner" id="tickerInner"></div>
+  </div>
+  <div class="ticker-speed-ctrl">
+    <label>Speed</label>
+    <input type="range" id="tickerSpeed" min="10" max="100" value="40" oninput="updateTickerSpeed(this.value)">
   </div>
 </div>
 
@@ -726,23 +753,21 @@ window.syncLiveScores = async function() {
   const btn = document.getElementById('btnSyncLive');
   if (btn) { btn.innerText = 'Syncing...'; btn.disabled = true; }
   try {
-    const res = await apiReq('fixtures?live=all');
+    // 1 CREDIT ONLY — single fixtures?live=all call (includes goals, status, events)
+    const res = await apiReq('fixtures?live=all&include=events');
     const liveFixtures = res.response || [];
     if (!liveFixtures.length) { showOk('No live matches right now.'); return; }
 
     const liveMap = new Map(liveFixtures.map(f => [f.fixture.id, f]));
     const liveScanned = window.scannedMatchesData.filter(d => liveMap.has(d.fixId));
-    if (!liveScanned.length) { showOk('No live matches in current scan set.'); return; }
-
-    const eventPromises = liveScanned.map(d => apiReq(`fixtures/events?fixture=${d.fixId}`));
-    const eventResults  = await Promise.all(eventPromises);
 
     let updCount = 0;
-    liveScanned.forEach((d, i) => {
+    liveScanned.forEach(d => {
       const liveData = liveMap.get(d.fixId);
       d.m.goals           = liveData.goals;
       d.m.fixture.status  = liveData.fixture.status;
-      const evStats = parseEventsForStats(eventResults[i]?.response || []);
+      // Parse events from inline data (no extra credit needed)
+      const evStats = parseEventsForStats(liveData.events || []);
       d.liveCorners = evStats.corners;
       d.liveCards   = evStats.totalCards;
       d.liveYellows = evStats.yellowCards;
@@ -752,7 +777,8 @@ window.syncLiveScores = async function() {
 
     renderSummaryTable();
     filterFeed();
-    showOk(`Synced ${updCount} live match${updCount !== 1 ? 'es' : ''} · Score + Corners + Cards`);
+    updateTicker();
+    showOk(`1 Credit used · Synced ${updCount} live match${updCount !== 1 ? 'es' : ''} · Score + Corners + Cards`);
   } catch (e) {
     showErr('Sync error: ' + e.message);
   } finally {
@@ -1014,6 +1040,21 @@ function rebuildTopLists() {
   latestTopLists.over25   = window.scannedMatchesData.filter(x=>x.omegaPick.includes('OVER 2.5')).sort((a,b)=>b.strength-a.strength).slice(0,5);
   latestTopLists.over35   = window.scannedMatchesData.filter(x=>x.omegaPick.includes('OVER 3.5')).sort((a,b)=>b.strength-a.strength).slice(0,5);
   latestTopLists.under25  = window.scannedMatchesData.filter(x=>x.omegaPick.includes('UNDER 2.5')).sort((a,b)=>b.strength-a.strength).slice(0,5);
+  // Top 6 Corner signals — sorted by cornerConf desc (all matches, not just signal)
+  latestTopLists.corners  = [...window.scannedMatchesData]
+    .filter(x => (x.cornerConf||0) > 0 || x.omegaPick.includes('ΚΟΡΝΕΡ'))
+    .sort((a,b) => (b.cornerConf||b.strength||0) - (a.cornerConf||a.strength||0))
+    .slice(0, 6);
+  // Top 6 Bombs — high-value underdog picks: low tXG but high xgDiff (upset potential)
+  latestTopLists.bombs    = [...window.scannedMatchesData]
+    .filter(x => !x.omegaPick.includes('NO BET'))
+    .sort((a,b) => {
+      // Score = strength * (1 / tXG) — low-scoring games with high pick confidence = surprise value
+      const scoreA = (a.strength||0) * (1 / Math.max(a.tXG||1, 0.5));
+      const scoreB = (b.strength||0) * (1 / Math.max(b.tXG||1, 0.5));
+      return scoreB - scoreA;
+    })
+    .slice(0, 6);
 }
 
 function renderSummaryTable() {
@@ -1103,7 +1144,9 @@ function renderTopSections() {
     {id:'over25',  lbl:'Over 2.5',           d:latestTopLists.over25,   sk:'tXG',      sl:'xG'},
     {id:'over35',  lbl:'Over 3.5',           d:latestTopLists.over35,   sk:'tXG',      sl:'xG'},
     {id:'under25', lbl:'Under 2.5',          d:latestTopLists.under25,  sk:'strength', sl:'CONF'},
-    {id:'exact',   lbl:'Exact Score',        d:latestTopLists.exact,    sk:'exactConf',sl:'CONF'}
+    {id:'exact',   lbl:'Exact Score',        d:latestTopLists.exact,    sk:'exactConf',sl:'CONF'},
+    {id:'corners', lbl:'🚩 Top Corners',     d:latestTopLists.corners,  sk:'cornerConf',sl:'COR%', isCorner:true},
+    {id:'bombs',   lbl:'💣 Top Bombs',       d:latestTopLists.bombs,    sk:'strength', sl:'CONF', isBomb:true},
   ];
   let html=`<div class="quant-panel" style="padding:0; overflow:hidden;"><div class="tabs-wrapper">`;
   tabs.forEach((t,i)=>{
@@ -1113,20 +1156,36 @@ function renderTopSections() {
   tabs.forEach((t,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'}" id="tabpanel-${t.id}">
       <div style="padding:0 20px 20px 20px; display:flex; flex-direction:column; gap:8px;">`;
-    if(!t.d.length) html+=`<div style="text-align:center;color:var(--text-muted);padding:20px 0;font-weight:600;">No high-confidence signals found.</div>`;
+    if(!t.d.length) html+=`<div style="text-align:center;color:var(--text-muted);padding:20px 0;font-weight:600;">No signals found.</div>`;
     t.d.forEach((x,j)=>{
-      const rawVal = t.id === 'exact' ? x.exact : Number(x[t.sk] || 0);
-      const val = t.id === 'exact' ? rawVal : rawVal.toFixed(1);
+      let val, valColor='var(--accent-blue)';
+      if(t.isCorner) {
+        val = (x.cornerConf||0).toFixed(1) + '%';
+        valColor = x.cornerConf>=70 ? 'var(--accent-teal)' : x.cornerConf>=55 ? 'var(--accent-gold)' : 'var(--text-muted)';
+      } else if(t.isBomb) {
+        val = (Number(x.strength||0)).toFixed(1) + '%';
+        valColor = 'var(--accent-purple)';
+      } else {
+        const rawVal = t.id === 'exact' ? x.exact : Number(x[t.sk] || 0);
+        val = t.id === 'exact' ? rawVal : rawVal.toFixed(1);
+      }
+      // Extra info for corners tab
+      const extraHtml = t.isCorner
+        ? `<div style="font-size:0.6rem;color:var(--accent-teal);margin-top:3px;">Proj: ${Number(x.hCors||0).toFixed(1)}+${Number(x.aCors||0).toFixed(1)} = ${(Number(x.hCors||0)+Number(x.aCors||0)).toFixed(1)} cor</div>`
+        : t.isBomb
+        ? `<div style="font-size:0.6rem;color:var(--accent-purple);margin-top:3px;">tXG: ${Number(x.tXG||0).toFixed(2)} · ${esc(x.omegaPick?.split(' ').slice(0,3).join(' ')||'')}</div>`
+        : '';
       html+=`
-      <div onclick="scrollToMatch('card-${x.fixId}')" style="display:flex; align-items:center; gap:16px; padding:12px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:var(--radius-sm); cursor:pointer; transition:border-color 0.2s;">
+      <div onclick="scrollToMatch('card-${x.fixId}')" style="display:flex; align-items:center; gap:16px; padding:12px; background:var(--bg-base); border:1px solid ${t.isCorner?'rgba(20,184,166,0.2)':t.isBomb?'rgba(139,92,246,0.2)':'var(--border-light)'}; border-radius:var(--radius-sm); cursor:pointer; transition:border-color 0.2s;">
         <div class="data-num" style="color:var(--text-muted); font-size:1.2rem;">#${j+1}</div>
         <div style="flex:1;">
           <div style="font-weight:700; font-size:0.9rem;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
           <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">${esc(x.lg)}</div>
           <div style="font-size:0.7rem; color:var(--accent-green); font-weight:600; margin-top:2px;">${esc(x.omegaPick)}</div>
+          ${extraHtml}
         </div>
         <div style="text-align:right;">
-          <div class="data-num" style="color:var(--accent-blue); font-size:1.1rem;">${val}</div>
+          <div class="data-num" style="color:${valColor}; font-size:1.1rem;">${val}</div>
           <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600;">${t.sl}</div>
         </div>
       </div>`;
@@ -1283,6 +1342,12 @@ async function analyzeMatch(m, index, total) {
   const hCors = Math.max(2,Math.round(totCorExp*hShare));
   const aCors = Math.max(2,Math.round(totCorExp-hCors));
   const cornerAn = analyzeCorners(hCors, aCors, hS.sXG, aS.sXG, hS.fXG, aS.fXG);
+
+  // Compute cornerConf for Top Corners tab ranking
+  const cornerConf = typeof computeCornerConfidence === 'function'
+    ? computeCornerConfidence(hS, aS, hXG, aXG)
+    : (hCors + aCors > 9.5 ? 72 : hCors + aCors > 8 ? 58 : 40);
+
   const rec = {
     m, fixId: m.fixture.id, ht: m.teams.home.name, at: m.teams.away.name,
     lg: m.league.name, leagueId: m.league.id, tXG, btts: bttsScore, cor,
@@ -1293,7 +1358,7 @@ async function analyzeMatch(m, index, total) {
     hr: getTeamRank(stand, m.teams.home.id) ?? 99, ar: getTeamRank(stand, m.teams.away.id) ?? 99,
     hCors, aCors, totCors: hCors+aCors, totCards, hS, aS,
     h2h: summarizeH2H(h2hFix, m.teams.home.id, m.teams.away.id),
-    cornerAn,
+    cornerAn, cornerConf,
     isBomb: false,
     isLockO25:  tXG >= (lp.minXGO25+0.15) && bttsScore >= 1.00,
     isLockBTTS: bttsScore >= (lp.minBTTS+0.05) && tXG >= 2.50,
@@ -1331,6 +1396,8 @@ async function runScan() {
     rebuildTopLists();
     renderTopSections(); renderWallBets(); renderSummaryTable();
     document.getElementById('feedFilterSection').style.display='block'; filterFeed();
+    updateTicker();
+    startAutoSync();
     showOk(`Scan complete. ${all.length} matches analyzed.`);
   } catch(e){ showErr(e.message); }
   finally { isRunning=false; setLoader(false); setBtnsDisabled(false); }
@@ -1547,6 +1614,83 @@ window.addEventListener('DOMContentLoaded', () => {
   const sel=document.getElementById('leagueFilter');
   LEAGUES_DATA.forEach(l=>sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`);
 });
+
+// ================================================================
+//  TICKER ENGINE
+// ================================================================
+let _tickerAnim = null;
+let _tickerSpeed = 40; // px/sec
+
+function buildTickerItems() {
+  const data = window.scannedMatchesData || [];
+  if (!data.length) return '';
+  return data.map(d => {
+    const status = d.m?.fixture?.status;
+    const sh = status?.short || '';
+    const live = isLive(sh);
+    const fin  = isFinished(sh);
+    const gh = d.m?.goals?.home ?? '?', ga = d.m?.goals?.away ?? '?';
+    const scoreClass = live ? 't-live' : fin ? 't-fin' : '';
+    const scoreStr = (live || fin) ? `<span class="t-score ${scoreClass}">${gh}-${ga}</span>` : '';
+    const elapsed = live && status?.elapsed ? `<span style="font-size:0.55rem;color:var(--accent-green)">${status.elapsed}'</span>` : '';
+    const pickShort = d.omegaPick?.split(' ').slice(0,2).join(' ') || '';
+    const pickHtml = !d.omegaPick?.includes('NO BET') ? `<span class="t-pick">${esc(pickShort)}</span>` : '';
+    const corHtml = d.liveCorners !== undefined ? `<span class="t-cor">🚩${d.liveCorners}</span>` : '';
+    return `<div class="ticker-item">${live?'<span class="live-dot"></span>':''}${esc(d.ht)} vs ${esc(d.at)} ${scoreStr}${elapsed}${pickHtml}${corHtml}</div>`;
+  }).join('');
+}
+
+function updateTicker() {
+  const bar    = document.getElementById('tickerBar');
+  const inner  = document.getElementById('tickerInner');
+  const data   = window.scannedMatchesData || [];
+  if (!data.length || !bar || !inner) return;
+
+  const items = buildTickerItems();
+  // Duplicate for seamless loop
+  inner.innerHTML = items + items;
+  bar.style.display = 'flex';
+  startTickerAnimation();
+}
+
+function startTickerAnimation() {
+  if (_tickerAnim) cancelAnimationFrame(_tickerAnim);
+  const inner = document.getElementById('tickerInner');
+  const track = document.getElementById('tickerTrack');
+  if (!inner || !track) return;
+
+  let pos = 0;
+  const halfWidth = inner.scrollWidth / 2;
+  let lastTime = null;
+
+  function step(ts) {
+    if (lastTime === null) lastTime = ts;
+    const dt = (ts - lastTime) / 1000;
+    lastTime = ts;
+    pos += _tickerSpeed * dt;
+    if (pos >= halfWidth) pos = 0;
+    inner.style.transform = `translateX(-${pos}px)`;
+    _tickerAnim = requestAnimationFrame(step);
+  }
+  _tickerAnim = requestAnimationFrame(step);
+}
+
+window.updateTickerSpeed = function(val) {
+  _tickerSpeed = parseFloat(val);
+};
+
+// ================================================================
+//  AUTO LIVE SYNC (every 90s when live matches exist)
+// ================================================================
+let _liveAutoInterval = null;
+function startAutoSync() {
+  if (_liveAutoInterval) clearInterval(_liveAutoInterval);
+  _liveAutoInterval = setInterval(async () => {
+    const hasLive = window.scannedMatchesData.some(d => isLive(d.m?.fixture?.status?.short));
+    if (hasLive) syncLiveScores();
+  }, 90000);
+}
+
 </script>
 </body>
 </html>
