@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.0 — MASTER ENGINE (Calibrated for Max ROI)
+// APEX OMEGA v5.0 — MASTER ENGINE (Calibrated Edition)
 // Poisson · xG · Corners · Live Sync · Audit · Bankroll · Evolution Tracker
 // ==========================================================================
 
@@ -18,12 +18,12 @@ let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], u
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
-// 🎯 CALIBRATED ENGINE DEFAULTS (Based on Telemetry)
+// 🎯 CALIBRATED ENGINE DEFAULTS
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
-  tXG_O25:2.75,  tXG_O35:3.30,   tXG_U25:1.80,  tBTTS_U25:0.65, // +0.05 αυστηρότητα στα Over
-  xG_Diff:0.48,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.15, // -0.07 στο xG Diff για να βρίσκει περισσότερα σημεία (1X2)
-  minCorners:10.5, minCards:6.1 // Αυστηρότερο όριο στις κάρτες
+  tXG_O25:2.75,  tXG_O35:3.40,   tXG_U25:1.80,  tBTTS_U25:0.65,
+  xG_Diff:0.48,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.15,
+  minCorners:11.0, minCards:6.1 
 };
 let engineConfig = { ...DEFAULT_SETTINGS };
 let leagueMods   = {};
@@ -31,7 +31,7 @@ let leagueMods   = {};
 const SETTINGS_MAP = {
   cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
   cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
-  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS',         cfg_minCorners:'minCorners',
+  cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS',         cfg_minCorners:'minCorners', cfg_minCards:'minCards',
   cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold'
 };
 
@@ -207,7 +207,7 @@ function computeCornerConfidence(hS,aS,hXG,aXG){
 }
 
 // ================================================================
-//  PICK ENGINE (CALIBRATED)
+//  PICK ENGINE (Calibrated)
 // ================================================================
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
@@ -221,19 +221,17 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   
   let omegaPick='NO BET',reason='Insufficient statistical edge.',pickScore=0;
   
-  if(pp.pO35>=0.42&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
-  // Αυστηρότερο Over 2.5: Ζητάμε pO25 >= 54% και btts >= 0.90 (αποφυγή False Positives τύπου Hertha-Kiel)
+  // Αυστηρότερο O3.5
+  if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
   else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 OVER 2.5 GOALS';pickScore=pp.pO25*100;reason=`Poisson O2.5: ${pct(pp.pO25)} | tXG:${tXG.toFixed(2)}`;}
-  // Ασφαλέστερο Under 2.5
-  else if(pp.pU25>=0.56&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
-  // Αυστηρότερο BTTS
+  else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
   else if(btts>=lp.minBTTS&&pp.pBTTS>=0.50&&hXG>=0.95&&aXG>=0.95){omegaPick='🎯 GOAL/GOAL (BTTS)';pickScore=pp.pBTTS*100;reason=`BTTS: ${pct(pp.pBTTS)}`;}
-  // Πιο ευέλικτο 1X2: Το xgDiff+0.05 (αντί για 0.10) βρίσκει τα κρυμμένα φαβορί
-  else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff+0.05){
+  else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff){
     const outcome=outPick==='1'?'🏠 ΑΣΟΣ':'✈️ ΔΙΠΛΟ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
     if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Home':'Away'}: ${pct(outProb)}`;}
   }
-  else if(cornerRes.conf>=65){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
+  // Αυστηρότερα Κόρνερ
+  else if(cornerRes.conf>=72){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
   else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 OVER 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Avg Cards: ${totCards.toFixed(1)}`;}
   
   const exactConf=Math.round(clamp(pp.bestScore.prob*100*8,0,99));
@@ -329,7 +327,6 @@ function tickerRefresh(){
   const bar=document.getElementById('tickerBar'),inner=document.getElementById('tickerInner');if(!bar||!inner)return;
   const data=window.scannedMatchesData||[];if(!data.length)return;
   
-  // LIVE ONLY FILTER
   const liveMatches = data.filter(d => isLive(d.m?.fixture?.status?.short || ''));
   if(!liveMatches.length){bar.style.display='none'; if(_tickerRaf)cancelAnimationFrame(_tickerRaf); return;}
   
@@ -352,7 +349,7 @@ function tickerRefresh(){
 window.setTickerSpeed=v=>{_tickerPx=parseFloat(v);};
 
 // ================================================================
-//  TOP LISTS & TABS (ONLY ACTIVE MATCHES)
+//  TOP LISTS & TABS
 // ================================================================
 function rebuildTopLists(){
   const sd = (window.scannedMatchesData||[]).filter(x => !isFinished(x.m?.fixture?.status?.short));
@@ -417,14 +414,13 @@ function renderSummaryTable() {
   const sec = document.getElementById('summarySection'); if(!sec) return;
   const sd = window.scannedMatchesData || []; if(!sd.length) { sec.innerHTML=''; return; }
   
-  // Διαχωρισμός Ενεργών / Τελειωμένων
   const activeMatches = sd.filter(d => !isFinished(d.m?.fixture?.status?.short));
   const finishedMatches = sd.filter(d => isFinished(d.m?.fixture?.status?.short));
 
   let finalHtml = '';
   const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
 
-  // --- 1. ACTIVE MATCHES (Upcoming & Live) ---
+  // 1. ACTIVE MATCHES
   if (activeMatches.length > 0) {
     const grouped={}; activeMatches.forEach(d=>{ if(!grouped[d.lg]) grouped[d.lg]=[]; grouped[d.lg].push(d); });
     let rows='';
@@ -452,7 +448,6 @@ function renderSummaryTable() {
           <td class="col-conf data-num" style="color:${confCol};">${conf.toFixed(0)}%</td>
           <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.7rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         </tr>
-        
         <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
           <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);">
             <div style="display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;">
@@ -494,7 +489,7 @@ function renderSummaryTable() {
       </div>${rows}</div>`;
   }
 
-  // --- 2. FINISHED MATCHES (Post-Match Evolution) ---
+  // 2. FINISHED MATCHES
   if (finishedMatches.length > 0) {
     let fRows = '';
     finishedMatches.forEach(x => {
