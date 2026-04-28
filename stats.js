@@ -1,6 +1,6 @@
 // ==========================================================================
-// APEX OMEGA v5.0 — MASTER ENGINE (Calibrated Edition)
-// Poisson · xG · Corners · Live Sync · Audit · Bankroll · Evolution Tracker
+// APEX OMEGA v5.0 — MASTER ENGINE (Player Props & Post-Match Evolution)
+// Poisson · xG · Corners · Scorers · Live Sync · Audit · Bankroll
 // ==========================================================================
 
 const API_BASE = "https://v3.football.api-sports.io";
@@ -12,9 +12,9 @@ const LS_LGMODS   = "omega_lgmods_v5.0";
 const LS_BANKROLL = "omega_bankroll_v5.0";
 
 let teamStatsCache = new Map(), lastFixCache = new Map(),
-    standCache = new Map(), h2hCache = new Map();
+    standCache = new Map(), h2hCache = new Map(), scorersCache = new Map();
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], scorers:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -125,7 +125,7 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 }
 
 // ================================================================
-//  API FETCHING
+//  API FETCHING & CACHING
 // ================================================================
 async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
@@ -141,6 +141,17 @@ async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has
 async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
 async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return standCache.get(k);const d=await apiReq(`standings?league=${lg}&season=${s}`);const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];standCache.set(k,f);return f;}
 async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
+
+// 🎯 TOP SCORERS CACHE (Smart 1-Call per League)
+async function getLeagueTopScorers(lg, s) {
+  const k = `${lg}_${s}`;
+  if(scorersCache.has(k)) return scorersCache.get(k);
+  const d = await apiReq(`players/topscorers?league=${lg}&season=${s}`);
+  const scorers = d?.response || [];
+  scorersCache.set(k, scorers);
+  return scorers;
+}
+
 const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ================================================================
@@ -168,14 +179,17 @@ async function buildIntel(tId,lg,s,isHome){
     const gen=allFix.slice(0,6);const split=allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
     const[fData,sData]=await Promise.all([batchCalc(gen,tId),batchCalc(split,tId)]);
     const sXG=parseFloat(ss?.goals?.for?.average?.total)||1.35, sXGA=parseFloat(ss?.goals?.against?.average?.total)||1.35;
+    const totalTeamGoalsSeason = parseInt(ss?.goals?.for?.total?.total) || 0;
+    
     return{
       fXG:Math.max(safeNum(fData.xg,sXG),0.80), fXGA:Math.max(safeNum(fData.xga,sXGA),0.80), sXG:Math.max(safeNum(sData.xg,sXG),0.80),
       formRating:getFormRating(getFormHistory(gen,tId)),
       corRatio:safeNum(fData.corRatio, 3.5), cor:safeNum(fData.cor, 4.8), crd:safeNum(fData.crd, 2.1),
       uiXG:fData.xg, uiXGA:fData.xga, uiSXG:sData.xg, uiSXGA:sData.xga,
-      history:getFormHistory(gen,tId)
+      history:getFormHistory(gen,tId),
+      totalTeamGoalsSeason: totalTeamGoalsSeason
     };
-  }catch{return{fXG:1.35,fXGA:1.35,sXG:1.35,formRating:50,corRatio:3.5,cor:4.8,crd:2.1,uiXG:'1.35',uiXGA:'1.35',uiSXG:'1.35',uiSXGA:'1.35',history:[]};}
+  }catch{return{fXG:1.35,fXGA:1.35,sXG:1.35,formRating:50,corRatio:3.5,cor:4.8,crd:2.1,uiXG:'1.35',uiXGA:'1.35',uiSXG:'1.35',uiSXGA:'1.35',history:[],totalTeamGoalsSeason:0};}
 }
 
 function summarizeH2H(fixtures,homeId,awayId){
@@ -195,6 +209,33 @@ function getLeagueParams(leagueId){
   return{mult:lm.mult??defMult,minXGO25:lm.minXGO25??engineConfig.tXG_O25,minXGO35:lm.minXGO35??engineConfig.tXG_O35,maxU25:lm.maxU25??engineConfig.tXG_U25,minBTTS:lm.minBTTS??engineConfig.tBTTS,xgDiff:lm.xgDiff??defDiff};
 }
 
+// 🎯 PLAYER PROPS MODEL (Anytime Goalscorer)
+function calculateScorerProb(leagueScorers, teamId, teamLambdaXG, teamTotalGoals) {
+  if(!leagueScorers || leagueScorers.length === 0 || teamTotalGoals <= 0) return null;
+  // Find the top scorer for this specific team in the league list
+  const playerInfo = leagueScorers.find(p => p.statistics[0].team.id === teamId);
+  if(!playerInfo) return null;
+  
+  const playerGoals = playerInfo.statistics[0].goals.total || 0;
+  if(playerGoals === 0) return null;
+
+  // 1. Goal Contribution % 
+  const contribution = Math.min(playerGoals / teamTotalGoals, 0.70); // Max 70% cap for realism
+  
+  // 2. Player Expected Goals for TODAY
+  const playerXG = teamLambdaXG * contribution;
+  
+  // 3. Poisson Probability (At least 1 goal = 1 - Probability of 0 goals)
+  const prob = (1 - Math.exp(-playerXG)) * 100;
+  
+  return {
+    name: playerInfo.player.name,
+    goals: playerGoals,
+    photo: playerInfo.player.photo,
+    prob: prob
+  };
+}
+
 function computeCornerConfidence(hS,aS,hXG,aXG){
   const expH=hXG*safeNum(hS.corRatio,3.5),expA=aXG*safeNum(aS.corRatio,3.5);
   let expCor=expH+expA;const xgD=Math.abs(hXG-aXG);
@@ -207,7 +248,7 @@ function computeCornerConfidence(hS,aS,hXG,aXG){
 }
 
 // ================================================================
-//  PICK ENGINE (Calibrated)
+//  PICK ENGINE
 // ================================================================
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
@@ -221,7 +262,6 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   
   let omegaPick='NO BET',reason='Insufficient statistical edge.',pickScore=0;
   
-  // Αυστηρότερο O3.5
   if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
   else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 OVER 2.5 GOALS';pickScore=pp.pO25*100;reason=`Poisson O2.5: ${pct(pp.pO25)} | tXG:${tXG.toFixed(2)}`;}
   else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
@@ -230,7 +270,6 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
     const outcome=outPick==='1'?'🏠 ΑΣΟΣ':'✈️ ΔΙΠΛΟ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
     if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Home':'Away'}: ${pct(outProb)}`;}
   }
-  // Αυστηρότερα Κόρνερ
   else if(cornerRes.conf>=72){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
   else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 OVER 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Avg Cards: ${totCards.toFixed(1)}`;}
   
@@ -244,11 +283,24 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
 async function analyzeMatchSafe(m,index,total){
   try{
     setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
-    const[hS,aS,stand,h2hFix]=await Promise.all([buildIntel(m.teams.home.id,m.league.id,m.league.season,true),buildIntel(m.teams.away.id,m.league.id,m.league.season,false),getStand(m.league.id,m.league.season),getH2H(m.teams.home.id,m.teams.away.id)]);
+    
+    // Fetch base intel + Top Scorers for the league
+    const[hS, aS, stand, h2hFix, leagueScorers] = await Promise.all([
+      buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
+      buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
+      getStand(m.league.id, m.league.season),
+      getH2H(m.teams.home.id, m.teams.away.id),
+      getLeagueTopScorers(m.league.id, m.league.season)
+    ]);
+    
     const lp=getLeagueParams(m.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
     const tXG=hXG+aXG,bttsScore=Math.min(hXG,aXG);const result=computePick(hXG,aXG,tXG,bttsScore,lp,hS,aS);
     
-    // FETCH ACTUAL STATS IF MATCH IS FINISHED (FOR POST-MATCH EVOLUTION)
+    // 🎯 Calculate Goalscorer Probabilities
+    const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason);
+    const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason);
+
+    // FETCH ACTUAL STATS IF MATCH IS FINISHED
     let actStats = null;
     if (isFinished(m.fixture.status.short)) {
       const sr = await apiReq(`fixtures/statistics?fixture=${m.fixture.id}`);
@@ -268,7 +320,7 @@ async function analyzeMatchSafe(m,index,total){
       tXG,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,exact:`${result.hG}-${result.aG}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:summarizeH2H(h2hFix,m.teams.home.id,m.teams.away.id),
-      actStats, isBomb:false
+      actStats, isBomb:false, hScorerProb, aScorerProb
     });
   }catch(err){
     window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:'Analysis error',strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
@@ -281,7 +333,7 @@ window.runScan=async function(){
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
-  window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();
+  window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear(); scorersCache.clear();
   try{
     const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
@@ -300,7 +352,7 @@ window.runScan=async function(){
 };
 
 // ================================================================
-//  LIVE SYNC & TICKER (ONLY LIVE MATCHES)
+//  LIVE SYNC & TICKER
 // ================================================================
 window.syncLiveScores=async function(){
   if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
@@ -451,6 +503,7 @@ function renderSummaryTable() {
         <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
           <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);">
             <div style="display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;">
+              
               <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
                 <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Home vs Away Breakdown</h4>
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
@@ -459,20 +512,34 @@ function renderSummaryTable() {
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
                 <div style="display:flex;gap:2px;margin-top:6px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:2px;margin-top:3px;">${formDots(x.aS?.history)}</div>
               </div>
+
               <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-                <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">🚩 Advanced Corner Model</h4>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Home Avg / Ratio</span><span class="data-num">${Number(x.hS?.cor||0).toFixed(1)} | ${(Number(x.hS?.corRatio)||3.5).toFixed(2)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Away Avg / Ratio</span><span class="data-num">${Number(x.aS?.cor||0).toFixed(1)} | ${(Number(x.aS?.corRatio)||3.5).toFixed(2)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--accent-green);"><span>P(Over 8.5)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
+                <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">🎯 Top Scorer Projections</h4>
+                <div style="margin-bottom:10px;">
+                  <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">🏠 Home Team Scorer</div>
+                  ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:600; font-size:0.8rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.hScorerProb.goals}G)</span></span>
+                    <span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.hScorerProb.prob.toFixed(1)}%</span>
+                  </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No data available</span>`}
+                </div>
+                <div style="border-top:1px solid var(--border-light); padding-top:10px;">
+                  <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">✈️ Away Team Scorer</div>
+                  ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:600; font-size:0.8rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.aScorerProb.goals}G)</span></span>
+                    <span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.aScorerProb.prob.toFixed(1)}%</span>
+                  </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No data available</span>`}
+                </div>
               </div>
+
               <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
                 <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Game Projections</h4>
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson U2.5</span><span class="data-num" style="color:var(--accent-teal)">${x.pp?pct(x.pp.pU25):'—'}</span></div>
+                <div style="display:flex; justify-content:space-between; margin-top:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
               </div>
+              
               <div style="flex:1; min-width:320px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
                 <h4 style="color:var(--text-muted); text-align:center; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;">📊 Poisson Score Matrix</h4>
                 ${pHtml}
