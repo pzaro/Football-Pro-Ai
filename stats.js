@@ -21,8 +21,8 @@ let bankrollData = { current: 0, history: [] };
 // 🎯 CALIBRATED ENGINE DEFAULTS
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
-  tXG_O25:2.75,  tXG_O35:3.40,   tXG_U25:1.80,  tBTTS_U25:0.65,
-  xG_Diff:0.48,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.15,
+  tXG_O25:2.80,  tXG_O35:3.40,   tXG_U25:1.80,  tBTTS_U25:0.65,
+  xG_Diff:0.48,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.12,
   minCorners:11.0, minCards:6.1 
 };
 let engineConfig = { ...DEFAULT_SETTINGS };
@@ -274,6 +274,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
 async function analyzeMatchSafe(m,index,total){
   try{
     setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
+    
     const[hS, aS, stand, h2hFix, leagueScorers] = await Promise.all([
       buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
       buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
@@ -385,7 +386,6 @@ function tickerRefresh(){
   function step(ts){if(last===null)last=ts;const dt=Math.min((ts-last)/1000,0.1);last=ts;pos+=_tickerPx*dt;const half=inner.scrollWidth/2;if(pos>=half)pos=0;inner.style.transform=`translateX(-${pos.toFixed(1)}px)`;_tickerRaf=requestAnimationFrame(step);}
   _tickerRaf=requestAnimationFrame(step);
 }
-window.setTickerSpeed=v=>{_tickerPx=parseFloat(v);};
 
 // ================================================================
 //  TOP LISTS & TABS
@@ -413,21 +413,21 @@ function renderTopSections(){
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
-    if(!tab.d.length){html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;">Δεν βρέθηκαν σήματα.</div>`;}
+    if(!tab.d.length){html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;}
     else{
-      html+=`<div style="display:flex;flex-direction:column;gap:8px;">`;
+      html+=`<div style="display:flex;flex-direction:column;gap:10px;">`;
       tab.d.forEach((x,j)=>{
         let val=tab.id==='exact'?x.exact||'?-?':Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
-        html+=`<div onclick="scrollToMatch('row-${x.fixId}')" style="display:flex;align-items:center;gap:14px;padding:11px 14px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.18s;">
-          <div style="font-family:var(--font-mono);font-size:1.05rem;color:var(--text-dim);min-width:26px;text-align:center;">#${j+1}</div>
+        html+=`<div onclick="scrollToMatch('row-${x.fixId}')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.18s;">
+          <div style="font-family:var(--font-mono);font-size:1.2rem;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
           <div style="flex:1;min-width:0;">
-            <div style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
-            <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">${esc(x.lg)}</div>
-            <div style="font-size:0.7rem;color:var(--accent-green);font-weight:600;margin-top:2px;">${esc(x.omegaPick)}</div>
+            <div style="font-weight:700;font-size:1.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;margin-top:4px;">${esc(x.lg)}</div>
+            <div style="font-size:0.85rem;color:var(--accent-green);font-weight:600;margin-top:4px;">${esc(x.omegaPick)}</div>
           </div>
           <div style="text-align:right;flex-shrink:0;">
-            <div style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--accent-blue);">${val}</div>
-            <div style="font-size:0.58rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;">${tab.sl}</div>
+            <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:800;color:var(--accent-blue);">${val}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;">${tab.sl}</div>
           </div>
         </div>`;
       });
@@ -449,47 +449,52 @@ window.toggleMatchDetails = function(id) {
   if(el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
 };
 
+// 🌟 THE NEW RESPONSIVE ACCORDION (Grid Based)
 function buildAccordionHTML(x) {
   const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
   const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
   return `
-    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);">
-      <div style="display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;">
-        <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-          <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Home vs Away Breakdown</h4>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
-          <div style="display:flex;gap:2px;margin-top:6px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:2px;margin-top:3px;">${formDots(x.aS?.history)}</div>
+    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
+      <div class="accordion-grid">
+        
+        <div class="accordion-card">
+          <h4>Home vs Away Breakdown</h4>
+          <div class="accordion-row"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
+          <div class="accordion-row"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
+          <div class="accordion-row"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
+          <div class="accordion-row" style="color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
+          <div style="display:flex;gap:4px;margin-top:10px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:4px;margin-top:6px;">${formDots(x.aS?.history)}</div>
         </div>
-        <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-          <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">🎯 Top Scorer Projections</h4>
-          <div style="margin-bottom:10px;">
-            <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">🏠 Home Team Scorer</div>
+
+        <div class="accordion-card">
+          <h4>🎯 Top Scorer Projections</h4>
+          <div style="margin-bottom:15px;">
+            <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">🏠 Home Team Scorer</div>
             ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-weight:600; font-size:0.8rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.hScorerProb.goals}G)</span></span>
-              <span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.hScorerProb.prob.toFixed(1)}%</span>
-            </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No top 20 data available</span>`}
+              <span style="font-weight:700; font-size:0.95rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.hScorerProb.goals}G)</span></span>
+              <span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.hScorerProb.prob.toFixed(1)}%</span>
+            </div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No top 20 data available</span>`}
           </div>
-          <div style="border-top:1px solid var(--border-light); padding-top:10px;">
-            <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">✈️ Away Team Scorer</div>
+          <div style="border-top:1px solid var(--border-light); padding-top:15px;">
+            <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">✈️ Away Team Scorer</div>
             ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-weight:600; font-size:0.8rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.aScorerProb.goals}G)</span></span>
-              <span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.aScorerProb.prob.toFixed(1)}%</span>
-            </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No top 20 data available</span>`}
+              <span style="font-weight:700; font-size:0.95rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.aScorerProb.goals}G)</span></span>
+              <span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.aScorerProb.prob.toFixed(1)}%</span>
+            </div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No top 20 data available</span>`}
           </div>
         </div>
-        <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-          <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Game Projections</h4>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
+
+        <div class="accordion-card">
+          <h4>Game Projections</h4>
+          <div class="accordion-row"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
+          <div class="accordion-row"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
+          <div class="accordion-row"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
+          <div class="accordion-row" style="margin-top:10px; border-top:1px solid var(--border-light); padding-top:10px; color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
+          <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
         </div>
-        <div style="flex:1; min-width:320px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-          <h4 style="color:var(--text-muted); text-align:center; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;">📊 Poisson Score Matrix</h4>
+        
+        <div class="accordion-card" style="min-width: 320px;">
+          <h4 style="text-align:center;">📊 Poisson Score Matrix</h4>
           ${pHtml}
         </div>
       </div>
@@ -511,7 +516,7 @@ function renderSummaryTable() {
     const grouped={}; activeMatches.forEach(d=>{ if(!grouped[d.lg]) grouped[d.lg]=[]; grouped[d.lg].push(d); });
     let rows='';
     for(const[lg,matches] of Object.entries(grouped)){
-      rows+=`<div style="background:rgba(56,189,248,0.05);padding:7px 16px;font-weight:700;font-size:0.7rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;">${esc(lg)}</div>
+      rows+=`<div style="background:rgba(56,189,248,0.05);padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;">${esc(lg)}</div>
       <div class="data-table-wrapper" style="border:none;border-radius:0;margin-bottom:0;"><table class="summary-table">
       <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">1X2</th><th class="col-o25">O2.5</th><th class="col-u25">U2.5</th><th class="col-btts">BTTS</th><th class="col-exact">Exact</th><th class="col-conf">Conf%</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
       matches.forEach(x=>{
@@ -520,18 +525,18 @@ function renderSummaryTable() {
         const scoreStr=live?`${ah}-${aa}`:'-'; const scoreCol=live?'var(--accent-green)':'var(--text-muted)';
         const conf=clamp(safeNum(x.strength),0,100); const confCol=conf>=65?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--text-muted)';
         let omCol=x.omegaPick?.includes('NO BET')?'var(--text-muted)':'var(--text-main)';
-        const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.56rem;color:var(--accent-teal);margin-top:2px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
+        const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.65rem;color:var(--accent-teal);margin-top:4px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
         
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
-          <td class="col-match left-align" style="font-weight:600;">${live?'<span class="live-dot" style="width:6px;height:6px;margin-right:4px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}</td>
-          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}</td>
-          <td class="col-1x2 data-num">${x.outPick}</td>
-          <td class="col-o25 data-num">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
-          <td class="col-u25 data-num">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
-          <td class="col-btts data-num">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
-          <td class="col-exact data-num">${x.exact||'?-?'}</td>
-          <td class="col-conf data-num" style="color:${confCol};">${conf.toFixed(0)}%</td>
-          <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.7rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
+          <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}</td>
+          <td class="col-score data-num" style="color:${scoreCol}; font-size:1.1rem;">${scoreStr}${liveExtra}</td>
+          <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
+          <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
+          <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
+          <td class="col-btts data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
+          <td class="col-exact data-num" style="font-size:1.1rem;">${x.exact||'?-?'}</td>
+          <td class="col-conf data-num" style="color:${confCol}; font-size:1.1rem;">${conf.toFixed(0)}%</td>
+          <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.85rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         </tr>
         <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
           ${buildAccordionHTML(x)}
@@ -540,8 +545,8 @@ function renderSummaryTable() {
       rows+=`</tbody></table></div>`;
     }
     finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;">
-      <div style="padding:13px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:0.78rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:1px;">📊 Match Dashboard (Active) — ${activeMatches.length} αγώνες</span>
+      <div style="padding:15px 20px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:1px;">📊 Match Dashboard (Active) — ${activeMatches.length} αγώνες</span>
       </div>${rows}</div>`;
   }
 
@@ -565,17 +570,17 @@ function renderSummaryTable() {
           else if(x.omegaPick.includes('ΔΙΠΛΟ')) hit = aOut === '2';
           else if(x.omegaPick.includes('ΚΟΡΝΕΡ')) hit = (hCor+aCor) > 8.5;
           else if(x.omegaPick.includes('ΚΑΡΤΕΣ')) hit = (hCrd+aCrd) > 5.5;
-          hitHtml = hit ? `<span style="background:rgba(16,185,129,0.15);color:var(--accent-green);padding:2px 6px;border-radius:4px;font-weight:800;font-size:0.65rem;">✅ WON</span>` : `<span style="background:rgba(244,63,94,0.15);color:var(--accent-red);padding:2px 6px;border-radius:4px;font-weight:800;font-size:0.65rem;">❌ LOST</span>`;
+          hitHtml = hit ? `<span style="background:rgba(16,185,129,0.15);color:var(--accent-green);padding:4px 8px;border-radius:4px;font-weight:800;font-size:0.75rem;">✅ WON</span>` : `<span style="background:rgba(244,63,94,0.15);color:var(--accent-red);padding:4px 8px;border-radius:4px;font-weight:800;font-size:0.75rem;">❌ LOST</span>`;
       }
 
       fRows += `<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;">
-        <td class="left-align" style="font-weight:600;">${esc(x.ht)} - ${esc(x.at)}</td>
-        <td class="data-num" style="color:var(--text-main);">${ah}-${aa}</td>
-        <td class="data-num">${hXGAct} - ${aXGAct}</td>
-        <td class="data-num">${hPoss}% - ${aPoss}%</td>
-        <td class="data-num">${hCor} - ${aCor}</td>
-        <td class="data-num">${hCrd} - ${aCrd}</td>
-        <td style="font-size:0.65rem;font-weight:800;color:var(--text-main);">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
+        <td class="left-align" style="font-weight:700; font-size:1.05rem;">${esc(x.ht)} - ${esc(x.at)}</td>
+        <td class="data-num" style="color:var(--text-main); font-size:1.1rem;">${ah}-${aa}</td>
+        <td class="data-num" style="font-size:1.1rem;">${hXGAct} - ${aXGAct}</td>
+        <td class="data-num" style="font-size:1.1rem;">${hPoss}% - ${aPoss}%</td>
+        <td class="data-num" style="font-size:1.1rem;">${hCor} - ${aCor}</td>
+        <td class="data-num" style="font-size:1.1rem;">${hCrd} - ${aCrd}</td>
+        <td style="font-size:0.85rem;font-weight:800;color:var(--text-main);">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         <td>${hitHtml}</td>
       </tr>
       <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
@@ -583,9 +588,9 @@ function renderSummaryTable() {
       </tr>`;
     });
 
-    finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(16,185,129,0.3);">
-      <div style="background:rgba(16,185,129,0.1);padding:13px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:0.78rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;">🏁 Post-Match Evolution (Finished) — ${finishedMatches.length} αγώνες</span>
+    finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:30px;border-color:rgba(16,185,129,0.5);">
+      <div style="background:rgba(16,185,129,0.1);padding:15px 20px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;">🏁 Post-Match Evolution (Finished) — ${finishedMatches.length} αγώνες</span>
       </div>
       <div class="data-table-wrapper" style="border:none;margin:0;">
         <table class="summary-table">
@@ -602,8 +607,8 @@ function renderSummaryTable() {
 // ================================================================
 //  AUDIT & VAULT
 // ================================================================
-window.runCustomAudit=async function(){const s=document.getElementById('auditStart').value,e=document.getElementById('auditEnd').value;if(!s||!e){showErr('Επιλέξτε ημερομηνίες.');return;}if(isRunning)return;isRunning=true;setBtnsDisabled(true);setLoader(true,'Running Audit...');document.getElementById('auditSection').innerHTML='';try{const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const endD=new Date(e);endD.setDate(endD.getDate()+1);const lgFilter=document.getElementById('auditLeague')?.value||'ALL';let cands=store.filter(x=>{const d=new Date(x.date);return d>=new Date(s)&&d<endD;});if(lgFilter!=='ALL')cands=cands.filter(x=>String(x.leagueId)===lgFilter);if(!cands.length){document.getElementById('auditSection').innerHTML=`<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;">Δεν υπάρχουν δεδομένα.</div>`;return;}let stats={games:0,outHit:0,validOut:0,o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,exHit:0};const rows=[],curveData=[];for(let i=0;i<cands.length;i++){const p=cands[i];setProgress(Math.round(((i+1)/cands.length)*100),`Auditing: ${p.homeTeam}`);const fr=await apiReq(`fixtures?id=${p.fixtureId}`);const fix=fr?.response?.[0];if(!fix||!isFinished(fix?.fixture?.status?.short))continue;const ah=safeNum(fix.goals.home),aa=safeNum(fix.goals.away);const aTot=ah+aa,aExact=`${ah}-${aa}`,aOut=ah>aa?'1':ah<aa?'2':'X',aBtts=ah>0&&aa>0;stats.games++;if(p.outPick==='1'||p.outPick==='2'){stats.validOut++;if(p.outPick===aOut)stats.outHit++;}if(p.predOver25){stats.o25T++;if(aTot>2.5)stats.o25H++;}if(p.predOver35){stats.o35T++;if(aTot>3.5)stats.o35H++;}if(p.predUnder25){stats.u25T++;if(aTot<2.5)stats.u25H++;}if(p.predBTTS){stats.bttsT++;if(aBtts)stats.bttsH++;}if(p.exactScorePred===aExact)stats.exHit++;curveData.push({tXG:p.tXG||2.5,hitO25:aTot>2.5?1:0});rows.push({p,ah,aa,aTot,aExact,aOut,aBtts});}const rv=(h,t)=>t>0?h/t*100:0;const col=v=>v>=80?'var(--accent-green)':v>=60?'var(--accent-gold)':'var(--accent-red)';const statsCards=[{lbl:'1X2',h:stats.outHit,t:stats.validOut},{lbl:'O2.5',h:stats.o25H,t:stats.o25T},{lbl:'O3.5',h:stats.o35H,t:stats.o35T},{lbl:'U2.5',h:stats.u25H,t:stats.u25T},{lbl:'BTTS',h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];let html=`<div class="quant-panel"><div class="panel-title">📊 Audit Results — ${cands.length} predictions</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:20px;">${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-panel);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:14px;text-align:center;"><div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;">${m.lbl}</div><div style="font-size:1.5rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.6rem;color:var(--text-muted);margin-top:3px;">${m.h}/${m.t}</div></div>`;}).join('')}</div><div style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve</div>${buildMiniCurve(engineConfig.tXG_O25,curveData)}<div class="data-table-wrapper"><table class="summary-table" style="font-size:0.78rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>1X2</th><th>O2.5</th><th>O3.5</th><th>U2.5</th><th>BTTS</th><th>Exact</th></tr></thead><tbody>`;rows.forEach(({p,ah,aa,aTot,aExact,aOut,aBtts})=>{const cell=(pred,hit)=>pred?`<span class="${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'}</span>`:'<span style="color:var(--text-dim)">—</span>';html+=`<tr><td class="left-align" style="font-weight:600;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.6rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num">${ah}-${aa}</td><td>${p.outPick&&p.outPick!=='-'?`<span class="${p.outPick===aOut?'audit-omega-hit':'audit-omega-miss'}">${p.outPick}</span>`:'—'}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td>${p.exactScorePred?`<span class="${p.exactScorePred===aExact?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`:'—'}</td></tr>`;});html+=`</tbody></table></div></div>`;document.getElementById('auditSection').innerHTML=html;showOk('Audit ολοκληρώθηκε.');}catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}};
-function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-16px; left:50%; transform:translateX(-50%); font-size:0.5rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:2px; margin-bottom:15px;">${bars}</div>`;}
+window.runCustomAudit=async function(){const s=document.getElementById('auditStart').value,e=document.getElementById('auditEnd').value;if(!s||!e){showErr('Επιλέξτε ημερομηνίες.');return;}if(isRunning)return;isRunning=true;setBtnsDisabled(true);setLoader(true,'Running Audit...');document.getElementById('auditSection').innerHTML='';try{const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const endD=new Date(e);endD.setDate(endD.getDate()+1);const lgFilter=document.getElementById('auditLeague')?.value||'ALL';let cands=store.filter(x=>{const d=new Date(x.date);return d>=new Date(s)&&d<endD;});if(lgFilter!=='ALL')cands=cands.filter(x=>String(x.leagueId)===lgFilter);if(!cands.length){document.getElementById('auditSection').innerHTML=`<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;font-size:1.1rem;">Δεν υπάρχουν δεδομένα.</div>`;return;}let stats={games:0,outHit:0,validOut:0,o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,exHit:0};const rows=[],curveData=[];for(let i=0;i<cands.length;i++){const p=cands[i];setProgress(Math.round(((i+1)/cands.length)*100),`Auditing: ${p.homeTeam}`);const fr=await apiReq(`fixtures?id=${p.fixtureId}`);const fix=fr?.response?.[0];if(!fix||!isFinished(fix?.fixture?.status?.short))continue;const ah=safeNum(fix.goals.home),aa=safeNum(fix.goals.away);const aTot=ah+aa,aExact=`${ah}-${aa}`,aOut=ah>aa?'1':ah<aa?'2':'X',aBtts=ah>0&&aa>0;stats.games++;if(p.outPick==='1'||p.outPick==='2'){stats.validOut++;if(p.outPick===aOut)stats.outHit++;}if(p.predOver25){stats.o25T++;if(aTot>2.5)stats.o25H++;}if(p.predOver35){stats.o35T++;if(aTot>3.5)stats.o35H++;}if(p.predUnder25){stats.u25T++;if(aTot<2.5)stats.u25H++;}if(p.predBTTS){stats.bttsT++;if(aBtts)stats.bttsH++;}if(p.exactScorePred===aExact)stats.exHit++;curveData.push({tXG:p.tXG||2.5,hitO25:aTot>2.5?1:0});rows.push({p,ah,aa,aTot,aExact,aOut,aBtts});}const rv=(h,t)=>t>0?h/t*100:0;const col=v=>v>=80?'var(--accent-green)':v>=60?'var(--accent-gold)':'var(--accent-red)';const statsCards=[{lbl:'1X2',h:stats.outHit,t:stats.validOut},{lbl:'O2.5',h:stats.o25H,t:stats.o25T},{lbl:'O3.5',h:stats.o35H,t:stats.o35T},{lbl:'U2.5',h:stats.u25H,t:stats.u25T},{lbl:'BTTS',h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];let html=`<div class="quant-panel"><div class="panel-title">📊 Audit Results — ${cands.length} predictions</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:15px;margin-bottom:20px;">${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:20px;text-align:center;"><div style="font-size:0.85rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">${m.lbl}</div><div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.75rem;color:var(--text-muted);margin-top:5px;">${m.h}/${m.t}</div></div>`;}).join('')}</div><div style="font-size:0.85rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve</div>${buildMiniCurve(engineConfig.tXG_O25,curveData)}<div class="data-table-wrapper"><table class="summary-table" style="font-size:0.9rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>1X2</th><th>O2.5</th><th>O3.5</th><th>U2.5</th><th>BTTS</th><th>Exact</th></tr></thead><tbody>`;rows.forEach(({p,ah,aa,aTot,aExact,aOut,aBtts})=>{const cell=(pred,hit)=>pred?`<span class="${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'}</span>`:'<span style="color:var(--text-dim)">—</span>';html+=`<tr><td class="left-align" style="font-weight:700;font-size:1rem;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.75rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num" style="font-size:1.1rem;">${ah}-${aa}</td><td style="font-size:1.1rem;">${p.outPick&&p.outPick!=='-'?`<span class="${p.outPick===aOut?'audit-omega-hit':'audit-omega-miss'}">${p.outPick}</span>`:'—'}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td style="font-size:1.1rem;">${p.exactScorePred?`<span class="${p.exactScorePred===aExact?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`:'—'}</td></tr>`;});html+=`</tbody></table></div></div>`;document.getElementById('auditSection').innerHTML=html;showOk('Audit ολοκληρώθηκε.');}catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}};
+function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:0.65rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:5px; margin-bottom:25px;">${bars}</div>`;}
 function saveToVault(data){try{let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");const map=new Map(store.map(x=>[String(x.fixtureId),x]));data.forEach(d=>{if(d.omegaPick==="NO BET")return;map.set(String(d.fixId),{fixtureId:d.fixId,date:d.m.fixture.date,leagueId:d.leagueId,league:d.lg,homeTeam:d.ht,awayTeam:d.at,outPick:d.outPick,exactScorePred:d.exact,predOver25:d.omegaPick.includes('OVER 2')||d.omegaPick.includes('OVER 3'),predBTTS:d.omegaPick.includes('GOAL'),omegaPick:d.omegaPick,tXG:d.tXG});});localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));}catch(e){}}
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const sel=document.getElementById('auditLeague');if(!sel)return;const known=new Set(store.map(x=>x.leagueId));sel.innerHTML='<option value="ALL">Global (All)</option>';(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).forEach(l=>{if(known.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
@@ -615,7 +620,7 @@ window.renderLeagueMods = function() {
   const container = document.getElementById('leagueModsContainer');
   if(!container || typeof LEAGUES_DATA === 'undefined') return;
   
-  let html = `<table class="summary-table" style="font-size:0.75rem;">
+  let html = `<table class="summary-table" style="font-size:0.85rem;">
     <thead style="position:sticky; top:0; z-index:1;">
       <tr><th class="left-align">League</th><th>xG Multiplier</th><th>xG Diff (1X2)</th><th>Min xG (O2.5)</th></tr>
     </thead><tbody>`;
@@ -623,10 +628,10 @@ window.renderLeagueMods = function() {
   LEAGUES_DATA.forEach(l => {
     const mods = leagueMods[l.id] || {};
     html += `<tr>
-      <td class="left-align" style="font-weight:600; color:var(--text-main);">${l.name}</td>
-      <td><input type="number" step="0.01" class="quant-input" style="width:75px; padding:5px; text-align:center;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:75px; padding:5px; text-align:center;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:75px; padding:5px; text-align:center;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
+      <td class="left-align" style="font-weight:700; color:var(--text-main); font-size:0.95rem;">${l.name}</td>
+      <td><input type="number" step="0.01" class="quant-input" style="width:90px; padding:8px; text-align:center; font-size:0.95rem;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:90px; padding:8px; text-align:center; font-size:0.95rem;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:90px; padding:8px; text-align:center; font-size:0.95rem;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
     </tr>`;
   });
   html += `</tbody></table>`;
