@@ -1,35 +1,98 @@
-// leagues.js - Η βάση δεδομένων των πρωταθλημάτων
+// ==========================================================================
+// APEX OMEGA v5.0 — LEAGUES DATABASE & CATEGORIZATION
+// ==========================================================================
 
 const LEAGUES_DATA = [
-  {id:2,  name:"Champions League"},     {id:3,  name:"Europa League"},
-  {id:848,name:"Conference League"},    {id:39, name:"Premier League (EN)"},
-  {id:40, name:"Championship (EN)"},    {id:41, name:"League One (EN)"},
-  {id:140,name:"La Liga (ES)"},         {id:141,name:"La Liga 2 (ES)"},
-  {id:135,name:"Serie A (IT)"},         {id:136,name:"Serie B (IT)"},
-  {id:78, name:"Bundesliga (DE)"},      {id:79, name:"2. Bundesliga (DE)"},
-  {id:61, name:"Ligue 1 (FR)"},         {id:62, name:"Ligue 2 (FR)"},
-  {id:88, name:"Eredivisie (NL)"},      {id:144,name:"Jupiler Pro (BE)"},
-  {id:203,name:"Süper Lig (TR)"},       {id:253,name:"MLS (US)"},
-  {id:262,name:"Liga MX (MX)"},         {id:197,name:"Super League (GR)"},
-  {id:357,name:"Premier Division (IE)"},
-  {id:71, name:"Serie A (BR)"},         {id:128,name:"Liga Profesional (AR)"},
-  {id:239,name:"Primera A (CO)"},       {id:265,name:"Primera Division (CL)"},
-  {id:280,name:"Primera Division (PE)"},{id:268,name:"Primera Division (UY)"},
-  {id:94, name:"Primeira Liga (PT)"},   {id:113,name:"Allsvenskan (SE)"},
-  {id:103,name:"Eliteserien (NO)"}
+  // --- ΕΥΡΩΠΗ (Top 5) ---
+  { id: 39,  name: "🇬🇧 England - Premier League" },
+  { id: 40,  name: "🇬🇧 England - Championship" },
+  { id: 41,  name: "🇬🇧 England - League One" },
+  { id: 140, name: "🇪🇸 Spain - La Liga" },
+  { id: 141, name: "🇪🇸 Spain - Segunda Division" },
+  { id: 135, name: "🇮🇹 Italy - Serie A" },
+  { id: 136, name: "🇮🇹 Italy - Serie B" },
+  { id: 78,  name: "🇩🇪 Germany - Bundesliga" },
+  { id: 79,  name: "🇩🇪 Germany - 2. Bundesliga" },
+  { id: 61,  name: "🇫🇷 France - Ligue 1" },
+  { id: 62,  name: "🇫🇷 France - Ligue 2" },
+  
+  // --- ΕΥΡΩΠΗ (Δυνατά Πρωταθλήματα) ---
+  { id: 88,  name: "🇳🇱 Netherlands - Eredivisie" },
+  { id: 89,  name: "🇳🇱 Netherlands - Eerste Divisie" },
+  { id: 94,  name: "🇵🇹 Portugal - Primeira Liga" },
+  { id: 144, name: "🇧🇪 Belgium - Jupiler Pro League" },
+  { id: 179, name: "🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland - Premiership" },
+  { id: 197, name: "🇬🇷 Greece - Super League 1" },
+  { id: 203, name: "🇹🇷 Turkey - Süper Lig" },
+
+  // --- ΣΚΑΝΔΙΝΑΒΙΑ (Over-Friendly) ---
+  { id: 69,  name: "🇳🇴 Norway - Eliteserien" },
+  { id: 113, name: "🇸🇪 Sweden - Allsvenskan" },
+  { id: 119, name: "🇩🇰 Denmark - Superliga" },
+
+  // --- ΙΡΛΑΝΔΙΑ (Summer Leagues) ---
+  { id: 353, name: "🇮🇪 Ireland - Premier Division" },
+  { id: 354, name: "🇮🇪 Ireland - First Division" },
+  
+  // --- ΑΜΕΡΙΚΗ (Βόρεια & Νότια) ---
+  { id: 253, name: "🇺🇸 USA - MLS" },
+  { id: 262, name: "🇲🇽 Mexico - Liga MX" },
+  { id: 71,  name: "🇧🇷 Brazil - Serie A" },
+  { id: 128, name: "🇦🇷 Argentina - Liga Profesional" },
+  { id: 239, name: "🇨🇴 Colombia - Primera A" },
+
+  // --- ΕΥΡΩΠΑΪΚΕΣ ΔΙΟΡΓΑΝΩΣΕΙΣ (Συλλογικές) ---
+  { id: 2,   name: "🇪🇺 UEFA Champions League" },
+  { id: 3,   name: "🇪🇺 UEFA Europa League" },
+  { id: 848, name: "🇪🇺 UEFA Conference League" }
 ];
 
-// Απαραίτητα arrays για τα Dropdowns και τα Φίλτρα του App
+// Φτιάχνουμε τις λίστες για τα Φίλτρα (MY_LEAGUES vs ALL)
 const LEAGUE_IDS = LEAGUES_DATA.map(l => l.id);
-const MY_LEAGUES_IDS = [39, 78, 88, 103, 113,128, 144, 140, 135, 197, 253,262];
 
-const LEAGUE_AVG_GOALS = {
-  78: 3.12, 88: 3.05, 253: 2.95, 262: 2.88, 113: 2.85, 103: 2.92, 71: 2.65,
-  39: 2.72, 144: 2.70, 203: 2.65, 239: 2.45, 280: 2.50, 268: 2.45,
-  2:  2.55, 3:  2.60, 848: 2.50,
-  135:2.48, 140:2.52, 61:2.45, 197:2.40, 94:2.45, 128: 2.30
-};
+// Εδώ βάζουμε τα πρωταθλήματα που δίνουν τα καλύτερα κέρδη (High Yield) για το φίλτρο "MY LEAGUES"
+const MY_LEAGUES_IDS = [
+    39, 140, 135, 78, 61, // Big 5
+    88, 94, 144, 253,     // Ολλανδία, Πορτογαλία, Βέλγιο, MLS
+    2, 3                  // UCL, UEL
+];
 
-const TRAP_LEAGUES = new Set([40,41,136,141,79,62,6,10,66,357, 239, 280, 268]); 
-const TIGHT_LEAGUES = new Set([61,94,197,135,140,39,2,3,848, 128]); 
-const GOLD_LEAGUES = new Set([78,262,88,253, 71, 113, 103]);
+// ==========================================================================
+// 🧠 SMART LEAGUE CATEGORIZATION (For Quant Modifiers)
+// ==========================================================================
+
+// GOLD LEAGUES (Επιθετικά πρωταθλήματα - Το xG πολλαπλασιάζεται με το modGold, π.χ., ~1.12)
+// Ιδανικά για Over 2.5 / Over 3.5. Ομάδες που δεν παίζουν άμυνα.
+const GOLD_LEAGUES = new Set([
+  78,  // Bundesliga
+  88,  // Eredivisie
+  89,  // Eerste Divisie (Ολλανδία Β)
+  69,  // Norway
+  113, // Sweden
+  253  // USA MLS
+]);
+
+// TIGHT LEAGUES (Κλειστά πρωταθλήματα - Το xG πολλαπλασιάζεται με το modTight, π.χ., ~0.95)
+// Πολλά Under 2.5, δύσκολα ματς, κλειστές άμυνες.
+const TIGHT_LEAGUES = new Set([
+  135, // Serie A
+  136, // Serie B
+  61,  // Ligue 1
+  197, // Greece Super League
+  128, // Argentina
+  71,  // Brazil Serie A
+  262, // Mexico Liga MX
+  239, // Colombia
+  353  // Ireland Premier Division
+]);
+
+// TRAP LEAGUES (Αλλοπρόσαλλα πρωταθλήματα - Το xG πολλαπλασιάζεται με το modTrap, π.χ., ~0.90)
+// Χρειάζεται τεράστια διαφορά δυναμικότητας για να δοθεί Άσος ή Διπλό.
+const TRAP_LEAGUES = new Set([
+  40,  // Championship Αγγλίας
+  41,  // League One Αγγλίας
+  141, // Segunda Ισπανίας
+  62,  // Ligue 2 Γαλλίας
+  203, // Turkey Süper Lig 
+  354  // Ireland First Division
+]);
