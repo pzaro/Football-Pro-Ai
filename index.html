@@ -10,7 +10,7 @@
 <body>
 
 <div class="terminal-header">
-  <div class="brand-logo">APEX<span>OMEGA</span> <span style="font-size:0.6rem;color:var(--text-muted);font-family:'Fira Code',monospace;margin-left:4px;">v5.0 AI</span></div>
+  <div class="brand-logo">APEX<span>OMEGA</span> <span style="font-size:0.7rem;color:var(--text-muted);font-family:'Fira Code',monospace;margin-left:4px;">v5.0 AI</span></div>
   <div class="header-right">
     <div class="bankroll-widget" onclick="openBankroll()" title="Bankroll Manager">
       <span class="bankroll-label">💰 Bankroll</span>
@@ -26,7 +26,7 @@
 <div id="bankrollModal" class="modal-overlay" style="display:none">
   <div class="modal-card">
     <div class="modal-title">💰 Bankroll Manager</div>
-    <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:16px;">Κεφάλαιο για Kelly Criterion στάκινγκ.</div>
+    <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:16px;">Κεφάλαιο για Kelly Criterion στάκινγκ.</div>
     <input type="number" id="bankrollInput" class="modal-input" placeholder="1000.00" step="0.01">
     <div style="display:flex; gap:10px; margin-bottom:20px;">
       <button class="btn btn-gold" style="flex:1;" onclick="saveBankroll()">Αποθήκευση</button>
@@ -38,10 +38,10 @@
 
 <div id="auth">
   <div class="auth-card">
-    <div class="brand-logo" style="justify-content: center; font-size: 2.2rem; margin-bottom: 10px;">APEX<span>OMEGA</span></div>
-    <div style="font-weight: 600; color: var(--accent-blue);">v5.0 · AI Edition</div>
+    <div class="brand-logo" style="justify-content: center; font-size: 2.5rem; margin-bottom: 10px;">APEX<span>OMEGA</span></div>
+    <div style="font-weight: 600; font-size: 1.1rem; color: var(--accent-blue);">v5.0 · AI Edition</div>
     <input type="password" id="pin" class="auth-input" placeholder="• • • •" maxlength="8" autocomplete="off" inputmode="numeric">
-    <div id="authError" style="margin-top:12px; font-size:0.75rem; color:var(--accent-red); min-height:20px; font-weight:600;"></div>
+    <div id="authError" style="margin-top:12px; font-size:0.85rem; color:var(--accent-red); min-height:20px; font-weight:600;"></div>
   </div>
 </div>
 
@@ -49,7 +49,7 @@
   
   <!-- Live Ticker -->
   <div class="ticker-wrapper" id="tickerBar" style="display:none;">
-    <div class="ticker-label"><span class="live-dot" style="width:6px;height:6px;margin-right:4px;"></span>LIVE SIGNALS</div>
+    <div class="ticker-label"><span class="live-dot" style="width:8px;height:8px;margin-right:6px;"></span>LIVE SIGNALS</div>
     <div class="ticker-track" id="tickerTrack">
       <div class="ticker-inner" id="tickerInner"></div>
     </div>
@@ -90,7 +90,7 @@
         <span id="leagueArrow" class="arrow">▼</span>
       </div>
       <div id="leagueModsPanel" style="display:none;">
-        <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:15px;">
+        <div style="font-size:0.85rem; line-height:1.5; color:var(--text-muted); margin-bottom:15px;">
           Εδώ μπορείς να παρακάμψεις τις Global ρυθμίσεις για συγκεκριμένα πρωταθλήματα (π.χ. χαμηλότερος πολλαπλασιαστής xG στο Μεξικό). Αν αφήσεις ένα πεδίο κενό, το μοντέλο θα χρησιμοποιήσει τα Global Defaults.
         </div>
         <div id="leagueModsContainer" class="data-table-wrapper" style="max-height: 400px; overflow-y: auto;"></div>
@@ -116,7 +116,7 @@
         <button class="btn btn-outline" onclick="exportData()">💾 EXPORT</button>
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
         <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">📂 IMPORT</button>
-        <button class="btn btn-primary" id="btnPre" onclick="runScan()" style="height: 38px;">▶ Run Scan</button>
+        <button class="btn btn-primary" id="btnPre" onclick="runScan()" style="height: 42px; font-size: 1rem;">▶ Run Scan</button>
       </div>
     </div>
 
@@ -127,15 +127,15 @@
         <div class="input-group"><label class="input-label">Audit From</label><input type="date" id="auditStart" class="quant-input"></div>
         <div class="input-group"><label class="input-label">Audit To</label><input type="date" id="auditEnd" class="quant-input"></div>
         <div class="input-group"><label class="input-label">League</label><select id="auditLeague" class="quant-input"><option value="ALL">Global</option></select></div>
-        <div class="input-group" style="flex:0;"><button class="btn btn-purple" style="height: 38px;" onclick="runCustomAudit()">Run Audit</button></div>
-        <div class="input-group" style="flex:0;"><button class="btn btn-danger" style="height: 38px;" onclick="clearVault()">Purge Data</button></div>
+        <div class="input-group" style="flex:0;"><button class="btn btn-purple" style="height: 42px;" onclick="runCustomAudit()">Run Audit</button></div>
+        <div class="input-group" style="flex:0;"><button class="btn btn-danger" style="height: 42px;" onclick="clearVault()">Purge Data</button></div>
       </div>
     </div>
 
     <div id="errorBox"></div><div id="successBox"></div>
     <div id="loader" style="display:none" class="progress-container">
       <div class="progress-track"><div id="bar" class="progress-bar"></div></div>
-      <div class="progress-text" id="status">Initializing...</div>
+      <div class="progress-text" id="status" style="font-size: 0.9rem;">Initializing...</div>
     </div>
 
     <!-- OUTPUT SECTIONS -->
