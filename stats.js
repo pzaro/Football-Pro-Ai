@@ -1,6 +1,6 @@
 // ==========================================================================
-// APEX OMEGA v5.0 — MASTER ENGINE (Player Props & Post-Match Evolution)
-// Poisson · xG · Corners · Scorers · Live Sync · Audit · Bankroll
+// APEX OMEGA v5.0 — MASTER ENGINE (ULTIMATE EDITION)
+// Poisson · xG · Corners · Scorers · League Calib · Post-Match
 // ==========================================================================
 
 const API_BASE = "https://v3.football.api-sports.io";
@@ -14,7 +14,7 @@ const LS_BANKROLL = "omega_bankroll_v5.0";
 let teamStatsCache = new Map(), lastFixCache = new Map(),
     standCache = new Map(), h2hCache = new Map(), scorersCache = new Map();
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], scorers:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -142,7 +142,7 @@ async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))
 async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return standCache.get(k);const d=await apiReq(`standings?league=${lg}&season=${s}`);const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];standCache.set(k,f);return f;}
 async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
 
-// 🎯 TOP SCORERS CACHE (Smart 1-Call per League)
+// 🎯 TOP SCORERS CACHE
 async function getLeagueTopScorers(lg, s) {
   const k = `${lg}_${s}`;
   if(scorersCache.has(k)) return scorersCache.get(k);
@@ -151,7 +151,6 @@ async function getLeagueTopScorers(lg, s) {
   scorersCache.set(k, scorers);
   return scorers;
 }
-
 const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ================================================================
@@ -200,40 +199,32 @@ function summarizeH2H(fixtures,homeId,awayId){
 
 function getLeagueParams(leagueId){
   const lm=leagueMods[leagueId]||{};
-  let defDiff=engineConfig.xG_Diff,defMult=1.00;
+  let defDiff=engineConfig.xG_Diff,defMult=1.00, defO25=engineConfig.tXG_O25;
   if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId))defDiff=0.35;
   else if(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(leagueId))defDiff=0.65;
   if(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(leagueId))defMult=engineConfig.modGold;
   else if(typeof TRAP_LEAGUES!=='undefined'&&TRAP_LEAGUES.has(leagueId))defMult=engineConfig.modTrap;
   else if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId))defMult=engineConfig.modTight;
-  return{mult:lm.mult??defMult,minXGO25:lm.minXGO25??engineConfig.tXG_O25,minXGO35:lm.minXGO35??engineConfig.tXG_O35,maxU25:lm.maxU25??engineConfig.tXG_U25,minBTTS:lm.minBTTS??engineConfig.tBTTS,xgDiff:lm.xgDiff??defDiff};
+  return{mult:lm.mult??defMult,minXGO25:lm.minXGO25??defO25,minXGO35:lm.minXGO35??engineConfig.tXG_O35,maxU25:lm.maxU25??engineConfig.tXG_U25,minBTTS:lm.minBTTS??engineConfig.tBTTS,xgDiff:lm.xgDiff??defDiff};
 }
 
-// 🎯 PLAYER PROPS MODEL (Anytime Goalscorer)
+// 🎯 PLAYER PROPS MODEL
 function calculateScorerProb(leagueScorers, teamId, teamLambdaXG, teamTotalGoals) {
-  if(!leagueScorers || leagueScorers.length === 0 || teamTotalGoals <= 0) return null;
-  // Find the top scorer for this specific team in the league list
-  const playerInfo = leagueScorers.find(p => p.statistics[0].team.id === teamId);
+  if(!leagueScorers || leagueScorers.length === 0) return null;
+  const playerInfo = leagueScorers.find(p => p.statistics.some(s => String(s.team.id) === String(teamId)));
   if(!playerInfo) return null;
   
-  const playerGoals = playerInfo.statistics[0].goals.total || 0;
+  const pStat = playerInfo.statistics.find(s => String(s.team.id) === String(teamId));
+  const playerGoals = pStat?.goals?.total || 0;
   if(playerGoals === 0) return null;
 
-  // 1. Goal Contribution % 
-  const contribution = Math.min(playerGoals / teamTotalGoals, 0.70); // Max 70% cap for realism
+  let contribution = 0.30;
+  if(teamTotalGoals > 0) contribution = Math.min(playerGoals / teamTotalGoals, 0.70);
   
-  // 2. Player Expected Goals for TODAY
   const playerXG = teamLambdaXG * contribution;
-  
-  // 3. Poisson Probability (At least 1 goal = 1 - Probability of 0 goals)
   const prob = (1 - Math.exp(-playerXG)) * 100;
   
-  return {
-    name: playerInfo.player.name,
-    goals: playerGoals,
-    photo: playerInfo.player.photo,
-    prob: prob
-  };
+  return { name: playerInfo.player.name, goals: playerGoals, photo: playerInfo.player.photo, prob: prob };
 }
 
 function computeCornerConfidence(hS,aS,hXG,aXG){
@@ -283,8 +274,6 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
 async function analyzeMatchSafe(m,index,total){
   try{
     setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
-    
-    // Fetch base intel + Top Scorers for the league
     const[hS, aS, stand, h2hFix, leagueScorers] = await Promise.all([
       buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
       buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
@@ -296,11 +285,9 @@ async function analyzeMatchSafe(m,index,total){
     const lp=getLeagueParams(m.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
     const tXG=hXG+aXG,bttsScore=Math.min(hXG,aXG);const result=computePick(hXG,aXG,tXG,bttsScore,lp,hS,aS);
     
-    // 🎯 Calculate Goalscorer Probabilities
     const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason);
     const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason);
 
-    // FETCH ACTUAL STATS IF MATCH IS FINISHED
     let actStats = null;
     if (isFinished(m.fixture.status.short)) {
       const sr = await apiReq(`fixtures/statistics?fixture=${m.fixture.id}`);
@@ -462,6 +449,54 @@ window.toggleMatchDetails = function(id) {
   if(el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
 };
 
+function buildAccordionHTML(x) {
+  const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
+  const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
+  return `
+    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);">
+      <div style="display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
+          <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Home vs Away Breakdown</h4>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
+          <div style="display:flex;gap:2px;margin-top:6px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:2px;margin-top:3px;">${formDots(x.aS?.history)}</div>
+        </div>
+        <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
+          <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">🎯 Top Scorer Projections</h4>
+          <div style="margin-bottom:10px;">
+            <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">🏠 Home Team Scorer</div>
+            ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-weight:600; font-size:0.8rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.hScorerProb.goals}G)</span></span>
+              <span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.hScorerProb.prob.toFixed(1)}%</span>
+            </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No top 20 data available</span>`}
+          </div>
+          <div style="border-top:1px solid var(--border-light); padding-top:10px;">
+            <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">✈️ Away Team Scorer</div>
+            ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-weight:600; font-size:0.8rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.aScorerProb.goals}G)</span></span>
+              <span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.aScorerProb.prob.toFixed(1)}%</span>
+            </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No top 20 data available</span>`}
+          </div>
+        </div>
+        <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
+          <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Game Projections</h4>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
+        </div>
+        <div style="flex:1; min-width:320px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
+          <h4 style="color:var(--text-muted); text-align:center; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;">📊 Poisson Score Matrix</h4>
+          ${pHtml}
+        </div>
+      </div>
+    </td>
+  `;
+}
+
 function renderSummaryTable() {
   const sec = document.getElementById('summarySection'); if(!sec) return;
   const sd = window.scannedMatchesData || []; if(!sd.length) { sec.innerHTML=''; return; }
@@ -470,7 +505,6 @@ function renderSummaryTable() {
   const finishedMatches = sd.filter(d => isFinished(d.m?.fixture?.status?.short));
 
   let finalHtml = '';
-  const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
 
   // 1. ACTIVE MATCHES
   if (activeMatches.length > 0) {
@@ -487,7 +521,6 @@ function renderSummaryTable() {
         const conf=clamp(safeNum(x.strength),0,100); const confCol=conf>=65?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--text-muted)';
         let omCol=x.omegaPick?.includes('NO BET')?'var(--text-muted)':'var(--text-main)';
         const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.56rem;color:var(--accent-teal);margin-top:2px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
-        const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
         
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
           <td class="col-match left-align" style="font-weight:600;">${live?'<span class="live-dot" style="width:6px;height:6px;margin-right:4px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}</td>
@@ -501,51 +534,7 @@ function renderSummaryTable() {
           <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.7rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         </tr>
         <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
-          <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light);">
-            <div style="display:flex; justify-content:space-around; gap:20px; flex-wrap:wrap;">
-              
-              <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-                <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Home vs Away Breakdown</h4>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
-                <div style="display:flex;gap:2px;margin-top:6px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:2px;margin-top:3px;">${formDots(x.aS?.history)}</div>
-              </div>
-
-              <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-                <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">🎯 Top Scorer Projections</h4>
-                <div style="margin-bottom:10px;">
-                  <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">🏠 Home Team Scorer</div>
-                  ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-weight:600; font-size:0.8rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.hScorerProb.goals}G)</span></span>
-                    <span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.hScorerProb.prob.toFixed(1)}%</span>
-                  </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No data available</span>`}
-                </div>
-                <div style="border-top:1px solid var(--border-light); padding-top:10px;">
-                  <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:2px;">✈️ Away Team Scorer</div>
-                  ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-weight:600; font-size:0.8rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.6rem;">(${x.aScorerProb.goals}G)</span></span>
-                    <span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800;">${x.aScorerProb.prob.toFixed(1)}%</span>
-                  </div>` : `<span style="font-size:0.75rem; color:var(--text-dim);">No data available</span>`}
-                </div>
-              </div>
-
-              <div style="flex:1; min-width:250px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-                <h4 style="color:var(--text-muted); margin-bottom:10px; font-size:0.75rem; text-transform:uppercase;">Game Projections</h4>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Poisson U2.5</span><span class="data-num" style="color:var(--accent-teal)">${x.pp?pct(x.pp.pU25):'—'}</span></div>
-                <div style="display:flex; justify-content:space-between; margin-top:5px; border-top:1px solid var(--border-light); padding-top:5px; color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
-              </div>
-              
-              <div style="flex:1; min-width:320px; background:var(--bg-base); padding:15px; border-radius:8px; border:1px solid var(--border-light);">
-                <h4 style="color:var(--text-muted); text-align:center; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;">📊 Poisson Score Matrix</h4>
-                ${pHtml}
-              </div>
-            </div>
-          </td>
+          ${buildAccordionHTML(x)}
         </tr>`;
       });
       rows+=`</tbody></table></div>`;
@@ -579,7 +568,7 @@ function renderSummaryTable() {
           hitHtml = hit ? `<span style="background:rgba(16,185,129,0.15);color:var(--accent-green);padding:2px 6px;border-radius:4px;font-weight:800;font-size:0.65rem;">✅ WON</span>` : `<span style="background:rgba(244,63,94,0.15);color:var(--accent-red);padding:2px 6px;border-radius:4px;font-weight:800;font-size:0.65rem;">❌ LOST</span>`;
       }
 
-      fRows += `<tr>
+      fRows += `<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;">
         <td class="left-align" style="font-weight:600;">${esc(x.ht)} - ${esc(x.at)}</td>
         <td class="data-num" style="color:var(--text-main);">${ah}-${aa}</td>
         <td class="data-num">${hXGAct} - ${aXGAct}</td>
@@ -588,6 +577,9 @@ function renderSummaryTable() {
         <td class="data-num">${hCrd} - ${aCrd}</td>
         <td style="font-size:0.65rem;font-weight:800;color:var(--text-main);">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         <td>${hitHtml}</td>
+      </tr>
+      <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
+        ${buildAccordionHTML(x)}
       </tr>`;
     });
 
@@ -617,10 +609,56 @@ window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeI
 function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const sel=document.getElementById('auditLeague');if(!sel)return;const known=new Set(store.map(x=>x.leagueId));sel.innerHTML='<option value="ALL">Global (All)</option>';(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).forEach(l=>{if(known.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
 
 // ================================================================
+//  LEAGUE MODS MANAGER
+// ================================================================
+window.renderLeagueMods = function() {
+  const container = document.getElementById('leagueModsContainer');
+  if(!container || typeof LEAGUES_DATA === 'undefined') return;
+  
+  let html = `<table class="summary-table" style="font-size:0.75rem;">
+    <thead style="position:sticky; top:0; z-index:1;">
+      <tr><th class="left-align">League</th><th>xG Multiplier</th><th>xG Diff (1X2)</th><th>Min xG (O2.5)</th></tr>
+    </thead><tbody>`;
+    
+  LEAGUES_DATA.forEach(l => {
+    const mods = leagueMods[l.id] || {};
+    html += `<tr>
+      <td class="left-align" style="font-weight:600; color:var(--text-main);">${l.name}</td>
+      <td><input type="number" step="0.01" class="quant-input" style="width:75px; padding:5px; text-align:center;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:75px; padding:5px; text-align:center;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:75px; padding:5px; text-align:center;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  container.innerHTML = html;
+};
+
+window.saveLeagueMods = function() {
+  if(typeof LEAGUES_DATA === 'undefined') return;
+  LEAGUES_DATA.forEach(l => {
+    const mVal = parseFloat(document.getElementById(`mod_mult_${l.id}`)?.value);
+    const dVal = parseFloat(document.getElementById(`mod_diff_${l.id}`)?.value);
+    const oVal = parseFloat(document.getElementById(`mod_o25_${l.id}`)?.value);
+    
+    if(!isNaN(mVal) || !isNaN(dVal) || !isNaN(oVal)) {
+      leagueMods[l.id] = {};
+      if(!isNaN(mVal)) leagueMods[l.id].mult = mVal;
+      if(!isNaN(dVal)) leagueMods[l.id].xgDiff = dVal;
+      if(!isNaN(oVal)) leagueMods[l.id].minXGO25 = oVal;
+    } else {
+      delete leagueMods[l.id];
+    }
+  });
+  try{ localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); }catch{}
+  showOk('Saved League Mods!');
+  if(window.scannedMatchesData.length > 0) window.resimulateMatches();
+};
+
+// ================================================================
 //  SETTINGS & INIT
 // ================================================================
-window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
-window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved!');};
+window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}try{const lm=JSON.parse(localStorage.getItem(LS_LGMODS));if(lm)leagueMods=lm;}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
+window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Global Settings!');};
 window.resimulateMatches=function(){if(!window.scannedMatchesData.length)return;window.scannedMatchesData.forEach(d=>{if(!d.hS)return;const lp=getLeagueParams(d.leagueId);const hXG=Number(d.hS.fXG)*lp.mult,aXG=Number(d.aS.fXG)*lp.mult;const tXG=hXG+aXG,btts=Math.min(hXG,aXG);const res=computePick(hXG,aXG,tXG,btts,lp,d.hS,d.aS);Object.assign(d,{tXG,btts,outPick:res.outPick,xgDiff:res.xgDiff,exact:`${res.hG}-${res.aG}`,exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,hExp:res.hExp,aExp:res.aExp,pp:res.pp,lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor});});rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');};
 
 window.addEventListener('DOMContentLoaded',()=>{
@@ -628,6 +666,7 @@ window.addEventListener('DOMContentLoaded',()=>{
     if(this.value==='106014'){
       document.getElementById('auth').style.display='none';document.getElementById('app').style.display='block';
       loadSettings();loadBankroll();initCredits();updateAuditLeagueFilter();
+      renderLeagueMods();
       const sel=document.getElementById('leagueFilter');
       if(sel&&typeof LEAGUES_DATA!=='undefined'){LEAGUES_DATA.forEach(l=>{if(![...sel.options].some(o=>o.value==l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
     }
