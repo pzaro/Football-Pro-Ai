@@ -28,7 +28,10 @@ let teamStatsCache = new BoundedCache(150),
     lastFixCache   = new BoundedCache(150),
     standCache     = new BoundedCache(60),
     h2hCache       = new BoundedCache(200),
-    scorersCache   = new BoundedCache(60);
+    scorersCache   = new BoundedCache(60),
+    assistsCache   = new BoundedCache(60),   // top assists per league/season
+    cardsCache     = new BoundedCache(60),   // top yellow cards per league/season
+    injuryCache    = new BoundedCache(200);  // injuries per team (2 per match)
 let isRunning = false, currentCredits = null;
 let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
 window.scannedMatchesData = [];
@@ -221,6 +224,33 @@ async function getLeagueTopScorers(lg, s) {
   scorersCache.set(k, scorers);
   return scorers;
 }
+
+// 🅰️ TOP ASSISTS (cached per league — 1 credit per league)
+async function getLeagueTopAssists(lg, s) {
+  const k = `${lg}_${s}`;
+  if(assistsCache.has(k)) return assistsCache.get(k);
+  const d = await apiReq(`players/topassists?league=${lg}&season=${s}`);
+  assistsCache.set(k, d?.response || []);
+  return d?.response || [];
+}
+
+// 🟨 TOP YELLOW CARDS (cached per league — 1 credit per league)
+async function getLeagueTopCards(lg, s) {
+  const k = `${lg}_${s}`;
+  if(cardsCache.has(k)) return cardsCache.get(k);
+  const d = await apiReq(`players/topyellowcards?league=${lg}&season=${s}`);
+  cardsCache.set(k, d?.response || []);
+  return d?.response || [];
+}
+
+// 🏥 INJURIES per team (cached per team+league+season — 2 credits per match, shared via cache)
+async function getTeamInjuries(teamId, lg, s) {
+  const k = `${teamId}_${lg}_${s}`;
+  if(injuryCache.has(k)) return injuryCache.get(k);
+  const d = await apiReq(`injuries?league=${lg}&season=${s}&team=${teamId}`);
+  injuryCache.set(k, d?.response || []);
+  return d?.response || [];
+}
 const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
 // ================================================================
@@ -312,6 +342,124 @@ function computeCornerConfidence(hS,aS,hXG,aXG){
 }
 
 // ================================================================
+//  PLAYER INTELLIGENCE — xG Contribution, Card Probability, Injuries
+// ================================================================
+
+/**
+ * Χτίζει το player profile για κάθε ομάδα:
+ * - xG contribution = (goals + 0.4*assists) / team total GAP
+ * - Card probability per match = Poisson(yellowCards / appearances)
+ * - Suspension risk flag (κοντά σε threshold: 4, 9, 14 yellows)
+ */
+function buildPlayerProfiles(teamId, scorers, assists, cards, teamTotalGoals) {
+  const players = new Map();
+
+  const ensurePlayer = (p, stat) => {
+    if(!p || !stat) return null;
+    const id = p.id;
+    if(!players.has(id)) {
+      players.set(id, {
+        id, name: p.name, photo: p.photo||'',
+        goals:0, assists:0, yellowCards:0, redCards:0,
+        apps: Math.max(safeNum(stat.games?.appearences,1), 1)
+      });
+    }
+    return players.get(id);
+  };
+
+  // Goals
+  (scorers||[]).forEach(entry => {
+    const stat = entry.statistics?.find(s => String(s.team?.id) === String(teamId));
+    if(!stat) return;
+    const pl = ensurePlayer(entry.player, stat);
+    if(!pl) return;
+    pl.goals = safeNum(stat.goals?.total);
+    pl.apps  = Math.max(safeNum(stat.games?.appearences,1), pl.apps);
+  });
+
+  // Assists
+  (assists||[]).forEach(entry => {
+    const stat = entry.statistics?.find(s => String(s.team?.id) === String(teamId));
+    if(!stat) return;
+    const pl = ensurePlayer(entry.player, stat);
+    if(!pl) return;
+    pl.assists = safeNum(stat.goals?.assists);
+    pl.apps = Math.max(safeNum(stat.games?.appearences,1), pl.apps);
+  });
+
+  // Yellow/Red Cards
+  (cards||[]).forEach(entry => {
+    const stat = entry.statistics?.find(s => String(s.team?.id) === String(teamId));
+    if(!stat) return;
+    const pl = ensurePlayer(entry.player, stat);
+    if(!pl) return;
+    pl.yellowCards = safeNum(stat.cards?.yellow);
+    pl.redCards    = safeNum(stat.cards?.red);
+    pl.apps = Math.max(safeNum(stat.games?.appearences,1), pl.apps);
+  });
+
+  // Υπολογισμός derived metrics
+  const allPl = Array.from(players.values());
+  const totalGAP = allPl.reduce((s, p) => s + p.goals + 0.4 * p.assists, 0) || 1;
+  const totalGoals = teamTotalGoals || allPl.reduce((s,p)=>s+p.goals,0) || 1;
+
+  return allPl
+    .map(p => {
+      const gap = p.goals + 0.4 * p.assists;
+      const xGContrib = gap / totalGAP;           // % συνεισφοράς στο xG
+      const xGShare   = p.goals / totalGoals;     // % μόνο από γκολ
+      // Card probability: Poisson model — P(≥1 κάρτα σε επόμενο ματς)
+      const cardRate  = p.apps > 0 ? p.yellowCards / p.apps : 0;
+      const cardProb  = (1 - Math.exp(-cardRate)) * 100;
+      // Suspension risk: κοντά σε threshold (4, 9, 14, 19...)
+      const suspRisk  = p.yellowCards > 0 && (p.yellowCards % 5 === 4);
+      return { ...p, gap, xGContrib, xGShare, cardRate, cardProb, suspRisk, injured: false };
+    })
+    .filter(p => p.gap > 0 || p.yellowCards > 0)  // κρατάμε μόνο παίκτες με επίδραση
+    .sort((a, b) => (b.xGContrib - a.xGContrib) || (b.yellowCards - a.yellowCards));
+}
+
+/**
+ * Εφαρμόζει injury adjustment στο baseXG μιας ομάδας.
+ * Επιστρέφει:
+ *   adjXG   — διορθωμένο xG
+ *   delta   — η διαφορά (αρνητική όταν υπάρχουν τραυματισμοί)
+ *   factor  — αποθηκεύεται για reuse στο resimulate
+ *   injured — λίστα των επηρεαζόμενων players (από profiles)
+ *
+ * Compensation factor 0.78: οι τραυματισμένοι αντικαθίστανται μερικώς
+ * από εφεδρείες, οπότε δεν χάνεται ολόκληρο το contribution τους.
+ */
+function applyInjuryAdjustment(baseXG, playerProfiles, rawInjuries) {
+  if(!rawInjuries?.length || !playerProfiles?.length) {
+    return { adjXG: baseXG, delta: 0, factor: 1.0, injured: [] };
+  }
+
+  // Τα API injuries επιστρέφουν {player:{id,name}, injury:{type,reason}, ...}
+  const injuredIds = new Set(rawInjuries.map(i => i.player?.id).filter(Boolean));
+  const injuredProfiles = [];
+
+  playerProfiles.forEach(p => {
+    if(injuredIds.has(p.id)) {
+      p.injured = true;
+      injuredProfiles.push(p);
+    }
+  });
+
+  if(!injuredProfiles.length) return { adjXG: baseXG, delta: 0, factor: 1.0, injured: [] };
+
+  // Συνολική xG απώλεια × compensation factor
+  const COMPENSATION = 0.78; // αντικαθίσταται το 78% από εφεδρεία
+  const xGLoss = injuredProfiles.reduce((s, p) => s + p.xGContrib, 0) * COMPENSATION;
+  // Floor: ακόμα και με πολλές απουσίες, η ομάδα παράγει min 55% του base xG
+  const factor  = clamp(1 - xGLoss, 0.55, 1.0);
+  const adjXG   = baseXG * factor;
+  const delta   = adjXG - baseXG;
+
+  return { adjXG, delta, factor, injured: injuredProfiles };
+}
+
+// ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
@@ -382,12 +530,16 @@ async function analyzeMatchSafe(m,index,total){
   try{
     setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
     
-    const[hS, aS, stand, h2hFix, leagueScorers] = await Promise.all([
+    const[hS, aS, stand, h2hFix, leagueScorers, leagueAssists, leagueCards, hInjuries, aInjuries] = await Promise.all([
       buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
       buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
       getStand(m.league.id, m.league.season),
       getH2H(m.teams.home.id, m.teams.away.id),
-      getLeagueTopScorers(m.league.id, m.league.season)
+      getLeagueTopScorers(m.league.id, m.league.season),
+      getLeagueTopAssists(m.league.id, m.league.season),
+      getLeagueTopCards(m.league.id, m.league.season),
+      getTeamInjuries(m.teams.home.id, m.league.id, m.league.season),
+      getTeamInjuries(m.teams.away.id, m.league.id, m.league.season)
     ]);
     
     const lp=getLeagueParams(m.league.id);
@@ -406,7 +558,20 @@ async function analyzeMatchSafe(m,index,total){
       }
     }
     
-    const tXG=hXG+aXG,bttsScore=Math.min(hXG,aXG);const result=computePick(hXG,aXG,tXG,bttsScore,lp,hS,aS);
+    const tXG=hXG+aXG; // base, pre-injury
+
+    // 🏥 PLAYER PROFILES — xG contribution + card probability per player
+    const hPlayers = buildPlayerProfiles(m.teams.home.id, leagueScorers, leagueAssists, leagueCards, hS.totalTeamGoalsSeason);
+    const aPlayers = buildPlayerProfiles(m.teams.away.id, leagueScorers, leagueAssists, leagueCards, aS.totalTeamGoalsSeason);
+
+    // ⚠️ INJURY ADJUSTMENT — μειώνει το xG ανάλογα με το contribution των τραυματισμένων
+    const hInjAdj = applyInjuryAdjustment(hXG, hPlayers, hInjuries);
+    const aInjAdj = applyInjuryAdjustment(aXG, aPlayers, aInjuries);
+    const hXGfinal = hInjAdj.adjXG;
+    const aXGfinal = aInjAdj.adjXG;
+    const tXGfinal = hXGfinal + aXGfinal;
+
+    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS);
     
     const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason);
     const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason);
@@ -427,7 +592,10 @@ async function analyzeMatchSafe(m,index,total){
 
     window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
-      tXG,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
+      tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
+      hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,   // base vs injury-adjusted
+      hInjAdj, aInjAdj,                                 // {adjXG,delta,factor,injured:[]}
+      hPlayers, aPlayers,                               // player profiles
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:h2hSummary,
@@ -444,7 +612,7 @@ window.runScan=async function(){
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
-  window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear(); scorersCache.clear();
+  window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();scorersCache.clear();assistsCache.clear();cardsCache.clear();injuryCache.clear();
   try{
     const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
@@ -573,13 +741,41 @@ window.toggleMatchDetails = function(id) {
 };
 
 // 🌟 RESPONSIVE ACCORDION
+// ─── helper: renders one player row (xG bar + card prob) ───────────
+function renderPlayerRow(p) {
+  const barW  = Math.min(Math.round(p.xGContrib * 100 * 2.5), 100); // scale για visibility
+  const cCol  = p.cardProb >= 40 ? 'var(--accent-red)' : p.cardProb >= 20 ? 'var(--accent-gold)' : 'var(--text-muted)';
+  const nameS = esc((p.name||'').split(' ').slice(-1)[0]); // επώνυμο
+  const injS  = p.injured ? '🏥 ' : '';
+  const suspS = p.suspRisk ? ' 🔴' : '';
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;${p.injured?'opacity:0.6':''}">
+    <span style="font-size:0.82rem;font-weight:${p.injured?900:600};color:${p.injured?'var(--accent-red)':'var(--text-main)'};flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${injS}${nameS}${suspS}</span>
+    <div style="width:50px;height:5px;background:var(--bg-surface);border-radius:3px;flex-shrink:0;">
+      <div style="width:${barW}%;height:100%;background:${p.injured?'var(--accent-red)':'var(--accent-blue)'};border-radius:3px;"></div>
+    </div>
+    <span style="font-size:0.75rem;color:var(--text-muted);min-width:28px;text-align:right;">${(p.xGContrib*100).toFixed(0)}%</span>
+    <span style="font-size:0.78rem;font-weight:700;color:${cCol};min-width:34px;text-align:right;">${p.cardProb>=1?'🟨':'⬜'}${p.cardProb.toFixed(0)}%</span>
+  </div>`;
+}
 function buildAccordionHTML(x) {
   const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
   const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
+
+  // Injury-adjusted xG row με visual διαφορά
+  const hHasInj=(x.hInjAdj?.delta||0)<-0.05, aHasInj=(x.aInjAdj?.delta||0)<-0.05;
+  const injXGRow=(label,base,final,adj)=>{
+    if(!adj||adj.delta>=-0.05) return `<div class="accordion-row"><span>${label} xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(final||base||0).toFixed(2)}</span></div>`;
+    return `<div class="accordion-row"><span>${label} xG</span><span class="data-num"><span style="color:var(--text-muted);text-decoration:line-through;font-size:0.85rem;">${Number(base||0).toFixed(2)}</span><span style="color:var(--accent-gold);font-weight:800;margin-left:5px;">${Number(final||0).toFixed(2)}</span><span style="color:var(--accent-red);font-size:0.75rem;margin-left:3px;">(${Number(adj.delta||0).toFixed(2)})</span></span></div>`;
+  };
+  const injuredBanner=(injAdj,teamName)=>{
+    if(!injAdj?.injured?.length) return '';
+    return `<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:0.78rem;color:var(--accent-red);font-weight:700;">🏥 <b>${esc(teamName)}</b>: ${injAdj.injured.map(p=>esc((p.name||'').split(' ').slice(-1)[0])).join(', ')} — xG ×${(injAdj.factor||1).toFixed(2)}</div>`;
+  };
+
   return `
     <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
       <div class="accordion-grid">
-        
+
         <div class="accordion-card">
           <h4>Home vs Away Breakdown</h4>
           <div class="accordion-row"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
@@ -593,29 +789,42 @@ function buildAccordionHTML(x) {
           <h4>🎯 Top Scorer Projections</h4>
           <div style="margin-bottom:15px;">
             <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">🏠 Home Team Scorer</div>
-            ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-weight:700; font-size:0.95rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.hScorerProb.goals}G)</span></span>
-              <span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.hScorerProb.prob.toFixed(1)}%</span>
-            </div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No top 20 data available</span>`}
+            ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="font-weight:700; font-size:0.95rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.hScorerProb.goals}G)</span></span><span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.hScorerProb.prob.toFixed(1)}%</span></div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No data available</span>`}
           </div>
           <div style="border-top:1px solid var(--border-light); padding-top:15px;">
             <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">✈️ Away Team Scorer</div>
-            ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-weight:700; font-size:0.95rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.aScorerProb.goals}G)</span></span>
-              <span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.aScorerProb.prob.toFixed(1)}%</span>
-            </div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No top 20 data available</span>`}
+            ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="font-weight:700; font-size:0.95rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.aScorerProb.goals}G)</span></span><span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.aScorerProb.prob.toFixed(1)}%</span></div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No data available</span>`}
           </div>
         </div>
 
         <div class="accordion-card">
           <h4>Game Projections</h4>
-          <div class="accordion-row"><span>Lambda xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(x.hExp||0).toFixed(2)} – ${Number(x.aExp||0).toFixed(2)}</span></div>
+          ${injuredBanner(x.hInjAdj, x.ht)}
+          ${injuredBanner(x.aInjAdj, x.at)}
+          ${injXGRow('🏠', x.hXGbase, x.hXGfinal, x.hInjAdj)}
+          ${injXGRow('✈️', x.aXGbase, x.aXGfinal, x.aInjAdj)}
           <div class="accordion-row"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
           <div class="accordion-row"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
-          <div class="accordion-row" style="margin-top:10px; border-top:1px solid var(--border-light); padding-top:10px; color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
+          <div class="accordion-row" style="margin-top:10px;border-top:1px solid var(--border-light);padding-top:10px;color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
           <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
         </div>
-        
+
+        <div class="accordion-card" style="min-width:340px;">
+          <h4>👥 Player Intelligence</h4>
+          <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;border-bottom:1px solid var(--border-light);padding-bottom:5px;">
+            <span>Παίκτης</span><span>xG%&nbsp;&nbsp;&nbsp;&nbsp;</span><span>🟨 Card%</span>
+          </div>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-gold);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🏠 ${esc(x.ht)}${hHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.hInjAdj.injured||[]).length} OUT</span>`:''}</div>
+            ${(x.hPlayers||[]).slice(0,6).map(renderPlayerRow).join('')||'<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+          </div>
+          <div style="border-top:1px solid var(--border-light);padding-top:10px;">
+            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-blue);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">✈️ ${esc(x.at)}${aHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.aInjAdj.injured||[]).length} OUT</span>`:''}</div>
+            ${(x.aPlayers||[]).slice(0,6).map(renderPlayerRow).join('')||'<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+          </div>
+          <div style="margin-top:8px;font-size:0.68rem;color:var(--text-dim);border-top:1px solid var(--border-light);padding-top:5px;">🔴 = κίνδυνος αποβολής (4,9,14 κάρτες) &nbsp;·&nbsp; 🏥 = τραυματίας/αναπ.</div>
+        </div>
+
         <div class="accordion-card">
           <h4>🎯 Exact Score Duo (D-C)</h4>
           <div style="display:flex; gap:10px; margin-bottom:14px;">
@@ -670,8 +879,10 @@ function renderSummaryTable() {
         let omCol=x.omegaPick?.includes('NO BET')?'var(--text-muted)':'var(--text-main)';
         const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.65rem;color:var(--accent-teal);margin-top:4px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
         
+        const hasInjury = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
+        const injBadge  = hasInjury ? `<span style="background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:0.65rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:6px;">🏥 INJ</span>` : '';
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
-          <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}</td>
+          <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}</td>
           <td class="col-score data-num" style="color:${scoreCol}; font-size:1.1rem;">${scoreStr}${liveExtra}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
@@ -944,7 +1155,36 @@ window.saveLeagueMods = function() {
 // ================================================================
 window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}try{const lm=JSON.parse(localStorage.getItem(LS_LGMODS));if(lm)leagueMods=lm;}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
 window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Global Settings!');};
-window.resimulateMatches=function(){if(!window.scannedMatchesData.length)return;window.scannedMatchesData.forEach(d=>{if(!d.hS)return;const lp=getLeagueParams(d.leagueId);const hXG=Number(d.hS.fXG)*lp.mult,aXG=Number(d.aS.fXG)*lp.mult;const tXG=hXG+aXG,btts=Math.min(hXG,aXG);const res=computePick(hXG,aXG,tXG,btts,lp,d.hS,d.aS);Object.assign(d,{tXG,btts,outPick:res.outPick,xgDiff:res.xgDiff,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,hExp:res.hExp,aExp:res.aExp,pp:res.pp,lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor});});rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');};
+window.resimulateMatches=function(){
+  if(!window.scannedMatchesData.length)return;
+  window.scannedMatchesData.forEach(d=>{
+    if(!d.hS)return;
+    const lp=getLeagueParams(d.leagueId);
+    let hXG=Number(d.hS.fXG)*lp.mult, aXG=Number(d.aS.fXG)*lp.mult;
+    // Re-apply H2H blend αν υπάρχει
+    if(d.h2h){
+      const h2hGames=d.h2h.homeWins+d.h2h.awayWins+d.h2h.draws;
+      if(h2hGames>=4){const h2hAvg=parseFloat(d.h2h.h2hAvgGoals)||0,modelAvg=hXG+aXG;if(modelAvg>0&&h2hAvg>0){const scale=h2hAvg/modelAvg,blend=0.12;hXG=hXG*(1-blend)+(hXG*scale)*blend;aXG=aXG*(1-blend)+(aXG*scale)*blend;}}
+    }
+    // Re-apply injury factor (stored από το αρχικό scan — δεν ξανακαλεί API)
+    const hFactor=d.hInjAdj?.factor??1.0, aFactor=d.aInjAdj?.factor??1.0;
+    const hXGfinal=hXG*hFactor, aXGfinal=aXG*aFactor;
+    const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
+    const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
+    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS);
+    Object.assign(d,{
+      tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
+      hInjAdj:{...d.hInjAdj,adjXG:hXGfinal,delta:hDelta},
+      aInjAdj:{...d.aInjAdj,adjXG:aXGfinal,delta:aDelta},
+      outPick:res.outPick,xgDiff:res.xgDiff,
+      exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
+      omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
+      hExp:res.hExp,aExp:res.aExp,pp:res.pp,
+      lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor
+    });
+  });
+  rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');
+};
 
 window.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('pin')?.addEventListener('input',function(){
