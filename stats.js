@@ -84,32 +84,22 @@ let bankrollData = { current: 0, history: [] };
 // HT_LAMBDA: global fallback (~43.5% των συνολικών γκολ στο 1ο ημίχρονο)
 const HT_LAMBDA = 0.435;
 
-// League-specific 1st half goal percentages (εμπειρικά βαθμονομημένο ανά πρωτάθλημα)
-// Bundesliga: 2ο ημίχρονο βαρύ → HT factor χαμηλότερο
-// Serie A / Premier League: πιο ισόρροπα ημίχρονα
-const HT_LEAGUE_FACTORS = {
-  78:0.420, // Bundesliga — 2nd half heavy
-  79:0.425, // 2. Bundesliga
-  39:0.440, // Premier League
-  40:0.435, // Championship
-  135:0.440,// Serie A
-  136:0.435,// Serie B
-  140:0.430,// La Liga
-  141:0.430,// La Liga 2
-  61:0.430, // Ligue 1 — tactical, slow start
-  62:0.435, // Ligue 2
-  88:0.440, // Eredivisie
-  144:0.435,// Jupiler Pro
-  203:0.438,// Süper Lig
-  253:0.450,// MLS — high-energy start
-  262:0.445,// Liga MX
-  71:0.440, // Série A (BR)
-  113:0.430,// Allsvenskan
-  103:0.435,// Eliteserien
-  2:0.430,  // Champions League — cautious 1st halves
-  3:0.430,  // Europa League
-  848:0.432,// Conference League
-};
+// HT_LEAGUE_FACTORS: φορτώνεται από leagues.js (LEAGUES_HT_FACTORS) αν διαθέσιμο,
+// αλλιώς χρησιμοποιεί inline fallback για τα βασικά πρωταθλήματα
+const HT_LEAGUE_FACTORS = (typeof LEAGUES_HT_FACTORS !== 'undefined')
+  ? LEAGUES_HT_FACTORS
+  : {
+      78:0.420, 79:0.425, 39:0.440, 40:0.435, 41:0.435,
+      135:0.440,136:0.435,140:0.430,141:0.430,
+      61:0.430, 62:0.435, 88:0.440, 144:0.435,
+      94:0.432, 218:0.442,207:0.435,179:0.438,
+      203:0.438,197:0.435,
+      113:0.430,103:0.440,119:0.438,244:0.435,164:0.445,
+      357:0.438,395:0.435,
+      106:0.435,345:0.435,283:0.432,271:0.437,
+      253:0.450,262:0.445,71:0.440,128:0.435,
+      2:0.430,  3:0.430,  848:0.432,
+    };
 function getHTFactor(leagueId) {
   return HT_LEAGUE_FACTORS[leagueId] ?? HT_LAMBDA;
 }
