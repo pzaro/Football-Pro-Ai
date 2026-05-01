@@ -69,9 +69,10 @@ let teamStatsCache = new BoundedCache(150),
     standCache     = new BoundedCache(60),
     h2hCache       = new BoundedCache(200),
     scorersCache   = new BoundedCache(60),
-    assistsCache   = new BoundedCache(60),   // top assists per league/season
-    cardsCache     = new BoundedCache(60),   // top yellow cards per league/season
-    injuryCache    = new BoundedCache(200);  // injuries per team (2 per match)
+    assistsCache   = new BoundedCache(60),
+    cardsCache     = new BoundedCache(60),
+    injuryCache    = new BoundedCache(200),
+    liveStatsCache = new BoundedCache(50);   // live fixture stats, short-lived
 let isRunning = false, currentCredits = null;
 let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
 window.scannedMatchesData = [];
@@ -673,12 +674,100 @@ window.runScan=async function(){
 // ================================================================
 //  LIVE SYNC & TICKER
 // ================================================================
+// ================================================================
+//  LIVE INTELLIGENCE — xGA, Momentum, Next Goal Probability
+// ================================================================
+
+/**
+ * Υπολογίζει live xG, xGA, momentum και P(επόμενο γκολ)
+ * από τα live statistics ενός αγώνα.
+ *
+ * Μοντέλο xG:
+ *   - Αν ο provider δίνει expected_goals → χρησιμοποιούμε αυτό (πηγή: 'provider')
+ *   - Αλλιώς composite model:
+ *       insideBox shots × 0.22 + outsideBox shots × 0.07
+ *       + blocked shots × 0.08 + corners × 0.04
+ *
+ * P(next goal) = λ_team / (λ_home + λ_away) με μικρό home advantage ×1.04
+ */
+function computeLiveIntelligence(hStatsArr, aStatsArr, elapsed) {
+  if (!hStatsArr?.length || !aStatsArr?.length) return null;
+  const el = Math.max(safeNum(elapsed, 1), 1);
+
+  // ── Raw stats ──────────────────────────────────────────────────
+  const hSoT   = statVal(hStatsArr, 'Shots on Goal');
+  const aSoT   = statVal(aStatsArr, 'Shots on Goal');
+  const hTot   = statVal(hStatsArr, 'Total Shots');
+  const aTot   = statVal(aStatsArr, 'Total Shots');
+  const hInB   = statVal(hStatsArr, 'Shots insidebox');
+  const aInB   = statVal(aStatsArr, 'Shots insidebox');
+  const hBlk   = statVal(hStatsArr, 'Blocked Shots');
+  const aBlk   = statVal(aStatsArr, 'Blocked Shots');
+  const hCor   = statVal(hStatsArr, 'Corner Kicks');
+  const aCor   = statVal(aStatsArr, 'Corner Kicks');
+  const hPoss  = statVal(hStatsArr, 'Ball Possession') || 50;
+  const aPoss  = statVal(aStatsArr, 'Ball Possession') || (100 - hPoss);
+  const hSaves = statVal(hStatsArr, 'Goalkeeper Saves');
+  const aSaves = statVal(aStatsArr, 'Goalkeeper Saves');
+  const hFouls = statVal(hStatsArr, 'Fouls');
+  const aFouls = statVal(aStatsArr, 'Fouls');
+  // Provider xG (quando available from opta/stats-perform)
+  const hXGprov = statVal(hStatsArr, 'expected_goals');
+  const aXGprov = statVal(aStatsArr, 'expected_goals');
+
+  // ── Live xG ───────────────────────────────────────────────────
+  let hLiveXG, aLiveXG, xgSource;
+  if (hXGprov > 0 || aXGprov > 0) {
+    hLiveXG = Math.max(hXGprov, 0.05);
+    aLiveXG = Math.max(aXGprov, 0.05);
+    xgSource = 'provider';
+  } else {
+    // Composite model: inside/outside box shots + blocked + corners
+    const hOutB = Math.max(hTot - hInB, 0);
+    const aOutB = Math.max(aTot - aInB, 0);
+    hLiveXG = Math.max(hInB * 0.22 + hOutB * 0.07 + hBlk * 0.08 + hCor * 0.04, 0.05);
+    aLiveXG = Math.max(aInB * 0.22 + aOutB * 0.07 + aBlk * 0.08 + aCor * 0.04, 0.05);
+    xgSource = 'model';
+  }
+  // xGA = αυτό που δέχεται η ομάδα = xG του αντιπάλου
+  const hLiveXGA = aLiveXG;
+  const aLiveXGA = hLiveXG;
+
+  // ── Momentum (composite pressure index 0–100) ─────────────────
+  // Βάρη: shots on target > total shots > corners > possession
+  const hPress = hSoT * 4.0 + (hTot - hSoT) * 1.5 + hCor * 2.0 + (hPoss / 100) * 22;
+  const aPress = aSoT * 4.0 + (aTot - aSoT) * 1.5 + aCor * 2.0 + (aPoss / 100) * 22;
+  const totPress = hPress + aPress || 1;
+  const hMomentum = Math.round(clamp((hPress / totPress) * 100, 5, 95));
+  const aMomentum = 100 - hMomentum;
+
+  // ── P(Next Goal) — βάσει xG rates per minute ──────────────────
+  const hRate = hLiveXG / el;
+  const aRate = aLiveXG / el;
+  const HOME_ADV = 1.04; // μικρό home advantage
+  const totRate  = hRate * HOME_ADV + aRate;
+  const pNextHome = clamp((hRate * HOME_ADV) / totRate, 0.05, 0.95);
+  const pNextAway = 1 - pNextHome;
+
+  return {
+    hLiveXG, aLiveXG, hLiveXGA, aLiveXGA,
+    hMomentum, aMomentum,
+    pNextHome, pNextAway,
+    hSoT, aSoT, hTot, aTot, hCor, aCor,
+    hPoss, aPoss, hSaves, aSaves, hFouls, aFouls,
+    xgSource, elapsed: el
+  };
+}
+
 window.syncLiveScores=async function(){
   if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
   try{
     const res=await apiReq('fixtures?live=all');const liveArr=res.response||[];
     if(!liveArr.length){showOk('Δεν υπάρχουν live αγώνες.');return;}
-    const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));let n=0;
+    const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));
+
+    // 1. Βασική ενημέρωση σκορ + events (χωρίς extra credits)
+    let n=0;
     window.scannedMatchesData.forEach(d=>{
       if(!liveMap.has(d.fixId))return;const ld=liveMap.get(d.fixId);
       d.m.goals=ld.goals;d.m.fixture.status=ld.fixture.status;
@@ -686,7 +775,26 @@ window.syncLiveScores=async function(){
       evts.forEach(ev=>{const t=(ev.type||'').toLowerCase(),det=(ev.detail||'').toLowerCase();if(t==='corner')cor++;else if(t==='card'){if(det.includes('yellow'))yel++;else if(det.includes('red')&&!det.includes('yellow'))red++;}});
       if(evts.length>0){d.liveCorners=cor;d.liveYellows=yel;d.liveReds=red;}n++;
     });
-    renderSummaryTable();tickerRefresh();showOk(`✅ 1 Credit · Synced ${n} live αγώνες`);
+
+    // 2. Live Intelligence — fetch statistics για κάθε live match (1 credit/match)
+    const liveTracked=window.scannedMatchesData.filter(d=>liveMap.has(d.fixId));
+    if(liveTracked.length>0){
+      await Promise.all(liveTracked.map(async d=>{
+        try{
+          const sr=await apiReq(`fixtures/statistics?fixture=${d.fixId}`);
+          if(!sr.response||sr.response.length<2)return;
+          const hStArr=sr.response[0].statistics;
+          const aStArr=sr.response[1].statistics;
+          const elapsed=d.m?.fixture?.status?.elapsed||45;
+          d.liveIntel=computeLiveIntelligence(hStArr,aStArr,elapsed);
+          // Cache για τυχόν αναφορά
+          liveStatsCache.set(String(d.fixId),{h:hStArr,a:aStArr,ts:Date.now()});
+        }catch{}
+      }));
+    }
+
+    renderSummaryTable();tickerRefresh();
+    showOk(`✅ ${1+liveTracked.length} Credits · Synced ${n} live αγώνες · Live Intel: ${liveTracked.filter(d=>d.liveIntel).length} matches`);
   }catch(e){showErr('Sync error: '+e.message);}finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
 };
 
@@ -707,7 +815,16 @@ function tickerRefresh(){
     const scoreHtml=`<span class="t-score t-live">${gh}-${ga} <small style="color:var(--accent-green);font-size:0.5em">${elapsed}</small></span>`;
     const pickHtml=!d.omegaPick?.includes('NO BET')?`<span class="t-pick">${esc((d.omegaPick||'').split(' ').slice(0,2).join(' '))}</span>`:'';
     const corHtml=d.liveCorners!==undefined?`<span class="t-cor">🚩${d.liveCorners}</span>`:'';
-    return `<div class="ticker-item"><span class="live-dot" style="width:5px;height:5px;"></span>${esc(d.ht)} <span style="opacity:0.4">vs</span> ${esc(d.at)} ${scoreHtml}${pickHtml}${corHtml}</div>`;
+    // Next Goal probability in ticker
+    let nextGoalHtml='';
+    if(d.liveIntel){
+      const li=d.liveIntel;
+      const favTeam=li.pNextHome>li.pNextAway?'🏠':'✈️';
+      const favPct=Math.round(Math.max(li.pNextHome,li.pNextAway)*100);
+      const momColor=li.hMomentum>60?'var(--accent-gold)':li.aMomentum>60?'var(--accent-blue)':'var(--accent-teal)';
+      nextGoalHtml=`<span style="color:${momColor};font-size:0.85em;">🎯${favTeam}${favPct}%</span>`;
+    }
+    return `<div class="ticker-item"><span class="live-dot" style="width:5px;height:5px;"></span>${esc(d.ht)} <span style="opacity:0.4">vs</span> ${esc(d.at)} ${scoreHtml}${pickHtml}${corHtml}${nextGoalHtml}</div>`;
   }).join('');
   
   inner.innerHTML=items+items;bar.style.display='flex';
@@ -812,19 +929,90 @@ function buildAccordionHTML(x) {
     return `<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:0.78rem;color:var(--accent-red);font-weight:700;">🏥 <b>${esc(teamName)}</b>: ${injAdj.injured.map(p=>esc((p.name||'').split(' ').slice(-1)[0])).join(', ')} — xG ×${(injAdj.factor||1).toFixed(2)}</div>`;
   };
 
+  // Live Intelligence card builder (εμφανίζεται μόνο για live αγώνες)
+  const li = x.liveIntel;
+  const liveIntelCard = li ? `
+    <div class="accordion-card" style="border-color:rgba(239,68,68,0.35);min-width:320px;">
+      <h4 style="color:var(--accent-red);">🔴 Live Intelligence
+        <span style="font-size:0.75rem;font-weight:400;color:var(--text-muted);margin-left:8px;">${li.elapsed}'  ·  ${li.xgSource==='provider'?'Official xG':'Model xG'}</span>
+      </h4>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 6px;font-size:0.8rem;margin-bottom:14px;text-align:center;">
+        <span style="color:var(--text-dim);font-size:0.7rem;text-transform:uppercase;"></span>
+        <span style="color:var(--accent-gold);font-weight:700;">🏠 ${esc(x.ht.split(' ')[0])}</span>
+        <span style="color:var(--accent-blue);font-weight:700;">✈️ ${esc(x.at.split(' ')[0])}</span>
+
+        <span style="color:var(--text-muted);text-align:left;">Shots OT</span>
+        <span class="data-num">${li.hSoT}</span><span class="data-num">${li.aSoT}</span>
+
+        <span style="color:var(--text-muted);text-align:left;">Total Shots</span>
+        <span class="data-num">${li.hTot}</span><span class="data-num">${li.aTot}</span>
+
+        <span style="color:var(--text-muted);text-align:left;">Corners</span>
+        <span class="data-num">${li.hCor}</span><span class="data-num">${li.aCor}</span>
+
+        <span style="color:var(--text-muted);text-align:left;">Possession</span>
+        <span class="data-num">${li.hPoss}%</span><span class="data-num">${li.aPoss}%</span>
+
+        <span style="color:var(--text-muted);text-align:left;">GK Saves</span>
+        <span class="data-num">${li.hSaves}</span><span class="data-num">${li.aSaves}</span>
+
+        <span style="color:var(--text-muted);text-align:left;font-weight:700;">${acr('xG')} Live</span>
+        <span class="data-num" style="color:var(--accent-gold);font-weight:800;">${li.hLiveXG.toFixed(2)}</span>
+        <span class="data-num" style="color:var(--accent-blue);font-weight:800;">${li.aLiveXG.toFixed(2)}</span>
+
+        <span style="color:var(--text-muted);text-align:left;font-weight:700;">${acr('xGA')} Live</span>
+        <span class="data-num" style="color:${li.hLiveXGA>1.2?'var(--accent-red)':li.hLiveXGA>0.8?'var(--accent-gold)':'var(--accent-green)'};">${li.hLiveXGA.toFixed(2)}</span>
+        <span class="data-num" style="color:${li.aLiveXGA>1.2?'var(--accent-red)':li.aLiveXGA>0.8?'var(--accent-gold)':'var(--accent-green)'};">${li.aLiveXGA.toFixed(2)}</span>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:5px;">Momentum</div>
+        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;gap:1px;">
+          <div style="width:${li.hMomentum}%;background:var(--accent-gold);transition:width 0.5s;"></div>
+          <div style="width:${li.aMomentum}%;background:var(--accent-blue);transition:width 0.5s;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-muted);margin-top:4px;">
+          <span style="color:var(--accent-gold);font-weight:700;">🏠 ${li.hMomentum}%</span>
+          <span style="color:var(--accent-blue);font-weight:700;">${li.aMomentum}% ✈️</span>
+        </div>
+      </div>
+
+      <div style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.2);border-radius:8px;padding:12px;">
+        <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;text-align:center;margin-bottom:8px;">🎯 Επόμενο Γκολ</div>
+        <div style="display:flex;justify-content:space-around;align-items:center;">
+          <div style="text-align:center;">
+            <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${li.pNextHome>0.55?'var(--accent-gold)':'var(--text-main)'};">${Math.round(li.pNextHome*100)}%</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);">🏠 ${esc(x.ht.split(' ')[0])}</div>
+          </div>
+          <div style="color:var(--text-dim);font-size:0.85rem;">vs</div>
+          <div style="text-align:center;">
+            <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${li.pNextAway>0.55?'var(--accent-blue)':'var(--text-main)'};">${Math.round(li.pNextAway*100)}%</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);">✈️ ${esc(x.at.split(' ')[0])}</div>
+          </div>
+        </div>
+        <div style="margin-top:8px;display:flex;height:4px;border-radius:2px;overflow:hidden;gap:1px;">
+          <div style="width:${Math.round(li.pNextHome*100)}%;background:var(--accent-gold);"></div>
+          <div style="width:${Math.round(li.pNextAway*100)}%;background:var(--accent-blue);"></div>
+        </div>
+      </div>
+    </div>` : '';
+
   return `
     <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
       <div class="accordion-grid">
 
         <div class="accordion-card">
           <h4>Home vs Away Breakdown</h4>
-          <div class="accordion-row"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
-          <div class="accordion-row"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
+          <div class="accordion-row"><span>Form ${acr('xG')}</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
+          <div class="accordion-row"><span>Form ${acr('xGA')}</span><span class="data-num" style="color:var(--text-muted)">${x.hS?.uiXGA||'0.00'} vs ${x.aS?.uiXGA||'0.00'}</span></div>
+          <div class="accordion-row"><span>Split ${acr('xG')}</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
           <div class="accordion-row"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
           <div class="accordion-row" style="color:var(--text-muted);"><span>${acr('H2H')} (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
           <div style="display:flex;gap:4px;margin-top:10px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:4px;margin-top:6px;">${formDots(x.aS?.history)}</div>
         </div>
 
+        ${liveIntelCard}
         <div class="accordion-card">
           <h4>🎯 Top Scorer Projections</h4>
           <div style="margin-bottom:15px;">
@@ -921,9 +1109,21 @@ function renderSummaryTable() {
         
         const hasInjury = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
         const injBadge  = hasInjury ? `<span style="background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:0.65rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:6px;">${acr('INJ')}</span>` : '';
+
+        // Live Intelligence extras
+        const li = live ? x.liveIntel : null;
+        const momentumBar = li ? `<div style="display:flex;height:3px;border-radius:2px;overflow:hidden;margin-top:4px;gap:1px;">
+          <div style="width:${li.hMomentum}%;background:var(--accent-gold);border-radius:2px 0 0 2px;"></div>
+          <div style="width:${li.aMomentum}%;background:var(--accent-blue);border-radius:0 2px 2px 0;"></div>
+        </div>` : '';
+        const nextGoalBadge = li ? `<div style="font-size:0.62rem;color:var(--accent-teal);margin-top:3px;font-weight:700;">
+          🎯 ${li.pNextHome>li.pNextAway?'🏠':'✈️'} ${Math.round(Math.max(li.pNextHome,li.pNextAway)*100)}%
+          &nbsp;·&nbsp; ${acr('xGA')}: ${li.hLiveXGA.toFixed(2)}|${li.aLiveXGA.toFixed(2)}
+        </div>` : '';
+
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
           <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}</td>
-          <td class="col-score data-num" style="color:${scoreCol}; font-size:1.1rem;">${scoreStr}${liveExtra}</td>
+          <td class="col-score data-num" style="color:${scoreCol}; font-size:1.1rem;">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
