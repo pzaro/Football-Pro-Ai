@@ -11,14 +11,34 @@ const LS_SETTINGS = "omega_settings_v5.0";
 const LS_LGMODS   = "omega_lgmods_v5.0";
 const LS_BANKROLL = "omega_bankroll_v5.0";
 
-let teamStatsCache = new Map(), lastFixCache = new Map(),
-    standCache = new Map(), h2hCache = new Map(), scorersCache = new Map();
+// ----------------------------------------------------------------
+// LRU Cache με size cap — αποτρέπει memory leaks σε μεγάλα sessions
+// Όταν γεμίσει, διαγράφει το παλαιότερο entry (FIFO approximation)
+// ----------------------------------------------------------------
+class BoundedCache {
+  constructor(maxSize=120){this._map=new Map();this._max=maxSize;}
+  has(k){return this._map.has(k);}
+  get(k){if(!this._map.has(k))return undefined;const v=this._map.get(k);this._map.delete(k);this._map.set(k,v);return v;}
+  set(k,v){if(this._map.has(k))this._map.delete(k);else if(this._map.size>=this._max)this._map.delete(this._map.keys().next().value);this._map.set(k,v);}
+  clear(){this._map.clear();}
+  get size(){return this._map.size;}
+}
+
+let teamStatsCache = new BoundedCache(150),
+    lastFixCache   = new BoundedCache(150),
+    standCache     = new BoundedCache(60),
+    h2hCache       = new BoundedCache(200),
+    scorersCache   = new BoundedCache(60);
 let isRunning = false, currentCredits = null;
 let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
 // 🎯 CALIBRATED ENGINE DEFAULTS
+// HT_LAMBDA: στατιστικά τα πρώτα ημίχρονα έχουν ~43.5% των συνολικών γκολ
+// (λιγότερα από 45% λόγω απουσίας κόπωσης & καθυστερήσεων)
+const HT_LAMBDA = 0.435;
+
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
   tXG_O25:2.80,  tXG_O35:3.40,   tXG_U25:1.80,  tBTTS_U25:0.65,
@@ -157,9 +177,33 @@ async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,re
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
 async function _executeRequest(path,resolve){
   await new Promise(r=>setTimeout(r,Math.random()*80));
-  try{const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
-    if(r.ok){const data=await r.json();if(data.response&&typeof currentCredits==='number'){currentCredits--;const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}resolve(data);}else resolve({response:[]});
-  }catch{resolve({response:[]});}finally{await new Promise(r=>setTimeout(r,REQUEST_GAP_MS));_apiActive--;_drainQueue();}
+  const MAX_RETRIES=2;
+  let resolved=false;
+  try{
+    for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
+      try{
+        const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
+        if(r.ok){
+          const data=await r.json();
+          if(data.response&&typeof currentCredits==='number'){
+            currentCredits--;
+            const el=document.getElementById('creditDisplay');
+            if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
+          }
+          resolve(data); resolved=true; return;
+        }
+        // HTTP error (429, 5xx) — retry με exponential backoff
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,600*(attempt+1)));continue;}
+      }catch(err){
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,800*(attempt+1)));continue;}
+        console.warn(`[APEX] API failed after ${MAX_RETRIES+1} attempts: ${path}`,err);
+      }
+    }
+    if(!resolved)resolve({response:[]});
+  }finally{
+    await new Promise(r=>setTimeout(r,REQUEST_GAP_MS));
+    _apiActive--;_drainQueue();
+  }
 }
 window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
 
@@ -287,7 +331,8 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   }
 
   // --- HALF-TIME (HT) APPROXIMATION ---
-  const ppHT = getPoissonProbabilities(hL * 0.45, aL * 0.45);
+  // Χρήση HT_LAMBDA (0.435) αντί 0.45 — πιο ακριβές εμπειρικά
+  const ppHT = getPoissonProbabilities(hL * HT_LAMBDA, aL * HT_LAMBDA);
 
   const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
