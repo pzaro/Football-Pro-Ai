@@ -1,6 +1,6 @@
 // ==========================================================================
 // APEX OMEGA v5.0 — MASTER ENGINE (ULTIMATE EDITION)
-// Poisson · xG · Corners · Scorers · League Calib · Post-Match
+// Poisson · xG · Corners · Scorers · Asian Handicap · HT · League Calib 
 // ==========================================================================
 
 const API_BASE = "https://v3.football.api-sports.io";
@@ -239,7 +239,7 @@ function computeCornerConfidence(hS,aS,hXG,aXG){
 }
 
 // ================================================================
-//  PICK ENGINE
+//  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
@@ -248,19 +248,46 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   if(pp.pHome-pp.pAway>0.15&&xgDiff>lp.xgDiff)outPick='1';
   else if(pp.pAway-pp.pHome>0.15&&xgDiff<-lp.xgDiff)outPick='2';
   
+  // --- ASIAN HANDICAP (-1.5) CALCULATION ---
+  let pAH_Home = 0, pAH_Away = 0;
+  for (let h = 0; h <= 6; h++) {
+    for (let a = 0; a <= 6; a++) {
+      if (h - a >= 2) pAH_Home += pp.matrix[h][a];
+      if (a - h >= 2) pAH_Away += pp.matrix[h][a];
+    }
+  }
+
+  // --- HALF-TIME (HT) APPROXIMATION ---
+  const ppHT = getPoissonProbabilities(hL * 0.45, aL * 0.45);
+
   const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
   
   let omegaPick='NO BET',reason='Insufficient statistical edge.',pickScore=0;
   
-  if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
+  // 1. ASIAN HANDICAP (-1.5)
+  if(pAH_Home >= 0.38 && xgDiff >= 0.90 && hS.formRating >= 50){omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;reason=`AH -1.5 Prob: ${pct(pAH_Home)}`;}
+  else if(pAH_Away >= 0.38 && xgDiff <= -0.90 && aS.formRating >= 50){omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;reason=`AH -1.5 Prob: ${pct(pAH_Away)}`;}
+
+  // 2. HALF-TIME WINNER
+  else if(ppHT.pHome >= 0.45 && xgDiff >= 0.75){omegaPick='⏱️ 1 ΗΜΙΧΡΟΝΟ';pickScore=ppHT.pHome*100;reason=`HT 1 Prob: ${pct(ppHT.pHome)}`;}
+  else if(ppHT.pAway >= 0.45 && xgDiff <= -0.75){omegaPick='⏱️ 2 ΗΜΙΧΡΟΝΟ';pickScore=ppHT.pAway*100;reason=`HT 2 Prob: ${pct(ppHT.pAway)}`;}
+
+  // 3. OVER / UNDER
+  else if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
   else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 OVER 2.5 GOALS';pickScore=pp.pO25*100;reason=`Poisson O2.5: ${pct(pp.pO25)} | tXG:${tXG.toFixed(2)}`;}
   else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
+  
+  // 4. GOAL / GOAL
   else if(btts>=lp.minBTTS&&pp.pBTTS>=0.50&&hXG>=0.95&&aXG>=0.95){omegaPick='🎯 GOAL/GOAL (BTTS)';pickScore=pp.pBTTS*100;reason=`BTTS: ${pct(pp.pBTTS)}`;}
+  
+  // 5. STRAIGHT WIN (1X2)
   else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff){
     const outcome=outPick==='1'?'🏠 ΑΣΟΣ':'✈️ ΔΙΠΛΟ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
     if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Home':'Away'}: ${pct(outProb)}`;}
   }
+  
+  // 6. PROPS
   else if(cornerRes.conf>=72){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
   else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 OVER 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Avg Cards: ${totCards.toFixed(1)}`;}
   
@@ -386,13 +413,14 @@ function tickerRefresh(){
   function step(ts){if(last===null)last=ts;const dt=Math.min((ts-last)/1000,0.1);last=ts;pos+=_tickerPx*dt;const half=inner.scrollWidth/2;if(pos>=half)pos=0;inner.style.transform=`translateX(-${pos.toFixed(1)}px)`;_tickerRaf=requestAnimationFrame(step);}
   _tickerRaf=requestAnimationFrame(step);
 }
+window.setTickerSpeed=v=>{_tickerPx=parseFloat(v);};
 
 // ================================================================
 //  TOP LISTS & TABS
 // ================================================================
 function rebuildTopLists(){
   const sd = (window.scannedMatchesData||[]).filter(x => !isFinished(x.m?.fixture?.status?.short));
-  latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')).sort((a,b)=>b.strength-a.strength).slice(0,6);
+  latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
   latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('OVER 2.5')).sort((a,b)=>b.strength-a.strength).slice(0,6);
@@ -401,7 +429,7 @@ function rebuildTopLists(){
 
 function renderTopSections(){
   const tabs=[
-    {id:'combo1',  lbl:'⚡ High Conf 1X2', d:latestTopLists.combo1,  sk:'strength', sl:'CONF'},
+    {id:'combo1',  lbl:'⚡ Top Picks (1X2/AH)', d:latestTopLists.combo1,  sk:'strength', sl:'CONF'},
     {id:'outcomes',lbl:'Match Odds',        d:latestTopLists.outcomes,sk:'strength', sl:'CONF'},
     {id:'over25',  lbl:'Over 2.5',          d:latestTopLists.over25,  sk:'tXG',      sl:'xG'},
     {id:'corners', lbl:'🚩 Top Corners',    d:latestTopLists.corners, sk:'cornerConf',sl:'CONF'},
@@ -449,7 +477,7 @@ window.toggleMatchDetails = function(id) {
   if(el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
 };
 
-// 🌟 THE NEW RESPONSIVE ACCORDION (Grid Based)
+// 🌟 RESPONSIVE ACCORDION
 function buildAccordionHTML(x) {
   const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
   const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
@@ -570,6 +598,10 @@ function renderSummaryTable() {
           else if(x.omegaPick.includes('ΔΙΠΛΟ')) hit = aOut === '2';
           else if(x.omegaPick.includes('ΚΟΡΝΕΡ')) hit = (hCor+aCor) > 8.5;
           else if(x.omegaPick.includes('ΚΑΡΤΕΣ')) hit = (hCrd+aCrd) > 5.5;
+          else if(x.omegaPick.includes('AH')) { // ASIAN HANDICAP CHECK
+            if(x.omegaPick.includes('ΑΣΟΣ')) hit = (ah - aa) >= 2;
+            if(x.omegaPick.includes('ΔΙΠΛΟ')) hit = (aa - ah) >= 2;
+          }
           hitHtml = hit ? `<span style="background:rgba(16,185,129,0.15);color:var(--accent-green);padding:4px 8px;border-radius:4px;font-weight:800;font-size:0.75rem;">✅ WON</span>` : `<span style="background:rgba(244,63,94,0.15);color:var(--accent-red);padding:4px 8px;border-radius:4px;font-weight:800;font-size:0.75rem;">❌ LOST</span>`;
       }
 
