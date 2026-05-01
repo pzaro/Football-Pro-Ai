@@ -76,7 +76,7 @@ let teamStatsCache = new BoundedCache(150),
     liveStatsCache = new BoundedCache(50),
     lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -519,11 +519,12 @@ function buildPlayerProfiles(teamId, scorers, assists, cards, teamTotalGoals) {
       const xGContrib = gap / totalGAP;           // % συνεισφοράς στο xG
       const xGShare   = p.goals / totalGoals;     // % μόνο από γκολ
       // Card probability: Poisson model — P(≥1 κάρτα σε επόμενο ματς)
-      const cardRate  = p.apps > 0 ? p.yellowCards / p.apps : 0;
-      const cardProb  = (1 - Math.exp(-cardRate)) * 100;
-      // Suspension risk: κοντά σε threshold (4, 9, 14, 19...)
-      const suspRisk  = p.yellowCards > 0 && (p.yellowCards % 5 === 4);
-      return { ...p, gap, xGContrib, xGShare, cardRate, cardProb, suspRisk, injured: false };
+      const cardRate     = p.apps > 0 ? p.yellowCards / p.apps : 0;
+      const redCardRate  = p.apps > 0 ? p.redCards    / p.apps : 0;
+      const cardProb     = (1 - Math.exp(-cardRate))    * 100;
+      const redCardProb  = (1 - Math.exp(-redCardRate)) * 100;
+      const suspRisk     = p.yellowCards > 0 && (p.yellowCards % 5 === 4);
+      return { ...p, gap, xGContrib, xGShare, cardRate, redCardRate, cardProb, redCardProb, suspRisk, injured: false };
     })
     .filter(p => p.gap > 0 || p.yellowCards > 0)  // κρατάμε μόνο παίκτες με επίδραση
     .sort((a, b) => (b.xGContrib - a.xGContrib) || (b.yellowCards - a.yellowCards));
@@ -672,9 +673,12 @@ function adjustPlayerCardProbs(players, oppStats, matchCtx) {
 
   // Εφαρμογή in-place + ταξινόμηση κατά adjCardProb
   players.forEach(p => {
-    p.adjCardRate   = p.cardRate * combinedFactor;
-    p.adjCardProb   = clamp((1 - Math.exp(-p.adjCardRate)) * 100, 0, 99);
-    p.cardAdjFactor = combinedFactor;
+    p.adjCardRate    = p.cardRate    * combinedFactor;
+    p.adjCardProb    = clamp((1 - Math.exp(-p.adjCardRate))    * 100, 0, 99);
+    // Κόκκινες: ηπιότερη διόρθωση (0.6× factor) — πιο τυχαίο event
+    p.adjRedCardRate = p.redCardRate * clamp(combinedFactor * 0.6, 0.5, 1.3);
+    p.adjRedCardProb = clamp((1 - Math.exp(-p.adjRedCardRate)) * 100, 0, 99);
+    p.cardAdjFactor  = combinedFactor;
   });
 
   players.sort((a, b) => b.adjCardProb - a.adjCardProb);
@@ -1302,15 +1306,30 @@ function rebuildTopLists(){
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
   latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('OVER 2.5')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
+  // 👥 PLAYERS — flatten all players, enrich with match context
+  const seen = new Set();
+  const allP  = [];
+  sd.forEach(d => {
+    const addSide = (players, teamName) => (players||[]).forEach(p => {
+      const key = `${p.id}_${d.fixId}`;
+      if(seen.has(key)) return; seen.add(key);
+      if((p.xGContrib||0)<0.005 && (p.adjCardProb||0)<2 && (p.adjRedCardProb||0)<1) return;
+      allP.push({ ...p, matchId:d.fixId, matchLabel:`${d.ht} vs ${d.at}`, teamName, lg:d.lg });
+    });
+    addSide(d.hPlayers, d.ht);
+    addSide(d.aPlayers, d.at);
+  });
+  latestTopLists.players = allP;
 }
 
 function renderTopSections(){
   const tabs=[
-    {id:'combo1',  lbl:`⚡ Top Picks (${acr('1X2')}/${acr('AH')})`, d:latestTopLists.combo1,  sk:'strength', sl:'CONF'},
-    {id:'outcomes',lbl:'Match Odds',                                   d:latestTopLists.outcomes,sk:'strength', sl:'CONF'},
-    {id:'over25',  lbl:`${acr('O2.5')}`,                              d:latestTopLists.over25,  sk:'tXG',      sl:acr('xG')},
-    {id:'corners', lbl:'🚩 Top Corners',                               d:latestTopLists.corners, sk:'cornerConf',sl:'CONF'},
-    {id:'exact',   lbl:`Exact (${acr('D-C')})`,                       d:latestTopLists.exact,   sk:'exactConf',sl:'CONF'}
+    {id:'combo1',  lbl:`⚡ Top Picks (${acr('1X2')}/${acr('AH')})`, d:latestTopLists.combo1,  sk:'strength',   sl:'CONF'},
+    {id:'outcomes',lbl:'Match Odds',                                   d:latestTopLists.outcomes,sk:'strength',   sl:'CONF'},
+    {id:'over25',  lbl:`${acr('O2.5')}`,                              d:latestTopLists.over25,  sk:'tXG',        sl:acr('xG')},
+    {id:'corners', lbl:'🚩 Top Corners',                               d:latestTopLists.corners, sk:'cornerConf', sl:'CONF'},
+    {id:'exact',   lbl:`Exact (${acr('D-C')})`,                       d:latestTopLists.exact,   sk:'exactConf',  sl:'CONF'},
+    {id:'players', lbl:'👥 Players',                                   d:latestTopLists.players, sk:null,         sl:null}
   ];
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
@@ -1318,8 +1337,11 @@ function renderTopSections(){
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
-    if(!tab.d.length){html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;}
-    else{
+    if(tab.id==='players'){
+      html += renderPlayersTab(tab.d);
+    } else if(!tab.d.length){
+      html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
+    } else {
       html+=`<div style="display:flex;flex-direction:column;gap:10px;">`;
       tab.d.forEach((x,j)=>{
         let val=tab.id==='exact'?(x.exact||'?-?')+(x.exact2&&x.exact2!==x.exact?` / ${x.exact2}`:''):Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
@@ -1341,6 +1363,122 @@ function renderTopSections(){
     html+=`</div>`;
   });
   html+=`</div>`;t.innerHTML=html;
+}
+
+// ── Sort state για Players tab ──────────────────────────────
+let _playerSort = 'xg'; // 'xg' | 'yellow' | 'red'
+
+window.setPlayerSort = function(mode) {
+  _playerSort = mode;
+  const panel = document.getElementById('tabpanel-players');
+  if(panel) panel.innerHTML = renderPlayersTab(latestTopLists.players);
+  // Update active sort button
+  ['xg','yellow','red'].forEach(m => {
+    const btn = document.getElementById(`psort-${m}`);
+    if(btn) btn.classList.toggle('active', m === mode);
+  });
+};
+
+function renderPlayersTab(players) {
+  if(!players?.length) return `<div style="text-align:center;color:var(--text-muted);padding:30px;font-weight:600;">Εκτελέστε πρώτα Scan για να φορτωθούν τα player stats.</div>`;
+
+  // Sort
+  const sorted = [...players].sort((a,b) => {
+    if(_playerSort==='yellow') return (b.adjCardProb||b.cardProb||0)-(a.adjCardProb||a.cardProb||0);
+    if(_playerSort==='red')    return (b.adjRedCardProb||b.redCardProb||0)-(a.adjRedCardProb||a.redCardProb||0);
+    return (b.xGContrib||0)-(a.xGContrib||0); // default: xG
+  });
+
+  const top = sorted.slice(0, 40); // max 40 rows
+
+  // Sort button builder
+  const sortBtn = (mode, label, col) => `<button id="psort-${mode}" onclick="window.setPlayerSort('${mode}')"
+    style="font-size:0.72rem;font-weight:700;padding:4px 12px;border-radius:14px;border:1px solid ${_playerSort===mode?col:'var(--border-light)'};background:${_playerSort===mode?`rgba(${mode==='xg'?'56,189,248':mode==='yellow'?'251,191,36':'248,113,113'},0.12)`:'var(--bg-surface)'};color:${_playerSort===mode?col:'var(--text-muted)'};cursor:pointer;transition:all 0.18s;">
+    ${label}
+  </button>`;
+
+  // Table rows
+  const rows = top.map((p,i) => {
+    const yProb   = p.adjCardProb    ?? p.cardProb    ?? 0;
+    const rProb   = p.adjRedCardProb ?? p.redCardProb ?? 0;
+    const xgPct   = (p.xGContrib * 100).toFixed(1);
+    const xgBar   = Math.min(Math.round(p.xGContrib * 100 * 3), 100);
+    const yCol    = yProb>=40?'var(--accent-red)':yProb>=20?'var(--accent-gold)':'var(--text-muted)';
+    const rCol    = rProb>=8 ?'var(--accent-red)':rProb>=3 ?'var(--accent-gold)':'var(--text-dim)';
+    const adjArrow= p.cardAdjFactor>1.05?`<span style="color:var(--accent-red);font-size:0.6rem;font-weight:900;">▲</span>`:p.cardAdjFactor<0.95?`<span style="color:var(--accent-teal);font-size:0.6rem;font-weight:900;">▼</span>`:'';
+    const suspS   = p.suspRisk?'<span style="color:var(--accent-red);font-size:0.7rem;margin-left:3px;" title="Κοντά σε threshold αποβολής">🔴</span>':'';
+    const injS    = p.injured ?'<span style="font-size:0.7rem;margin-left:2px;">🏥</span>':'';
+    const highlightCol = _playerSort==='xg'
+      ? `background:rgba(56,189,248,${Math.min(p.xGContrib*1.5,0.10).toFixed(2)})`
+      : _playerSort==='yellow'
+        ? `background:rgba(251,191,36,${Math.min(yProb/500,0.10).toFixed(2)})`
+        : `background:rgba(248,113,113,${Math.min(rProb/100,0.10).toFixed(2)})`;
+    const rankCol = i<3?'var(--accent-gold)':i<10?'var(--text-sub)':'var(--text-dim)';
+    const name    = esc((p.name||'Unknown').split(' ').slice(-1)[0]);
+    const teamShort = esc((p.teamName||'').split(' ').slice(0,2).join(' '));
+
+    return `<tr style="${highlightCol};transition:background 0.2s;" onclick="scrollToMatch('row-${p.matchId}')">
+      <td style="text-align:center;font-family:var(--font-mono);font-size:0.75rem;color:${rankCol};font-weight:800;padding:9px 6px;">${i+1}</td>
+      <td style="padding:9px 8px;min-width:110px;">
+        <div style="font-weight:700;font-size:0.88rem;color:var(--text-main);">${injS}${name}${suspS}</div>
+        <div style="font-size:0.7rem;color:var(--text-muted);margin-top:1px;">${teamShort}</div>
+      </td>
+      <td style="padding:9px 8px;min-width:140px;max-width:180px;">
+        <div style="font-size:0.72rem;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.matchLabel||'')}</div>
+        <div style="font-size:0.65rem;color:var(--text-dim);margin-top:1px;">${esc(p.lg||'')}</div>
+      </td>
+      <td style="padding:9px 8px;min-width:100px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="flex:1;height:5px;background:var(--bg-raised);border-radius:3px;max-width:60px;">
+            <div style="width:${xgBar}%;height:100%;background:var(--accent-blue);border-radius:3px;"></div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:0.82rem;font-weight:700;color:var(--accent-blue);min-width:34px;">${xgPct}%</span>
+        </div>
+      </td>
+      <td style="padding:9px 10px;text-align:center;">
+        <span style="font-family:var(--font-mono);font-size:0.92rem;font-weight:800;color:${yCol};">${yProb>=1?'🟨 ':' '}${yProb.toFixed(1)}%</span>
+        ${adjArrow}
+      </td>
+      <td style="padding:9px 10px;text-align:center;">
+        <span style="font-family:var(--font-mono);font-size:0.92rem;font-weight:800;color:${rCol};">${rProb>=2?'🟥 ':' '}${rProb.toFixed(1)}%</span>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);">
+        ${players.length} παίκτες από ${new Set(players.map(p=>p.matchId)).size} αγώνες
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span style="font-size:0.7rem;color:var(--text-dim);margin-right:4px;">Ταξινόμηση:</span>
+        ${sortBtn('xg',   `${acr('xG')} Contribution`,    'var(--accent-blue)')}
+        ${sortBtn('yellow','🟨 Κίτρινη κάρτα', 'var(--accent-gold)')}
+        ${sortBtn('red',   '🟥 Κόκκινη κάρτα', 'var(--accent-red)')}
+      </div>
+    </div>
+    <div class="data-table-wrapper">
+      <table class="summary-table" style="font-size:0.85rem;">
+        <thead>
+          <tr>
+            <th style="width:36px;">#</th>
+            <th class="left-align">Παίκτης</th>
+            <th class="left-align">Αγώνας</th>
+            <th class="left-align" style="cursor:pointer;" onclick="window.setPlayerSort('xg')">${acr('xG')}% ↕</th>
+            <th style="cursor:pointer;" onclick="window.setPlayerSort('yellow')">🟨 Κίτρινη ↕</th>
+            <th style="cursor:pointer;" onclick="window.setPlayerSort('red')">🟥 Κόκκινη ↕</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:8px;font-size:0.67rem;color:var(--text-dim);display:flex;gap:16px;flex-wrap:wrap;">
+      <span>🟨 Adj. yellow card % (Poisson · αντίπαλος · league)</span>
+      <span>🟥 Red card % (ηπιότερη διόρθωση ×0.6)</span>
+      <span>▲▼ = διόρθωση αντιπάλου</span>
+      <span>🔴 = κίνδυνος αποβολής</span>
+      <span>Κλικ σε γραμμή → μεταβαίνει στον αγώνα</span>
+    </div>`;
 }
 
 window.switchTab=function(id){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelectorAll('.pred-tab-panel').forEach(p=>p.style.display='none');document.getElementById('tab-btn-'+id)?.classList.add('active');const panel=document.getElementById('tabpanel-'+id);if(panel)panel.style.display='block';};
