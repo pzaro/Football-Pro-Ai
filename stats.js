@@ -21,7 +21,7 @@ const ACRONYM_DICT = {
   'O2.5':     'Over 2.5 — Σύνολο γκολ αγώνα ≥ 3',
   'O3.5':     'Over 3.5 — Σύνολο γκολ αγώνα ≥ 4',
   'U2.5':     'Under 2.5 — Σύνολο γκολ αγώνα ≤ 2',
-  'HT':       'Half-Time — Πρόβλεψη αποτελέσματος 1ου ημιχρόνου',
+  'HT':       'Half-Time — Πρόβλεψη αποτελέσματος & σκορ 1ου ημιχρόνου. Χρησιμοποιεί league-specific λ factor + home advantage +2.5%',
   'FT':       'Full-Time — Τελικό αποτέλεσμα (90 λεπτά)',
   'xG':       'Expected Goals — Αναμενόμενα γκολ βάσει ποιότητας ευκαιριών. Πιο αξιόπιστο από πραγματικά γκολ για πρόβλεψη',
   'tXG':      'Total xG — Άθροισμα xG και των δύο ομάδων. Βάση για Over/Under αγορές',
@@ -80,9 +80,38 @@ window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
 // 🎯 CALIBRATED ENGINE DEFAULTS
-// HT_LAMBDA: στατιστικά τα πρώτα ημίχρονα έχουν ~43.5% των συνολικών γκολ
-// (λιγότερα από 45% λόγω απουσίας κόπωσης & καθυστερήσεων)
+// HT_LAMBDA: global fallback (~43.5% των συνολικών γκολ στο 1ο ημίχρονο)
 const HT_LAMBDA = 0.435;
+
+// League-specific 1st half goal percentages (εμπειρικά βαθμονομημένο ανά πρωτάθλημα)
+// Bundesliga: 2ο ημίχρονο βαρύ → HT factor χαμηλότερο
+// Serie A / Premier League: πιο ισόρροπα ημίχρονα
+const HT_LEAGUE_FACTORS = {
+  78:0.420, // Bundesliga — 2nd half heavy
+  79:0.425, // 2. Bundesliga
+  39:0.440, // Premier League
+  40:0.435, // Championship
+  135:0.440,// Serie A
+  136:0.435,// Serie B
+  140:0.430,// La Liga
+  141:0.430,// La Liga 2
+  61:0.430, // Ligue 1 — tactical, slow start
+  62:0.435, // Ligue 2
+  88:0.440, // Eredivisie
+  144:0.435,// Jupiler Pro
+  203:0.438,// Süper Lig
+  253:0.450,// MLS — high-energy start
+  262:0.445,// Liga MX
+  71:0.440, // Série A (BR)
+  113:0.430,// Allsvenskan
+  103:0.435,// Eliteserien
+  2:0.430,  // Champions League — cautious 1st halves
+  3:0.430,  // Europa League
+  848:0.432,// Conference League
+};
+function getHTFactor(leagueId) {
+  return HT_LEAGUE_FACTORS[leagueId] ?? HT_LAMBDA;
+}
 
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
@@ -184,15 +213,15 @@ function dixonColesCorr(h,a,lH,lA,rho=-0.13){
   return 1;
 }
 
-function getPoissonProbabilities(hL,aL){
+function getPoissonProbabilities(hL,aL,rho=-0.13){
   let pHome=0,pDraw=0,pAway=0,pO25=0,pO35=0,pU25=0,pBTTS=0;
   const matrix=[]; const scoreList=[];
   for(let h=0;h<=6;h++){
     matrix[h]=[];
     for(let a=0;a<=6;a++){
       let p=poissonProb(hL,h)*poissonProb(aL,a);
-      // Εφαρμογή Dixon-Coles correction για h,a <= 1
-      if(h<=1&&a<=1) p*=Math.max(dixonColesCorr(h,a,hL,aL),0);
+      // Dixon-Coles correction με configurable rho (FT: -0.13, HT: -0.10)
+      if(h<=1&&a<=1) p*=Math.max(dixonColesCorr(h,a,hL,aL,rho),0);
       matrix[h][a]=p;
       scoreList.push({h,a,prob:p});
       if(h>a)pHome+=p;else if(h<a)pAway+=p;else pDraw+=p;
@@ -350,7 +379,7 @@ function getLeagueParams(leagueId){
   if(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(leagueId))defMult=engineConfig.modGold;
   else if(typeof TRAP_LEAGUES!=='undefined'&&TRAP_LEAGUES.has(leagueId))defMult=engineConfig.modTrap;
   else if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId))defMult=engineConfig.modTight;
-  return{mult:lm.mult??defMult,minXGO25:lm.minXGO25??defO25,minXGO35:lm.minXGO35??engineConfig.tXG_O35,maxU25:lm.maxU25??engineConfig.tXG_U25,minBTTS:lm.minBTTS??engineConfig.tBTTS,xgDiff:lm.xgDiff??defDiff};
+  return{mult:lm.mult??defMult,minXGO25:lm.minXGO25??defO25,minXGO35:lm.minXGO35??engineConfig.tXG_O35,maxU25:lm.maxU25??engineConfig.tXG_U25,minBTTS:lm.minBTTS??engineConfig.tBTTS,xgDiff:lm.xgDiff??defDiff,htFactor:getHTFactor(leagueId)};
 }
 
 // 🎯 PLAYER PROPS MODEL
@@ -572,9 +601,11 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
     }
   }
 
-  // --- HALF-TIME (HT) APPROXIMATION ---
-  // Χρήση HT_LAMBDA (0.435) αντί 0.45 — πιο ακριβές εμπειρικά
-  const ppHT = getPoissonProbabilities(hL * HT_LAMBDA, aL * HT_LAMBDA);
+  // --- HALF-TIME APPROXIMATION ---
+  // League-specific HT factor + μικρό home advantage (away teams παίζουν πιο αμυντικά στο 1ο ημίχρονο)
+  // D-C rho=-0.10 (λιγότερη correction για HT όπου τα χαμηλά σκορ είναι ακόμα πιο συχνά)
+  const htF = lp.htFactor ?? HT_LAMBDA;
+  const ppHT = getPoissonProbabilities(hL * htF * 1.025, aL * htF * 0.975, -0.10);
 
   const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
@@ -615,6 +646,51 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
     hExp:hL,aExp:aL,exactConf,xgDiff,pp,
     cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL};
+}
+
+// ================================================================
+//  HT ANALYSIS — πλήρης ημιχρόνια ανάλυση
+// ================================================================
+
+/**
+ * Υπολογίζει ολοκληρωμένη ανάλυση ημιχρόνου (HT) με:
+ *
+ * 1. League-specific HT factor (από HT_LEAGUE_FACTORS)
+ * 2. Home advantage correction (+2.5% για home, -2.5% για away):
+ *    Τα φιλοξενούμενα παίζουν πιο αμυντικά στο 1ο ημίχρονο
+ * 3. Ειδικό Dixon-Coles rho = -0.10 (χαμηλότερο από FT=-0.13):
+ *    Στο HT η πιθανότητα 0-0 είναι ακόμα πιο υψηλή, χρειάζεται ηπιότερη διόρθωση
+ *
+ * Επιστρέφει:
+ *   pLeadHome, pDraw, pLeadAway — πιθανότητες ημιχρόνιου αποτελέσματος
+ *   htBest, htSecond            — Top-2 πιθανότερα σκορ ημιχρόνου (D-C adjusted)
+ *   htConf                      — Combined confidence (htBest + htSecond prob × 4.2)
+ *   htLambdaH, htLambdaA        — Τελικά lambdas που χρησιμοποιήθηκαν
+ *   htFactor                    — League factor που εφαρμόστηκε
+ */
+function computeHTAnalysis(hExp, aExp, lp) {
+  const htF  = lp?.htFactor ?? HT_LAMBDA;
+  // Home advantage στο HT: home +2.5%, away -2.5%
+  const htH  = clamp(hExp * htF * 1.025, 0.06, 2.8);
+  const htA  = clamp(aExp * htF * 0.975, 0.06, 2.8);
+
+  // HT-specific Poisson με D-C ρ = -0.10
+  const ppHT = getPoissonProbabilities(htH, htA, -0.10);
+
+  const htConf = Math.round(clamp((ppHT.bestScore.prob + ppHT.secondScore.prob) * 100 * 4.2, 0, 99));
+
+  return {
+    pLeadHome: ppHT.pHome,
+    pDraw:     ppHT.pDraw,
+    pLeadAway: ppHT.pAway,
+    htBest:    ppHT.bestScore,
+    htSecond:  ppHT.secondScore,
+    htConf,
+    htLambdaH: htH,
+    htLambdaA: htA,
+    htFactor:  htF,
+    ppHT
+  };
 }
 
 // ================================================================
@@ -667,7 +743,8 @@ async function analyzeMatchSafe(m,index,total){
 
     const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS);
 
-    // 🟨 CARD PROBABILITY ADJUSTMENT — αντίπαλος + αγωνιστική ένταση + league type
+    // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
+    const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
     // Καλείται ΜΕΤΑ το computePick για να έχουμε το result.xgDiff
     // Ταξινομεί τους players κατά adjCardProb DESC
     const cardCtx = { xgDiff: result.xgDiff, leagueId: m.league.id };
@@ -697,6 +774,7 @@ async function analyzeMatchSafe(m,index,total){
       hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,   // base vs injury-adjusted
       hInjAdj, aInjAdj,                                 // {adjXG,delta,factor,injured:[]}
       hPlayers, aPlayers,                               // player profiles
+      htAnalysis,                                       // ⏱️ HT analysis object
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:h2hSummary,
@@ -1081,6 +1159,58 @@ function buildAccordionHTML(x) {
         </div>
 
         ${liveIntelCard}
+
+        ${x.htAnalysis ? (() => {
+          const ht=x.htAnalysis;
+          const hPct=Math.round(ht.pLeadHome*100), dPct=Math.round(ht.pDraw*100), aPct=Math.round(ht.pLeadAway*100);
+          const leadCol = ht.pLeadHome>ht.pLeadAway?'var(--accent-gold)':'var(--accent-blue)';
+          const leadStr = ht.pLeadHome>ht.pLeadAway+0.05?`🏠 ${hPct}%`:ht.pLeadAway>ht.pLeadHome+0.05?`✈️ ${aPct}%'`:`⚖️ Ισόρροπο`;
+          return `<div class="accordion-card" style="min-width:280px;border-color:rgba(45,212,191,0.4);">
+          <h4 style="color:var(--accent-teal);">⏱️ HT Prediction
+            <span style="font-size:0.68rem;color:var(--text-dim);font-weight:400;margin-left:8px;">λ 🏠${ht.htLambdaH.toFixed(2)} ✈️${ht.htLambdaA.toFixed(2)} · ×${ht.htFactor}</span>
+          </h4>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
+            <div style="text-align:center;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,${ht.pLeadHome>0.38?'0.40':'0.18'});border-radius:8px;padding:10px 4px;">
+              <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">🏠 Προηγείται</div>
+              <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pLeadHome>0.35?'var(--accent-gold)':'var(--text-main)'};">${hPct}%</div>
+            </div>
+            <div style="text-align:center;background:rgba(255,255,255,0.03);border:1px solid var(--border-light);border-radius:8px;padding:10px 4px;">
+              <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">⚖️ Ισοπαλία</div>
+              <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pDraw>0.42?'var(--accent-teal)':'var(--text-main)'};">${dPct}%</div>
+            </div>
+            <div style="text-align:center;background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,${ht.pLeadAway>0.38?'0.40':'0.18'});border-radius:8px;padding:10px 4px;">
+              <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">✈️ Προηγείται</div>
+              <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pLeadAway>0.35?'var(--accent-blue)':'var(--text-main)'};">${aPct}%</div>
+            </div>
+          </div>
+
+          <div style="height:6px;border-radius:3px;overflow:hidden;display:flex;gap:1px;margin-bottom:12px;">
+            <div style="width:${hPct}%;background:var(--accent-gold);"></div>
+            <div style="width:${dPct}%;background:rgba(255,255,255,0.18);"></div>
+            <div style="width:${aPct}%;background:var(--accent-blue);"></div>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-bottom:10px;">
+            <div style="flex:1;background:rgba(45,212,191,0.07);border:1px solid rgba(45,212,191,0.30);border-radius:8px;padding:10px;text-align:center;">
+              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🥇 HT Score</div>
+              <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-teal);">${ht.htBest.h}-${ht.htBest.a}</div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px;">${pct(ht.htBest.prob)} D-C</div>
+            </div>
+            <div style="flex:1;background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.25);border-radius:8px;padding:10px;text-align:center;">
+              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🥈 Alt Score</div>
+              <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-purple);">${ht.htSecond.h}-${ht.htSecond.a}</div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px;">${pct(ht.htSecond.prob)} D-C</div>
+            </div>
+          </div>
+          <div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.20);border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">Conf</span>
+            <span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:900;color:${ht.htConf>=45?'var(--accent-teal)':ht.htConf>=25?'var(--accent-gold)':'var(--text-muted)'};">${ht.htConf}%</span>
+            <span style="font-size:0.72rem;color:${leadCol};font-weight:700;">${leadStr}</span>
+          </div>
+          <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);">D-C ρ=−0.10 · home +2.5% · away −2.5% λ</div>
+        </div>`;})() : ''}
+
         <div class="accordion-card">
           <h4>🎯 Top Scorer Projections</h4>
           <div style="margin-bottom:15px;">
@@ -1127,7 +1257,6 @@ function buildAccordionHTML(x) {
 
         <div class="accordion-card">
           <h4>🎯 Exact Score Duo (${acr('D-C')})</h4>
-          <div style="display:flex; gap:10px; margin-bottom:14px;">
             <div style="flex:1; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.3); border-radius:8px; padding:14px; text-align:center;">
               <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px; font-weight:700;">🥇 Top Pick</div>
               <div style="font-family:var(--font-mono); font-size:1.8rem; font-weight:900; color:var(--accent-blue);">${x.exact||'?-?'}</div>
@@ -1170,7 +1299,7 @@ function renderSummaryTable() {
     for(const[lg,matches] of Object.entries(grouped)){
       rows+=`<div style="background:rgba(56,189,248,0.05);padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;">${esc(lg)}</div>
       <div class="data-table-wrapper" style="border:none;border-radius:0;margin-bottom:0;"><table class="summary-table">
-      <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">${acr('1X2')}</th><th class="col-o25">${acr('O2.5')}</th><th class="col-u25">${acr('U2.5')}</th><th class="col-btts">${acr('BTTS')}</th><th class="col-exact">Exact</th><th class="col-conf">${acr('Conf%')}</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
+      <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">${acr('1X2')}</th><th class="col-o25">${acr('O2.5')}</th><th class="col-u25">${acr('U2.5')}</th><th class="col-btts">${acr('BTTS')}</th><th class="col-exact">FT / ${acr('HT')}</th><th class="col-conf">${acr('Conf%')}</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
       matches.forEach(x=>{
         const sh=x.m?.fixture?.status?.short||'', live=isLive(sh);
         const ah=x.m?.goals?.home??0, aa=x.m?.goals?.away??0;
@@ -1200,7 +1329,10 @@ function renderSummaryTable() {
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
           <td class="col-btts data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
-          <td class="col-exact data-num" style="font-size:1rem; line-height:1.3;"><span style="color:var(--accent-blue);font-weight:800;">${x.exact||'?-?'}</span>${x.exact2&&x.exact2!==x.exact?`<br><span style="color:var(--accent-purple);font-size:0.82rem;">${x.exact2}</span>`:''}</td>
+          <td class="col-exact data-num" style="font-size:0.95rem; line-height:1.4;">
+            <span style="color:var(--accent-blue);font-weight:800;">${x.exact||'?-?'}</span>${x.exact2&&x.exact2!==x.exact?`<br><span style="color:var(--accent-purple);font-size:0.8rem;">${x.exact2}</span>`:''}
+            ${x.htAnalysis?`<br><span style="color:var(--accent-teal);font-size:0.75rem;font-weight:700;">⏱ ${x.htAnalysis.htBest.h}-${x.htAnalysis.htBest.a}</span>`:''}
+          </td>
           <td class="col-conf data-num" style="color:${confCol}; font-size:1.1rem;">${conf.toFixed(0)}%</td>
           <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.85rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         </tr>
@@ -1484,10 +1616,12 @@ window.resimulateMatches=function(){
     const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
     const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
     const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS);
+    const htAnalysis=computeHTAnalysis(res.hExp,res.aExp,lp);
     Object.assign(d,{
       tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
       hInjAdj:{...d.hInjAdj,adjXG:hXGfinal,delta:hDelta},
       aInjAdj:{...d.aInjAdj,adjXG:aXGfinal,delta:aDelta},
+      htAnalysis,
       outPick:res.outPick,xgDiff:res.xgDiff,
       exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
       omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
