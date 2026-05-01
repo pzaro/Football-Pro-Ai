@@ -11,6 +11,46 @@ const LS_SETTINGS = "omega_settings_v5.0";
 const LS_LGMODS   = "omega_lgmods_v5.0";
 const LS_BANKROLL = "omega_bankroll_v5.0";
 
+// ================================================================
+//  ACRONYM DICTIONARY — κλικ πάνω σε ακρώνυμο → tooltip
+// ================================================================
+const ACRONYM_DICT = {
+  '1X2':      '1X2 — Αγορά αποτελέσματος: 1 = νίκη γηπεδούχου, Χ = ισοπαλία, 2 = νίκη φιλοξενούμενου',
+  'AH':       'Asian Handicap — Χάντικαπ αγορά: η ομάδα ξεκινά με εικονικό μειονέκτημα γκολ. AH -1.5 = νίκη με ≥2 γκολ',
+  'BTTS':     'Both Teams To Score — Και οι δύο ομάδες να σκοράρουν τουλάχιστον 1 γκολ (= Γκολ/Γκολ)',
+  'O2.5':     'Over 2.5 — Σύνολο γκολ αγώνα ≥ 3',
+  'O3.5':     'Over 3.5 — Σύνολο γκολ αγώνα ≥ 4',
+  'U2.5':     'Under 2.5 — Σύνολο γκολ αγώνα ≤ 2',
+  'HT':       'Half-Time — Πρόβλεψη αποτελέσματος 1ου ημιχρόνου',
+  'FT':       'Full-Time — Τελικό αποτέλεσμα (90 λεπτά)',
+  'xG':       'Expected Goals — Αναμενόμενα γκολ βάσει ποιότητας ευκαιριών. Πιο αξιόπιστο από πραγματικά γκολ για πρόβλεψη',
+  'tXG':      'Total xG — Άθροισμα xG και των δύο ομάδων. Βάση για Over/Under αγορές',
+  'xGA':      'xG Against — Αναμενόμενα γκολ που δέχεται η ομάδα. Μετράει αδυναμία άμυνας',
+  'xG%':      'xG Contribution % — Ποσοστό συνεισφοράς παίκτη στο team xG βάσει GAP (Γκολ + 0.4 × Ασίστ)',
+  'xG Adj':   'xG Adjusted — Διορθωμένο xG μετά αφαίρεση τραυματισμένων παικτών. Εμφανίζεται σε χρυσό χρώμα',
+  'xG Diff':  'xG Difference — Διαφορά xG μεταξύ home/away. Κατώφλι για σήματα 1X2 (default: 0.48)',
+  'GAP':      'Goal-Assist Points — Γκολ + 0.4 × Ασίστ. Composite δείκτης επιθετικής συνεισφοράς παίκτη',
+  'H2H':      'Head-to-Head — Ιστορικές απευθείας αναμετρήσεις. Χρησιμοποιείται για 12% blend στο λ',
+  'D-C':      'Dixon-Coles — Στατιστική διόρθωση Poisson για χαμηλά σκορ (0-0, 1-0, 0-1, 1-1) με ρ = −0.13',
+  'INJ':      'Injury flag — Τραυματισμένοι παίκτες με σημαντική επίπτωση στο xG (delta < −0.05)',
+  'Conf%':    'Confidence % — Εσωτερική βαθμολογία εμπιστοσύνης σήματος (0–99%). Βάσει Poisson πιθανοτήτων',
+  'Card%':    'Card Probability % — Πιθανότητα κίτρινης κάρτας: 1 − e^(−κάρτες/εμφανίσεις). Poisson μοντέλο',
+  'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit',
+  'Kelly':    'Kelly Criterion — Μαθηματικός τύπος βέλτιστου ποσού στοιχήματος βάσει bankroll & πλεονεκτήματος',
+  'LRU':      'Least Recently Used — Στρατηγική cache: αφαιρείται πρώτο το παλαιότερο/ανενεργό entry',
+};
+
+/**
+ * Τυλίγει ένα ακρώνυμο σε <span class="acr"> για tooltip.
+ * Χρησιμοποιείται inline στα template literals του UI.
+ */
+function acr(term) {
+  const tip = ACRONYM_DICT[term];
+  if (!tip) return term;
+  const safeT = tip.replace(/"/g, '&quot;');
+  return `<span class="acr" data-tip="${safeT}">${term}</span>`;
+}
+
 // ----------------------------------------------------------------
 // LRU Cache με size cap — αποτρέπει memory leaks σε μεγάλα sessions
 // Όταν γεμίσει, διαγράφει το παλαιότερο entry (FIFO approximation)
@@ -692,11 +732,11 @@ function rebuildTopLists(){
 
 function renderTopSections(){
   const tabs=[
-    {id:'combo1',  lbl:'⚡ Top Picks (1X2/AH)', d:latestTopLists.combo1,  sk:'strength', sl:'CONF'},
-    {id:'outcomes',lbl:'Match Odds',        d:latestTopLists.outcomes,sk:'strength', sl:'CONF'},
-    {id:'over25',  lbl:'Over 2.5',          d:latestTopLists.over25,  sk:'tXG',      sl:'xG'},
-    {id:'corners', lbl:'🚩 Top Corners',    d:latestTopLists.corners, sk:'cornerConf',sl:'CONF'},
-    {id:'exact',   lbl:'Exact Score',       d:latestTopLists.exact,   sk:'exactConf',sl:'CONF'}
+    {id:'combo1',  lbl:`⚡ Top Picks (${acr('1X2')}/${acr('AH')})`, d:latestTopLists.combo1,  sk:'strength', sl:'CONF'},
+    {id:'outcomes',lbl:'Match Odds',                                   d:latestTopLists.outcomes,sk:'strength', sl:'CONF'},
+    {id:'over25',  lbl:`${acr('O2.5')}`,                              d:latestTopLists.over25,  sk:'tXG',      sl:acr('xG')},
+    {id:'corners', lbl:'🚩 Top Corners',                               d:latestTopLists.corners, sk:'cornerConf',sl:'CONF'},
+    {id:'exact',   lbl:`Exact (${acr('D-C')})`,                       d:latestTopLists.exact,   sk:'exactConf',sl:'CONF'}
   ];
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
@@ -781,7 +821,7 @@ function buildAccordionHTML(x) {
           <div class="accordion-row"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
           <div class="accordion-row"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
           <div class="accordion-row"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
-          <div class="accordion-row" style="color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
+          <div class="accordion-row" style="color:var(--text-muted);"><span>${acr('H2H')} (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
           <div style="display:flex;gap:4px;margin-top:10px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:4px;margin-top:6px;">${formDots(x.aS?.history)}</div>
         </div>
 
@@ -803,8 +843,8 @@ function buildAccordionHTML(x) {
           ${injuredBanner(x.aInjAdj, x.at)}
           ${injXGRow('🏠', x.hXGbase, x.hXGfinal, x.hInjAdj)}
           ${injXGRow('✈️', x.aXGbase, x.aXGfinal, x.aInjAdj)}
-          <div class="accordion-row"><span>xG Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
-          <div class="accordion-row"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
+          <div class="accordion-row"><span>${acr('xG')} Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
+          <div class="accordion-row"><span>Poisson ${acr('O2.5')}</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
           <div class="accordion-row" style="margin-top:10px;border-top:1px solid var(--border-light);padding-top:10px;color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
           <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
         </div>
@@ -812,7 +852,7 @@ function buildAccordionHTML(x) {
         <div class="accordion-card" style="min-width:340px;">
           <h4>👥 Player Intelligence</h4>
           <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;border-bottom:1px solid var(--border-light);padding-bottom:5px;">
-            <span>Παίκτης</span><span>xG%&nbsp;&nbsp;&nbsp;&nbsp;</span><span>🟨 Card%</span>
+            <span>Παίκτης</span><span>${acr('xG%')}&nbsp;&nbsp;&nbsp;&nbsp;</span><span>${acr('Card%')}</span>
           </div>
           <div style="margin-bottom:12px;">
             <div style="font-size:0.75rem;font-weight:800;color:var(--accent-gold);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🏠 ${esc(x.ht)}${hHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.hInjAdj.injured||[]).length} OUT</span>`:''}</div>
@@ -826,7 +866,7 @@ function buildAccordionHTML(x) {
         </div>
 
         <div class="accordion-card">
-          <h4>🎯 Exact Score Duo (D-C)</h4>
+          <h4>🎯 Exact Score Duo (${acr('D-C')})</h4>
           <div style="display:flex; gap:10px; margin-bottom:14px;">
             <div style="flex:1; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.3); border-radius:8px; padding:14px; text-align:center;">
               <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px; font-weight:700;">🥇 Top Pick</div>
@@ -846,7 +886,7 @@ function buildAccordionHTML(x) {
         </div>
 
         <div class="accordion-card" style="min-width: 320px;">
-          <h4 style="text-align:center;">📊 Poisson Score Matrix (Dixon-Coles)</h4>
+          <h4 style="text-align:center;">📊 Poisson Score Matrix (${acr('D-C')})</h4>
           ${pHtml}
         </div>
       </div>
@@ -870,7 +910,7 @@ function renderSummaryTable() {
     for(const[lg,matches] of Object.entries(grouped)){
       rows+=`<div style="background:rgba(56,189,248,0.05);padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;">${esc(lg)}</div>
       <div class="data-table-wrapper" style="border:none;border-radius:0;margin-bottom:0;"><table class="summary-table">
-      <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">1X2</th><th class="col-o25">O2.5</th><th class="col-u25">U2.5</th><th class="col-btts">BTTS</th><th class="col-exact">Exact</th><th class="col-conf">Conf%</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
+      <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">${acr('1X2')}</th><th class="col-o25">${acr('O2.5')}</th><th class="col-u25">${acr('U2.5')}</th><th class="col-btts">${acr('BTTS')}</th><th class="col-exact">Exact</th><th class="col-conf">${acr('Conf%')}</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
       matches.forEach(x=>{
         const sh=x.m?.fixture?.status?.short||'', live=isLive(sh);
         const ah=x.m?.goals?.home??0, aa=x.m?.goals?.away??0;
@@ -880,7 +920,7 @@ function renderSummaryTable() {
         const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.65rem;color:var(--accent-teal);margin-top:4px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
         
         const hasInjury = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
-        const injBadge  = hasInjury ? `<span style="background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:0.65rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:6px;">🏥 INJ</span>` : '';
+        const injBadge  = hasInjury ? `<span style="background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:0.65rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:6px;">${acr('INJ')}</span>` : '';
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
           <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}</td>
           <td class="col-score data-num" style="color:${scoreCol}; font-size:1.1rem;">${scoreStr}${liveExtra}</td>
@@ -1057,7 +1097,7 @@ window.runCustomAudit=async function(){
       </div>`;
     }
 
-    const statsCards=[{lbl:'1X2 / AH',h:stats.outHit,t:stats.validOut},{lbl:'O2.5',h:stats.o25H,t:stats.o25T},{lbl:'O3.5',h:stats.o35H,t:stats.o35T},{lbl:'U2.5',h:stats.u25H,t:stats.u25T},{lbl:'BTTS',h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];
+    const statsCards=[{lbl:acr('1X2')+' / '+acr('AH'),h:stats.outHit,t:stats.validOut},{lbl:acr('O2.5'),h:stats.o25H,t:stats.o25T},{lbl:acr('O3.5'),h:stats.o35H,t:stats.o35T},{lbl:acr('U2.5'),h:stats.u25H,t:stats.u25T},{lbl:acr('BTTS'),h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];
     
     let html=`<div class="quant-panel">
       <div class="panel-title">📊 Audit Results — ${cands.length} predictions</div>
@@ -1067,7 +1107,7 @@ window.runCustomAudit=async function(){
       </div>
       <div style="font-size:0.85rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve (Over 2.5)</div>
       ${buildMiniCurve(engineConfig.tXG_O25,curveData)}
-      <div class="data-table-wrapper"><table class="summary-table" style="font-size:0.9rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>1X2 / AH</th><th>O2.5</th><th>O3.5</th><th>U2.5</th><th>BTTS</th><th>Exact</th></tr></thead><tbody>`;
+      <div class="data-table-wrapper"><table class="summary-table" style="font-size:0.9rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>${acr('1X2')} / ${acr('AH')}</th><th>${acr('O2.5')}</th><th>${acr('O3.5')}</th><th>${acr('U2.5')}</th><th>${acr('BTTS')}</th><th>Exact</th></tr></thead><tbody>`;
       
     rows.forEach(({p,ah,aa,aTot,aExact,aOut,aBtts,isHit1X2})=>{
       const cell=(pred,hit)=>pred?`<span class="${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'}</span>`:'<span style="color:var(--text-dim)">—</span>';
@@ -1187,6 +1227,92 @@ window.resimulateMatches=function(){
 };
 
 window.addEventListener('DOMContentLoaded',()=>{
+
+  // ── Tooltip CSS ──────────────────────────────────────────────
+  const tipStyle = document.createElement('style');
+  tipStyle.textContent = `
+    .acr {
+      border-bottom: 1px dashed rgba(56,189,248,0.55);
+      color: var(--accent-blue);
+      cursor: help;
+      font-weight: inherit;
+      transition: opacity 0.15s;
+    }
+    .acr:hover { opacity: 0.75; }
+    #apex-tip {
+      position: fixed;
+      z-index: 999999;
+      background: var(--bg-panel);
+      border: 1px solid rgba(56,189,248,0.4);
+      border-radius: 10px;
+      padding: 12px 16px;
+      max-width: 300px;
+      min-width: 160px;
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: var(--text-main);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(56,189,248,0.08);
+      pointer-events: none;
+      display: none;
+      font-family: var(--font-sans);
+      backdrop-filter: blur(8px);
+    }
+    #apex-tip .tip-term {
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--accent-blue);
+      margin-bottom: 5px;
+      display: block;
+    }
+    #apex-tip .tip-full {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      display: block;
+      margin-bottom: 3px;
+    }
+    #apex-tip .tip-desc {
+      color: var(--text-main);
+    }
+  `;
+  document.head.appendChild(tipStyle);
+
+  // ── Tooltip DOM element ──────────────────────────────────────
+  const tipEl = document.createElement('div');
+  tipEl.id = 'apex-tip';
+  document.body.appendChild(tipEl);
+
+  // ── Click handler (event delegation) ────────────────────────
+  document.addEventListener('click', function(e) {
+    const el = e.target.closest('.acr');
+    if (!el) { tipEl.style.display = 'none'; return; }
+    e.stopPropagation();
+
+    const raw = el.dataset.tip || ACRONYM_DICT[el.textContent] || '';
+    if (!raw) return;
+
+    // Parse "TERM — Description" format
+    const dashIdx = raw.indexOf(' — ');
+    const termFull = dashIdx > -1 ? raw.slice(0, dashIdx) : el.textContent;
+    const descText = dashIdx > -1 ? raw.slice(dashIdx + 3) : raw;
+
+    tipEl.innerHTML =
+      `<span class="tip-term">${el.textContent}</span>` +
+      (termFull !== el.textContent ? `<span class="tip-full">${termFull}</span>` : '') +
+      `<span class="tip-desc">${descText}</span>`;
+
+    // Position: below the element, stay within viewport
+    tipEl.style.display = 'block';
+    const r = el.getBoundingClientRect();
+    const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+    let top = r.bottom + 8, left = r.left;
+    if (left + tw > window.innerWidth - 12) left = window.innerWidth - tw - 12;
+    if (left < 8) left = 8;
+    if (top + th > window.innerHeight - 12) top = r.top - th - 8;
+    tipEl.style.top  = top  + 'px';
+    tipEl.style.left = left + 'px';
+  });
   document.getElementById('pin')?.addEventListener('input',function(){
     if(this.value==='106014'){
       document.getElementById('auth').style.display='none';document.getElementById('app').style.display='block';
