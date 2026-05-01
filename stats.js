@@ -1484,28 +1484,53 @@ window.toggleMatchDetails = function(id) {
 
 // 🌟 RESPONSIVE ACCORDION
 // ─── helper: renders one player row (xG bar + card prob) ───────────
-function renderPlayerRow(p) {
-  // Χρήση adjCardProb (διορθωμένη) αν υπάρχει, αλλιώς raw cardProb
-  const displayCard = p.adjCardProb ?? p.cardProb;
-  const barW  = Math.min(Math.round(p.xGContrib * 100 * 2.5), 100);
-  const cCol  = displayCard >= 40 ? 'var(--accent-red)' : displayCard >= 20 ? 'var(--accent-gold)' : 'var(--text-muted)';
-  const nameS = esc((p.name||'').split(' ').slice(-1)[0]);
-  const injS  = p.injured ? '🏥 ' : '';
-  const suspS = p.suspRisk ? ' 🔴' : '';
-  // Indicator αν η πιθανότητα ανέβηκε/κατέβηκε λόγω αντιπάλου (threshold ±5%)
-  const adjIndicator = p.cardAdjFactor > 1.05
-    ? `<span style="font-size:0.65rem;color:var(--accent-red);font-weight:900;" title="Αυξημένος κίνδυνος λόγω αντιπάλου">▲</span>`
-    : p.cardAdjFactor < 0.95
-    ? `<span style="font-size:0.65rem;color:var(--accent-teal);font-weight:900;" title="Μειωμένος κίνδυνος">▼</span>`
-    : '';
-  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;${p.injured?'opacity:0.6':''}">
-    <span style="font-size:0.82rem;font-weight:${p.injured?900:600};color:${p.injured?'var(--accent-red)':'var(--text-main)'};flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${injS}${nameS}${suspS}</span>
-    <div style="width:50px;height:5px;background:var(--bg-surface);border-radius:3px;flex-shrink:0;">
-      <div style="width:${barW}%;height:100%;background:${p.injured?'var(--accent-red)':'var(--accent-blue)'};border-radius:3px;"></div>
+// ── xG Contribution row ─────────────────────────────────────
+function renderXGRow(p, rank) {
+  const pct  = (p.xGContrib * 100).toFixed(1);
+  const barW = Math.min(Math.round(p.xGContrib * 100 * 3), 100);
+  const injS = p.injured ? '🏥' : '';
+  const name = esc((p.name||'').split(' ').pop());
+  const rCol = rank===0?'var(--accent-gold)':rank===1?'var(--text-sub)':rank===2?'rgba(205,127,50,0.9)':'var(--text-dim)';
+  return `<div style="display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+    <span style="font-family:var(--font-mono);font-size:0.65rem;color:${rCol};min-width:14px;text-align:center;font-weight:800;">${rank+1}</span>
+    <span style="flex:1;font-size:0.83rem;font-weight:600;color:${p.injured?'var(--accent-red)':'var(--text-main)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${injS} ${name}</span>
+    <div style="width:44px;height:4px;background:var(--bg-raised);border-radius:2px;flex-shrink:0;">
+      <div style="width:${barW}%;height:100%;background:${p.injured?'var(--accent-red)':'var(--accent-blue)'};border-radius:2px;transition:width 0.3s;"></div>
     </div>
-    <span style="font-size:0.75rem;color:var(--text-muted);min-width:28px;text-align:right;">${(p.xGContrib*100).toFixed(0)}%</span>
-    <span style="font-size:0.78rem;font-weight:700;color:${cCol};min-width:40px;text-align:right;">${displayCard>=1?'🟨':'⬜'}${displayCard.toFixed(0)}%${adjIndicator}</span>
+    <span style="font-family:var(--font-mono);font-size:0.82rem;font-weight:800;color:var(--accent-blue);min-width:34px;text-align:right;">${pct}%</span>
   </div>`;
+}
+
+// ── Card Risk row ────────────────────────────────────────────
+function renderCardRow(p, rank) {
+  const yProb = p.adjCardProb    ?? p.cardProb    ?? 0;
+  const rProb = p.adjRedCardProb ?? p.redCardProb ?? 0;
+  const yCol  = yProb>=40?'var(--accent-red)':yProb>=20?'var(--accent-gold)':'var(--text-muted)';
+  const rCol  = rProb>=8 ?'var(--accent-red)':rProb>=3 ?'var(--accent-gold)':'var(--text-dim)';
+  const adj   = p.cardAdjFactor>1.05
+    ? `<span style="font-size:0.6rem;color:var(--accent-red);font-weight:900;">▲</span>`
+    : p.cardAdjFactor<0.95
+    ? `<span style="font-size:0.6rem;color:var(--accent-teal);font-weight:900;">▼</span>` : '';
+  const suspS = p.suspRisk ? ' <span style="font-size:0.68rem;" title="Κίνδυνος αποβολής">🔴</span>' : '';
+  const name  = esc((p.name||'').split(' ').pop());
+  const injS  = p.injured ? '🏥 ' : '';
+  return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+    <span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-dim);min-width:14px;text-align:center;font-weight:700;">${rank+1}</span>
+    <span style="flex:1;font-size:0.82rem;font-weight:600;color:${p.injured?'var(--accent-red)':'var(--text-main)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${injS}${name}${suspS}</span>
+    <span style="font-family:var(--font-mono);font-size:0.82rem;font-weight:800;color:${yCol};min-width:40px;text-align:right;">🟨${yProb.toFixed(0)}%${adj}</span>
+    <span style="font-family:var(--font-mono);font-size:0.78rem;font-weight:700;color:${rCol};min-width:34px;text-align:right;">${rProb>=2?'🟥':'  '}${rProb.toFixed(0)}%</span>
+  </div>`;
+}
+
+// ── Team block helper (shared between both cards) ────────────
+function teamBlock(players, teamName, teamColor, isHome, oppS) {
+  const injCount = (players||[]).filter(p=>p.injured).length;
+  const factor   = (players||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor || 1;
+  const fCol     = factor>1.05?'var(--accent-red)':factor<0.95?'var(--accent-teal)':'var(--text-dim)';
+  const injBadge = injCount>0
+    ? `<span style="font-size:0.65rem;color:var(--accent-red);font-weight:700;margin-left:5px;">⚠️ ${injCount} OUT</span>` : '';
+  const opp      = `<span style="font-size:0.62rem;color:var(--text-dim);margin-left:6px;">αντίπ. ${Number(oppS?.crd||0).toFixed(1)} κάρτ</span>`;
+  return {injBadge, factor, fCol, opp};
 }
 function buildAccordionHTML(x) {
   const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
@@ -1805,24 +1830,64 @@ function buildAccordionHTML(x) {
           <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
         </div>
 
-        <div class="accordion-card" style="min-width:340px;">
-          <h4>👥 Player Intelligence</h4>
-          <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;border-bottom:1px solid var(--border-light);padding-bottom:5px;">
-            <span>Παίκτης ↓🟨</span><span>${acr('xG%')}&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Adj🟨%</span>
-          </div>
+        <!-- ── xG Contribution card ───────────────────────── -->
+        <div class="accordion-card">
+          <h4>${acr('xG')} Contribution <span style="font-size:0.65rem;color:var(--text-dim);font-weight:500;">↓ φθίνουσα</span></h4>
+
+          <!-- Home -->
           <div style="margin-bottom:12px;">
-            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-gold);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">🏠 ${esc(x.ht)}${hHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.hInjAdj.injured||[]).length} OUT</span>`:''}</div>
-            ${(()=>{const factor=(x.hPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return factor!==1?`<div style="font-size:0.68rem;color:var(--text-dim);margin-bottom:6px;">αντίπαλος κάρτες/αγώνα: <b style="color:var(--text-muted)">${Number(x.aS?.crd||0).toFixed(1)}</b> · παράγοντας: <b style="color:${factor>1.05?'var(--accent-red)':factor<0.95?'var(--accent-teal)':'var(--text-muted)'}">×${factor.toFixed(2)}</b></div>`:''})()}
-            ${(x.hPlayers||[]).slice(0,6).map(renderPlayerRow).join('')||'<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+            <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
+              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
+              ${hHasInj?`<span style="font-size:0.65rem;color:var(--accent-red);">⚠️ ${(x.hInjAdj?.injured||[]).length} OUT</span>`:''}
+            </div>
+            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+              <span>#&nbsp;&nbsp;Παίκτης</span><span>bar&nbsp;&nbsp;xG%</span>
+            </div>
+            ${([...(x.hPlayers||[])].sort((a,b)=>b.xGContrib-a.xGContrib).slice(0,7).map((p,i)=>renderXGRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
+
+          <!-- Away -->
           <div style="border-top:1px solid var(--border-light);padding-top:10px;">
-            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-blue);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">✈️ ${esc(x.at)}${aHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.aInjAdj.injured||[]).length} OUT</span>`:''}</div>
-            ${(()=>{const factor=(x.aPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return factor!==1?`<div style="font-size:0.68rem;color:var(--text-dim);margin-bottom:6px;">αντίπαλος κάρτες/αγώνα: <b style="color:var(--text-muted)">${Number(x.hS?.crd||0).toFixed(1)}</b> · παράγοντας: <b style="color:${factor>1.05?'var(--accent-red)':factor<0.95?'var(--accent-teal)':'var(--text-muted)'}">×${factor.toFixed(2)}</b></div>`:''})()}
-            ${(x.aPlayers||[]).slice(0,6).map(renderPlayerRow).join('')||'<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+            <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
+              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
+              ${aHasInj?`<span style="font-size:0.65rem;color:var(--accent-red);">⚠️ ${(x.aInjAdj?.injured||[]).length} OUT</span>`:''}
+            </div>
+            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+              <span>#&nbsp;&nbsp;Παίκτης</span><span>bar&nbsp;&nbsp;xG%</span>
+            </div>
+            ${([...(x.aPlayers||[])].sort((a,b)=>b.xGContrib-a.xGContrib).slice(0,7).map((p,i)=>renderXGRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
-          <div style="margin-top:8px;font-size:0.68rem;color:var(--text-dim);border-top:1px solid var(--border-light);padding-top:5px;">
-            ↓🟨 = ταξινομημένο κατά Adj Card% · ▲▼ = διόρθωση αντιπάλου · 🔴 = κίνδυνος αποβολής · 🏥 = τραυματίας
+          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-dim);">xG% = συνεισφορά στο team xG (GAP: γκολ + 0.4×ασίστ) · 🏥 τραυματίας</div>
+        </div>
+
+        <!-- ── Card Risk card ─────────────────────────────── -->
+        <div class="accordion-card">
+          <h4>🟨🟥 Card Risk <span style="font-size:0.65rem;color:var(--text-dim);font-weight:500;">↓ φθίνουσα</span></h4>
+
+          <!-- Home -->
+          <div style="margin-bottom:12px;">
+            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:6px;">
+              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
+              ${(()=>{const f=(x.hPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
+            </div>
+            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+              <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
+            </div>
+            ${([...(x.hPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,7).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
+
+          <!-- Away -->
+          <div style="border-top:1px solid var(--border-light);padding-top:10px;">
+            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:6px;">
+              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
+              ${(()=>{const f=(x.aPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
+            </div>
+            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+              <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
+            </div>
+            ${([...(x.aPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,7).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+          </div>
+          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-dim);">🟨 Adj. card% (Poisson · αντίπαλος · league) · 🟥 Red card% · 🔴 κίνδυνος αποβολής · ▲▼ διόρθωση</div>
         </div>
 
         <div class="accordion-card">
