@@ -35,6 +35,7 @@ const ACRONYM_DICT = {
   'INJ':      'Injury flag — Τραυματισμένοι παίκτες με σημαντική επίπτωση στο xG (delta < −0.05)',
   'Conf%':    'Confidence % — Εσωτερική βαθμολογία εμπιστοσύνης σήματος (0–99%). Βάσει Poisson πιθανοτήτων',
   'Card%':    'Card Probability % — Πιθανότητα κίτρινης κάρτας: 1 − e^(−κάρτες/εμφανίσεις). Poisson μοντέλο',
+  'Adj🟨%':   'Adjusted Card % — Διορθωμένη πιθανότητα κάρτας που συνυπολογίζει: (1) επιθετικότητα αντιπάλου, (2) αγωνιστική ένταση (xG Diff), (3) league type. ▲ = αυξημένος κίνδυνος, ▼ = μειωμένος',
   'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit',
   'Kelly':    'Kelly Criterion — Μαθηματικός τύπος βέλτιστου ποσού στοιχήματος βάσει bankroll & πλεονεκτήματος',
   'LRU':      'Least Recently Used — Στρατηγική cache: αφαιρείται πρώτο το παλαιότερο/ανενεργό entry',
@@ -500,6 +501,58 @@ function applyInjuryAdjustment(baseXG, playerProfiles, rawInjuries) {
   return { adjXG, delta, factor, injured: injuredProfiles };
 }
 
+/**
+ * Διορθώνει την πιθανότητα κάρτας κάθε παίκτη λαμβάνοντας υπόψη:
+ *
+ *  1. Αντίπαλη ομάδα (oppStats.crd):
+ *     Αν ο αντίπαλος παίζει φυσικό/επιθετικό ποδόσφαιρο (>avg κάρτες),
+ *     δημιουργεί περισσότερα duels → αυξάνει τον κίνδυνο κάρτας.
+ *
+ *  2. Αγωνιστική ένταση (|xgDiff|):
+ *     Ισορροπημένα ματς (μικρή διαφορά xG) είναι πιο contested →
+ *     περισσότερες κάρτες από referee intervention.
+ *
+ *  3. League type (Trap/Tight/Gold):
+ *     Trap leagues (Championship κτλ) δομικά πιο card-heavy.
+ *     Tight leagues (Ligue 1, Serie A) πιο tactical, λιγότερες κάρτες.
+ *
+ * Αποτέλεσμα: players ταξινομημένοι κατά adjCardProb DESC
+ */
+function adjustPlayerCardProbs(players, oppStats, matchCtx) {
+  if(!players?.length) return players;
+
+  const AVG_CRD = 3.2; // Ευρωπαϊκός μέσος όρος κίτρινων καρτών ανά ομάδα/αγώνα
+  const oppCrd  = safeNum(oppStats?.crd, AVG_CRD);
+
+  // 1. Επιθετικότητα αντιπάλου
+  //    Κάθε +1 κάρτα/αγώνα πάνω από τον μέσο = +15% πιθανότητα
+  const oppAggrFactor = clamp(1.0 + (oppCrd - AVG_CRD) * 0.15, 0.80, 1.40);
+
+  // 2. Αγωνιστική ένταση
+  //    Διαφορά xG < 0.55 → contested ματς → +8% per 0.1 unit κάτω από threshold
+  const absDiff       = Math.abs(safeNum(matchCtx?.xgDiff, 0.5));
+  const tightnessFactor = clamp(1.0 + (0.55 - absDiff) * 0.08, 0.92, 1.12);
+
+  // 3. League type factor
+  const lgId = matchCtx?.leagueId;
+  const isTrap  = typeof TRAP_LEAGUES  !== 'undefined' && TRAP_LEAGUES.has(lgId);
+  const isTight = typeof TIGHT_LEAGUES !== 'undefined' && TIGHT_LEAGUES.has(lgId);
+  const isGold  = typeof GOLD_LEAGUES  !== 'undefined' && GOLD_LEAGUES.has(lgId);
+  const leagueFactor = isTrap ? 1.10 : isTight ? 0.92 : isGold ? 0.95 : 1.0;
+
+  const combinedFactor = clamp(oppAggrFactor * tightnessFactor * leagueFactor, 0.65, 1.65);
+
+  // Εφαρμογή in-place + ταξινόμηση κατά adjCardProb
+  players.forEach(p => {
+    p.adjCardRate   = p.cardRate * combinedFactor;
+    p.adjCardProb   = clamp((1 - Math.exp(-p.adjCardRate)) * 100, 0, 99);
+    p.cardAdjFactor = combinedFactor;
+  });
+
+  players.sort((a, b) => b.adjCardProb - a.adjCardProb);
+  return players;
+}
+
 // ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
@@ -613,6 +666,13 @@ async function analyzeMatchSafe(m,index,total){
     const tXGfinal = hXGfinal + aXGfinal;
 
     const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS);
+
+    // 🟨 CARD PROBABILITY ADJUSTMENT — αντίπαλος + αγωνιστική ένταση + league type
+    // Καλείται ΜΕΤΑ το computePick για να έχουμε το result.xgDiff
+    // Ταξινομεί τους players κατά adjCardProb DESC
+    const cardCtx = { xgDiff: result.xgDiff, leagueId: m.league.id };
+    adjustPlayerCardProbs(hPlayers, aS, cardCtx); // home team players: opponent = away stats
+    adjustPlayerCardProbs(aPlayers, hS, cardCtx); // away team players: opponent = home stats
     
     const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason);
     const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason);
@@ -900,18 +960,26 @@ window.toggleMatchDetails = function(id) {
 // 🌟 RESPONSIVE ACCORDION
 // ─── helper: renders one player row (xG bar + card prob) ───────────
 function renderPlayerRow(p) {
-  const barW  = Math.min(Math.round(p.xGContrib * 100 * 2.5), 100); // scale για visibility
-  const cCol  = p.cardProb >= 40 ? 'var(--accent-red)' : p.cardProb >= 20 ? 'var(--accent-gold)' : 'var(--text-muted)';
-  const nameS = esc((p.name||'').split(' ').slice(-1)[0]); // επώνυμο
+  // Χρήση adjCardProb (διορθωμένη) αν υπάρχει, αλλιώς raw cardProb
+  const displayCard = p.adjCardProb ?? p.cardProb;
+  const barW  = Math.min(Math.round(p.xGContrib * 100 * 2.5), 100);
+  const cCol  = displayCard >= 40 ? 'var(--accent-red)' : displayCard >= 20 ? 'var(--accent-gold)' : 'var(--text-muted)';
+  const nameS = esc((p.name||'').split(' ').slice(-1)[0]);
   const injS  = p.injured ? '🏥 ' : '';
   const suspS = p.suspRisk ? ' 🔴' : '';
+  // Indicator αν η πιθανότητα ανέβηκε/κατέβηκε λόγω αντιπάλου (threshold ±5%)
+  const adjIndicator = p.cardAdjFactor > 1.05
+    ? `<span style="font-size:0.65rem;color:var(--accent-red);font-weight:900;" title="Αυξημένος κίνδυνος λόγω αντιπάλου">▲</span>`
+    : p.cardAdjFactor < 0.95
+    ? `<span style="font-size:0.65rem;color:var(--accent-teal);font-weight:900;" title="Μειωμένος κίνδυνος">▼</span>`
+    : '';
   return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;${p.injured?'opacity:0.6':''}">
     <span style="font-size:0.82rem;font-weight:${p.injured?900:600};color:${p.injured?'var(--accent-red)':'var(--text-main)'};flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${injS}${nameS}${suspS}</span>
     <div style="width:50px;height:5px;background:var(--bg-surface);border-radius:3px;flex-shrink:0;">
       <div style="width:${barW}%;height:100%;background:${p.injured?'var(--accent-red)':'var(--accent-blue)'};border-radius:3px;"></div>
     </div>
     <span style="font-size:0.75rem;color:var(--text-muted);min-width:28px;text-align:right;">${(p.xGContrib*100).toFixed(0)}%</span>
-    <span style="font-size:0.78rem;font-weight:700;color:${cCol};min-width:34px;text-align:right;">${p.cardProb>=1?'🟨':'⬜'}${p.cardProb.toFixed(0)}%</span>
+    <span style="font-size:0.78rem;font-weight:700;color:${cCol};min-width:40px;text-align:right;">${displayCard>=1?'🟨':'⬜'}${displayCard.toFixed(0)}%${adjIndicator}</span>
   </div>`;
 }
 function buildAccordionHTML(x) {
@@ -1040,17 +1108,21 @@ function buildAccordionHTML(x) {
         <div class="accordion-card" style="min-width:340px;">
           <h4>👥 Player Intelligence</h4>
           <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;border-bottom:1px solid var(--border-light);padding-bottom:5px;">
-            <span>Παίκτης</span><span>${acr('xG%')}&nbsp;&nbsp;&nbsp;&nbsp;</span><span>${acr('Card%')}</span>
+            <span>Παίκτης ↓🟨</span><span>${acr('xG%')}&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Adj🟨%</span>
           </div>
           <div style="margin-bottom:12px;">
-            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-gold);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🏠 ${esc(x.ht)}${hHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.hInjAdj.injured||[]).length} OUT</span>`:''}</div>
+            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-gold);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">🏠 ${esc(x.ht)}${hHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.hInjAdj.injured||[]).length} OUT</span>`:''}</div>
+            ${(()=>{const factor=(x.hPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return factor!==1?`<div style="font-size:0.68rem;color:var(--text-dim);margin-bottom:6px;">αντίπαλος κάρτες/αγώνα: <b style="color:var(--text-muted)">${Number(x.aS?.crd||0).toFixed(1)}</b> · παράγοντας: <b style="color:${factor>1.05?'var(--accent-red)':factor<0.95?'var(--accent-teal)':'var(--text-muted)'}">×${factor.toFixed(2)}</b></div>`:''})()}
             ${(x.hPlayers||[]).slice(0,6).map(renderPlayerRow).join('')||'<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
           <div style="border-top:1px solid var(--border-light);padding-top:10px;">
-            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-blue);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">✈️ ${esc(x.at)}${aHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.aInjAdj.injured||[]).length} OUT</span>`:''}</div>
+            <div style="font-size:0.75rem;font-weight:800;color:var(--accent-blue);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">✈️ ${esc(x.at)}${aHasInj?` <span style="color:var(--accent-red);font-size:0.7rem;">⚠️ ${(x.aInjAdj.injured||[]).length} OUT</span>`:''}</div>
+            ${(()=>{const factor=(x.aPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return factor!==1?`<div style="font-size:0.68rem;color:var(--text-dim);margin-bottom:6px;">αντίπαλος κάρτες/αγώνα: <b style="color:var(--text-muted)">${Number(x.hS?.crd||0).toFixed(1)}</b> · παράγοντας: <b style="color:${factor>1.05?'var(--accent-red)':factor<0.95?'var(--accent-teal)':'var(--text-muted)'}">×${factor.toFixed(2)}</b></div>`:''})()}
             ${(x.aPlayers||[]).slice(0,6).map(renderPlayerRow).join('')||'<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
-          <div style="margin-top:8px;font-size:0.68rem;color:var(--text-dim);border-top:1px solid var(--border-light);padding-top:5px;">🔴 = κίνδυνος αποβολής (4,9,14 κάρτες) &nbsp;·&nbsp; 🏥 = τραυματίας/αναπ.</div>
+          <div style="margin-top:8px;font-size:0.68rem;color:var(--text-dim);border-top:1px solid var(--border-light);padding-top:5px;">
+            ↓🟨 = ταξινομημένο κατά Adj Card% · ▲▼ = διόρθωση αντιπάλου · 🔴 = κίνδυνος αποβολής · 🏥 = τραυματίας
+          </div>
         </div>
 
         <div class="accordion-card">
@@ -1422,6 +1494,10 @@ window.resimulateMatches=function(){
       hExp:res.hExp,aExp:res.aExp,pp:res.pp,
       lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor
     });
+    // Re-adjust card probabilities με νέο xgDiff
+    const cardCtx={xgDiff:res.xgDiff,leagueId:d.leagueId};
+    if(d.hPlayers?.length) adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
+    if(d.aPlayers?.length) adjustPlayerCardProbs(d.aPlayers, d.hS, cardCtx);
   });
   rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');
 };
