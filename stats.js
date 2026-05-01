@@ -1176,6 +1176,85 @@ function flashMatchUpdate(fixId, subResult){
   if(subLines) showOk(`🔄 ${subLines}`);
 }
 
+/**
+ * Fetch lineups για ΟΛΑ τα scanned matches που δεν έχουν ακόμα επιβεβαιωμένη ενδεκάδα
+ */
+window.fetchAllLineups = async function() {
+  const pending = (window.scannedMatchesData||[]).filter(d=>!d.lineupData?.available);
+  if(!pending.length){ showOk('Όλες οι ενδεκάδες είναι ήδη διαθέσιμες.'); return; }
+  const btn = document.getElementById('btnFetchLineups');
+  if(btn){ btn.disabled=true; btn.textContent=`⏳ Fetching…`; }
+  let confirmed=0, unavailable=0;
+  for(const d of pending){
+    try{
+      const sr = await apiReq(`fixtures/lineups?fixture=${d.fixId}`);
+      const nl = parseLineup(sr?.response||[]);
+      if(nl.available){
+        d.lineupData = nl;
+        lineupsCache.set(String(d.fixId), nl);
+        const lp = getLeagueParams(d.leagueId);
+        const hA = applyLineupAdjustment(d.hXGbase||d.hXGfinal, d.hPlayers, nl.home, []);
+        const aA = applyLineupAdjustment(d.aXGbase||d.aXGfinal, d.aPlayers, nl.away, []);
+        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS);
+        Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
+          outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
+          exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
+          hExp:res.hExp,aExp:res.aExp,pp:res.pp});
+        confirmed++;
+      } else { unavailable++; }
+    }catch(_){ unavailable++; }
+  }
+  if(btn){ btn.disabled=false; btn.textContent=`📋 Fetch Lineups`; }
+  renderSummaryTable();
+  showOk(`📋 ${confirmed} ενδεκάδες επιβεβαιώθηκαν · ${unavailable} εκκρεμείς`);
+};
+
+/**
+ * Fetch lineup για ένα συγκεκριμένο match (από το Fetch XI button)
+ */
+window.fetchLineupForMatch = async function(fixId) {
+  const d = (window.scannedMatchesData||[]).find(x=>String(x.fixId)===String(fixId));
+  if(!d){ showErr('Match not found'); return; }
+  try{
+    const sr = await apiReq(`fixtures/lineups?fixture=${fixId}`);
+    const newLineup = parseLineup(sr?.response||[]);
+    if(!newLineup.available){ showErr('Ενδεκάδα δεν είναι ακόμα διαθέσιμη.'); return; }
+    // Store + re-apply adjustment
+    d.lineupData = newLineup;
+    lineupsCache.set(String(fixId), newLineup);
+    const lp = getLeagueParams(d.leagueId);
+    const newHAdj = applyLineupAdjustment(d.hXGbase, d.hPlayers, newLineup.home, []);
+    const newAAdj = applyLineupAdjustment(d.aXGbase, d.aPlayers, newLineup.away, []);
+    const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
+    const tXGfinal = hXGfinal + aXGfinal;
+    const btts = Math.min(hXGfinal, aXGfinal);
+    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS);
+    const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
+    const cardCtx = {xgDiff: result.xgDiff, leagueId: d.leagueId};
+    adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
+    adjustPlayerCardProbs(d.aPlayers, d.hS, cardCtx);
+    Object.assign(d, {
+      hXGfinal, aXGfinal, tXG:tXGfinal, btts,
+      hInjAdj:newHAdj, aInjAdj:newAAdj, htAnalysis,
+      outPick:result.outPick, xgDiff:result.xgDiff,
+      exact:`${result.hG}-${result.aG}`, exact2:`${result.hG2}-${result.aG2}`,
+      exactConf:result.exactConf, omegaPick:result.omegaPick,
+      strength:result.pickScore, reason:result.reason,
+      hExp:result.hExp, aExp:result.aExp, pp:result.pp,
+      lambdaTotal:result.lambdaTotal, cornerConf:result.cornerConf, expCor:result.expCor,
+    });
+    // Refresh the open accordion row
+    const detailRow = document.getElementById(`details-${fixId}`);
+    if(detailRow?.style.display !== 'none'){
+      const td = detailRow.querySelector('td');
+      if(td) td.innerHTML = buildAccordionHTML(d).replace(/^<td[^>]*>|<\/td>$/g,'');
+    }
+    renderSummaryTable();
+    flashMatchUpdate(fixId, {subEvents:[], changed:{exact:{}}});
+    showOk(`✅ Ενδεκάδα επιβεβαιώθηκε · ${d.ht} (${newLineup.home.formation}) vs ${d.at} (${newLineup.away.formation})`);
+  }catch(e){ showErr('Lineup fetch error: '+e.message); }
+};
+
 let _autoSyncTimer=null;
 function startAutoSync(){if(_autoSyncTimer)clearInterval(_autoSyncTimer);_autoSyncTimer=setInterval(()=>{const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));if(hasLive&&!isRunning)syncLiveScores();},90000);}
 
@@ -1400,78 +1479,104 @@ function buildAccordionHTML(x) {
 
         ${liveIntelCard}
 
-        ${liveIntelCard}
-
-        ${x.lineupData?.available ? (()=>{
+        ${(()=>{
           const ld = x.lineupData;
-          const renderXI = (team, adj, sideLabel, sideColor) => {
-            const xiList = team.xi || [];
-            const outList = adj?.outPlayers || [];
-            const outIds = new Set(outList.map(p=>p.id));
-            const covPct = adj?.coverage != null ? Math.round(adj.coverage*100) : null;
-            const covCol = covPct == null ? 'var(--text-muted)' : covPct>=90?'var(--accent-green)':covPct>=75?'var(--accent-gold)':'var(--accent-red)';
+          const confirmed = ld?.available === true;
 
-            const posOrder = { G:0, D:1, M:2, F:3 };
+          // ── helper: renders one side (home or away) ──────────
+          const renderXI = (team, adj, sideLabel, sideColor) => {
+            const xiList  = team?.xi || [];
+            const outList = adj?.outPlayers || [];
+            const covPct  = adj?.coverage != null ? Math.round(adj.coverage*100) : null;
+            const covCol  = covPct==null?'var(--text-muted)':covPct>=90?'var(--accent-green)':covPct>=75?'var(--accent-gold)':'var(--accent-red)';
+            const posOrder = {G:0,D:1,M:2,F:3};
             const sorted = [...xiList].sort((a,b)=>(posOrder[a.pos]??2)-(posOrder[b.pos]??2));
 
             const rows = sorted.map(p=>{
               const profile = (adj?.xiPlayers||[]).find(pp=>pp.id===p.id);
-              const xgPct = profile ? `${(profile.xGContrib*100).toFixed(0)}%` : '—';
+              const xgPct   = profile ? `${(profile.xGContrib*100).toFixed(0)}%` : '—';
               const cardAdj = profile?.adjCardProb ?? profile?.cardProb ?? 0;
-              const cCol = cardAdj>=40?'var(--accent-red)':cardAdj>=20?'var(--accent-gold)':'var(--text-dim)';
-              const isKey = profile && profile.gap > 0;
-              const posCol = p.pos==='G'?'var(--text-dim)':p.pos==='D'?'var(--accent-blue)':p.pos==='M'?'var(--accent-teal)':'var(--accent-gold)';
-              return `<div style="display:flex;align-items:center;gap:5px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
-                <span style="font-size:0.65rem;font-weight:700;color:${posCol};min-width:14px;">${p.pos||'?'}</span>
-                <span style="font-size:0.82rem;font-weight:${isKey?700:500};color:var(--text-main);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
-                <span style="font-size:0.72rem;color:var(--text-muted);min-width:28px;text-align:right;">${xgPct}</span>
-                <span style="font-size:0.72rem;color:${cCol};min-width:26px;text-align:right;">${cardAdj>=1?'🟨':''}${cardAdj.toFixed(0)}%</span>
+              const cCol    = cardAdj>=40?'var(--accent-red)':cardAdj>=20?'var(--accent-gold)':'var(--text-dim)';
+              const posCol  = p.pos==='G'?'var(--text-dim)':p.pos==='D'?'var(--accent-blue)':p.pos==='M'?'var(--accent-teal)':'var(--accent-gold)';
+              return `<div style="display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                <span style="font-size:0.62rem;font-weight:800;color:${posCol};min-width:14px;flex-shrink:0;">${p.pos||'?'}</span>
+                <span style="font-size:0.83rem;font-weight:600;color:var(--text-main);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
+                <span style="font-size:0.7rem;color:var(--text-muted);min-width:28px;text-align:right;">${xgPct}</span>
+                <span style="font-size:0.7rem;color:${cCol};min-width:34px;text-align:right;">${cardAdj>=1?'🟨':''}${cardAdj.toFixed(0)}%</span>
               </div>`;
             }).join('');
 
-            const outRows = outList.map(p=>`<div style="display:flex;align-items:center;gap:5px;padding:3px 0;opacity:0.7;">
-              <span style="font-size:0.7rem;color:var(--accent-red);">OUT</span>
-              <span style="font-size:0.8rem;color:var(--accent-red);flex:1;text-decoration:line-through;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
-              <span style="font-size:0.7rem;color:var(--accent-red);">−${(p.xGContrib*100).toFixed(0)}%</span>
-            </div>`).join('');
+            const outRows = outList.map(p=>`
+              <div style="display:flex;align-items:center;gap:5px;padding:3px 0;background:rgba(248,113,113,0.04);border-radius:4px;padding:3px 5px;margin-bottom:2px;">
+                <span style="font-size:0.62rem;font-weight:800;color:var(--accent-red);min-width:28px;">OUT</span>
+                <span style="font-size:0.8rem;color:var(--accent-red);flex:1;text-decoration:line-through;opacity:0.75;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
+                <span style="font-size:0.68rem;color:var(--accent-red);font-weight:700;">−${(p.xGContrib*100).toFixed(0)}% xG</span>
+              </div>`).join('');
 
             return `<div>
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <span style="font-size:0.75rem;font-weight:800;color:${sideColor};text-transform:uppercase;">${sideLabel} · ${team.formation}</span>
-                ${covPct!=null?`<span style="font-size:0.7rem;font-weight:700;color:${covCol};">GAP: ${covPct}%</span>`:''}
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">
+                <div>
+                  <span style="font-size:0.72rem;font-weight:800;color:${sideColor};text-transform:uppercase;letter-spacing:0.05em;">${sideLabel}</span>
+                  ${team?.formation?`<span style="font-size:0.65rem;color:var(--text-muted);margin-left:6px;font-family:var(--font-mono);">${team.formation}</span>`:''}
+                </div>
+                ${covPct!=null?`<span style="font-size:0.68rem;font-weight:700;color:${covCol};background:${covPct>=90?'rgba(52,211,153,0.1)':covPct>=75?'rgba(251,191,36,0.1)':'rgba(248,113,113,0.1)'};padding:2px 7px;border-radius:10px;border:1px solid ${covPct>=90?'rgba(52,211,153,0.2)':covPct>=75?'rgba(251,191,36,0.2)':'rgba(248,113,113,0.2)'};">GAP ${covPct}%</span>`:''}
               </div>
-              <div style="font-size:0.68rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:4px;">
-                <span>Παίκτης</span><span>xG%&nbsp;&nbsp;&nbsp;🟨%</span>
-              </div>
-              ${rows}
-              ${outRows}
+              ${rows || '<span style="font-size:0.8rem;color:var(--text-dim);">Αναμονή ενδεκάδας…</span>'}
+              ${outRows?`<div style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(248,113,113,0.2);">${outRows}</div>`:''}
             </div>`;
           };
 
-          // Substitution log (αν υπάρχουν)
+          // ── projected XI από players όταν δεν υπάρχει lineup ──
+          const projectedXI = (players, adj) => {
+            if(!players?.length) return {xi:[], subs:[], formation:'?-?-?', xiIds: new Set()};
+            const sorted = [...players].sort((a,b)=>b.xGContrib-a.xGContrib);
+            const injIds = new Set((adj?.injured||[]).map(p=>p.id));
+            // Εξαίρεση τραυματισμένων, κράτα top 11
+            const available = sorted.filter(p=>!injIds.has(p.id));
+            const xi = available.slice(0,11).map(p=>({id:p.id,name:p.name,pos:p.pos||estimatePos(p),number:'?'}));
+            return {xi, subs: available.slice(11,14).map(p=>({id:p.id,name:p.name,pos:p.pos||'?',number:'?'})), formation:'~4-3-3', xiIds: new Set(xi.map(p=>p.id))};
+          };
+          const estimatePos = p => p.xGContrib>0.12?'F':p.xGContrib>0.06?'M':'D';
+
+          // Αν δεν έχουμε lineup, χρησιμοποιούμε projected από player profiles
+          const hTeam = confirmed ? ld.home : projectedXI(x.hPlayers, x.hInjAdj);
+          const aTeam = confirmed ? ld.away : projectedXI(x.aPlayers, x.aInjAdj);
+
+          // Substitution log
           const subLog = (x.lastSubEvents||[]).length ? `
-            <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-light);">
-              <div style="font-size:0.7rem;font-weight:700;color:var(--accent-gold);margin-bottom:4px;">🔄 Τελευταίες Αντικαταστάσεις</div>
-              ${x.lastSubEvents.map(s=>`<div style="font-size:0.78rem;color:var(--text-muted);padding:2px 0;">
-                ${s.team==='home'?'🏠':'✈️'} <span style="color:var(--accent-red);text-decoration:line-through;">${esc((s.out||'').split(' ').slice(-1)[0])}</span>
-                → <span style="color:var(--accent-green);font-weight:700;">${esc((s.in||'').split(' ').slice(-1)[0])}</span>
+            <div style="margin-top:12px;padding:10px;background:rgba(251,191,36,0.05);border:1px solid rgba(251,191,36,0.15);border-radius:6px;">
+              <div style="font-size:0.68rem;font-weight:800;color:var(--accent-gold);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">🔄 Αντικαταστάσεις</div>
+              ${x.lastSubEvents.map(s=>`<div style="font-size:0.8rem;color:var(--text-muted);padding:3px 0;display:flex;align-items:center;gap:6px;">
+                <span>${s.team==='home'?'🏠':'✈️'}</span>
+                <span style="color:var(--accent-red);text-decoration:line-through;">${esc((s.out||'').split(' ').slice(-1)[0])}</span>
+                <span style="color:var(--text-dim);">→</span>
+                <span style="color:var(--accent-green);font-weight:700;">${esc((s.in||'').split(' ').slice(-1)[0])}</span>
               </div>`).join('')}
             </div>` : '';
 
-          return `<div class="accordion-card" style="min-width:580px;border-color:rgba(45,212,191,0.35);">
-            <h4 style="color:var(--accent-teal);">📋 Starting XI
-              <span style="font-size:0.7rem;font-weight:400;color:var(--text-dim);margin-left:8px;">${ld.available?'Επιβεβαιωμένη Ενδεκάδα':'Εκκρεμεί'}</span>
+          return `<div class="accordion-card" style="min-width:580px;border-color:${confirmed?'rgba(45,212,191,0.35)':'rgba(255,255,255,0.08)'};">
+            <h4 style="color:${confirmed?'var(--accent-teal)':'var(--text-muted)'};">
+              📋 ${confirmed ? 'Starting XI' : 'Projected XI (Αναμονή Επιβεβαίωσης)'}
+              ${confirmed
+                ? `<span style="margin-left:auto;font-size:0.65rem;font-weight:700;padding:2px 8px;background:rgba(45,212,191,0.12);color:var(--accent-teal);border:1px solid rgba(45,212,191,0.25);border-radius:10px;">✓ Επιβεβαιωμένη</span>`
+                : `<button onclick="window.fetchLineupForMatch('${x.fixId}')" style="margin-left:auto;font-size:0.65rem;font-weight:700;padding:3px 10px;background:var(--bg-raised);color:var(--text-muted);border:1px solid var(--border-light);border-radius:10px;cursor:pointer;">↻ Fetch XI</button>`
+              }
             </h4>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-              ${renderXI(ld.home, x.hInjAdj, '🏠 '+esc(x.ht), 'var(--accent-gold)')}
-              ${renderXI(ld.away, x.aInjAdj, '✈️ '+esc(x.at), 'var(--accent-blue)')}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+              ${renderXI(hTeam, x.hInjAdj, '🏠 '+esc(x.ht.split(' ').slice(0,2).join(' ')), 'var(--accent-gold)')}
+              ${renderXI(aTeam, x.aInjAdj, '✈️ '+esc(x.at.split(' ').slice(0,2).join(' ')), 'var(--accent-blue)')}
             </div>
             ${subLog}
-            <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);border-top:1px solid var(--border-light);padding-top:5px;">
-              GAP = Goal-Assist Points coverage · G=Τερ D=Αμυν M=Μεσ F=Επιθ · OUT=εκτός XI
+            <div style="margin-top:10px;font-size:0.63rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;">
+              <span><span style="color:var(--accent-gold);">F</span>=Επίθεση</span>
+              <span><span style="color:var(--accent-teal);">M</span>=Μεσαία</span>
+              <span><span style="color:var(--accent-blue);">D</span>=Άμυνα</span>
+              <span><span style="color:var(--text-dim);">G</span>=Τερματοφύλακας</span>
+              <span>GAP% = Goal-Assist Coverage</span>
+              <span style="color:var(--accent-red);">OUT = εκτός ενδεκάδας</span>
             </div>
           </div>`;
-        })() : ''}
+        })()}
 
         ${x.htAnalysis ? (() => {
           const ht=x.htAnalysis;
