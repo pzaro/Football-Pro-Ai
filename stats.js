@@ -1,6 +1,6 @@
 // ==========================================================================
 // APEX OMEGA v5.0 — MASTER ENGINE (ULTIMATE EDITION)
-// Poisson · xG · Corners · Scorers · Asian Handicap · HT · League Calib 
+// Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
 const API_BASE = "https://v3.football.api-sports.io";
@@ -413,7 +413,6 @@ function tickerRefresh(){
   function step(ts){if(last===null)last=ts;const dt=Math.min((ts-last)/1000,0.1);last=ts;pos+=_tickerPx*dt;const half=inner.scrollWidth/2;if(pos>=half)pos=0;inner.style.transform=`translateX(-${pos.toFixed(1)}px)`;_tickerRaf=requestAnimationFrame(step);}
   _tickerRaf=requestAnimationFrame(step);
 }
-window.setTickerSpeed=v=>{_tickerPx=parseFloat(v);};
 
 // ================================================================
 //  TOP LISTS & TABS
@@ -594,11 +593,11 @@ function renderSummaryTable() {
           if(x.omegaPick.includes('OVER 2.5')||x.omegaPick.includes('OVER 3')) hit = aTot > 2.5;
           else if(x.omegaPick.includes('UNDER 2.5')) hit = aTot < 2.5;
           else if(x.omegaPick.includes('GOAL')) hit = aBtts;
-          else if(x.omegaPick.includes('ΑΣΟΣ')) hit = aOut === '1';
-          else if(x.omegaPick.includes('ΔΙΠΛΟ')) hit = aOut === '2';
+          else if(x.omegaPick.includes('ΑΣΟΣ') && !x.omegaPick.includes('AH')) hit = aOut === '1';
+          else if(x.omegaPick.includes('ΔΙΠΛΟ') && !x.omegaPick.includes('AH')) hit = aOut === '2';
           else if(x.omegaPick.includes('ΚΟΡΝΕΡ')) hit = (hCor+aCor) > 8.5;
           else if(x.omegaPick.includes('ΚΑΡΤΕΣ')) hit = (hCrd+aCrd) > 5.5;
-          else if(x.omegaPick.includes('AH')) { // ASIAN HANDICAP CHECK
+          else if(x.omegaPick.includes('AH')) { 
             if(x.omegaPick.includes('ΑΣΟΣ')) hit = (ah - aa) >= 2;
             if(x.omegaPick.includes('ΔΙΠΛΟ')) hit = (aa - ah) >= 2;
           }
@@ -637,9 +636,132 @@ function renderSummaryTable() {
 }
 
 // ================================================================
-//  AUDIT & VAULT
+//  AUDIT, VAULT & AI ADVISOR (Auto-Optimization Logic)
 // ================================================================
-window.runCustomAudit=async function(){const s=document.getElementById('auditStart').value,e=document.getElementById('auditEnd').value;if(!s||!e){showErr('Επιλέξτε ημερομηνίες.');return;}if(isRunning)return;isRunning=true;setBtnsDisabled(true);setLoader(true,'Running Audit...');document.getElementById('auditSection').innerHTML='';try{const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const endD=new Date(e);endD.setDate(endD.getDate()+1);const lgFilter=document.getElementById('auditLeague')?.value||'ALL';let cands=store.filter(x=>{const d=new Date(x.date);return d>=new Date(s)&&d<endD;});if(lgFilter!=='ALL')cands=cands.filter(x=>String(x.leagueId)===lgFilter);if(!cands.length){document.getElementById('auditSection').innerHTML=`<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;font-size:1.1rem;">Δεν υπάρχουν δεδομένα.</div>`;return;}let stats={games:0,outHit:0,validOut:0,o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,exHit:0};const rows=[],curveData=[];for(let i=0;i<cands.length;i++){const p=cands[i];setProgress(Math.round(((i+1)/cands.length)*100),`Auditing: ${p.homeTeam}`);const fr=await apiReq(`fixtures?id=${p.fixtureId}`);const fix=fr?.response?.[0];if(!fix||!isFinished(fix?.fixture?.status?.short))continue;const ah=safeNum(fix.goals.home),aa=safeNum(fix.goals.away);const aTot=ah+aa,aExact=`${ah}-${aa}`,aOut=ah>aa?'1':ah<aa?'2':'X',aBtts=ah>0&&aa>0;stats.games++;if(p.outPick==='1'||p.outPick==='2'){stats.validOut++;if(p.outPick===aOut)stats.outHit++;}if(p.predOver25){stats.o25T++;if(aTot>2.5)stats.o25H++;}if(p.predOver35){stats.o35T++;if(aTot>3.5)stats.o35H++;}if(p.predUnder25){stats.u25T++;if(aTot<2.5)stats.u25H++;}if(p.predBTTS){stats.bttsT++;if(aBtts)stats.bttsH++;}if(p.exactScorePred===aExact)stats.exHit++;curveData.push({tXG:p.tXG||2.5,hitO25:aTot>2.5?1:0});rows.push({p,ah,aa,aTot,aExact,aOut,aBtts});}const rv=(h,t)=>t>0?h/t*100:0;const col=v=>v>=80?'var(--accent-green)':v>=60?'var(--accent-gold)':'var(--accent-red)';const statsCards=[{lbl:'1X2',h:stats.outHit,t:stats.validOut},{lbl:'O2.5',h:stats.o25H,t:stats.o25T},{lbl:'O3.5',h:stats.o35H,t:stats.o35T},{lbl:'U2.5',h:stats.u25H,t:stats.u25T},{lbl:'BTTS',h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];let html=`<div class="quant-panel"><div class="panel-title">📊 Audit Results — ${cands.length} predictions</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:15px;margin-bottom:20px;">${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:20px;text-align:center;"><div style="font-size:0.85rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">${m.lbl}</div><div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.75rem;color:var(--text-muted);margin-top:5px;">${m.h}/${m.t}</div></div>`;}).join('')}</div><div style="font-size:0.85rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve</div>${buildMiniCurve(engineConfig.tXG_O25,curveData)}<div class="data-table-wrapper"><table class="summary-table" style="font-size:0.9rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>1X2</th><th>O2.5</th><th>O3.5</th><th>U2.5</th><th>BTTS</th><th>Exact</th></tr></thead><tbody>`;rows.forEach(({p,ah,aa,aTot,aExact,aOut,aBtts})=>{const cell=(pred,hit)=>pred?`<span class="${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'}</span>`:'<span style="color:var(--text-dim)">—</span>';html+=`<tr><td class="left-align" style="font-weight:700;font-size:1rem;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.75rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num" style="font-size:1.1rem;">${ah}-${aa}</td><td style="font-size:1.1rem;">${p.outPick&&p.outPick!=='-'?`<span class="${p.outPick===aOut?'audit-omega-hit':'audit-omega-miss'}">${p.outPick}</span>`:'—'}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td style="font-size:1.1rem;">${p.exactScorePred?`<span class="${p.exactScorePred===aExact?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`:'—'}</td></tr>`;});html+=`</tbody></table></div></div>`;document.getElementById('auditSection').innerHTML=html;showOk('Audit ολοκληρώθηκε.');}catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}};
+window.runCustomAudit=async function(){
+  const s=document.getElementById('auditStart').value,e=document.getElementById('auditEnd').value;
+  if(!s||!e){showErr('Επιλέξτε ημερομηνίες.');return;}
+  if(isRunning)return;isRunning=true;setBtnsDisabled(true);setLoader(true,'Running AI Audit...');
+  document.getElementById('auditSection').innerHTML='';
+  
+  try{
+    const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');
+    const endD=new Date(e);endD.setDate(endD.getDate()+1);
+    const lgFilter=document.getElementById('auditLeague')?.value||'ALL';
+    
+    let cands=store.filter(x=>{const d=new Date(x.date);return d>=new Date(s)&&d<endD;});
+    if(lgFilter!=='ALL') cands=cands.filter(x=>String(x.leagueId)===lgFilter);
+    
+    if(!cands.length){
+      document.getElementById('auditSection').innerHTML=`<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;font-size:1.1rem;">Δεν υπάρχουν δεδομένα για Audit.</div>`;
+      return;
+    }
+    
+    let stats={games:0,outHit:0,validOut:0,o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,exHit:0};
+    const rows=[],curveData=[];
+    
+    for(let i=0;i<cands.length;i++){
+      const p=cands[i];
+      setProgress(Math.round(((i+1)/cands.length)*100),`Auditing: ${p.homeTeam}`);
+      const fr=await apiReq(`fixtures?id=${p.fixtureId}`);
+      const fix=fr?.response?.[0];
+      if(!fix||!isFinished(fix?.fixture?.status?.short))continue;
+      
+      const ah=safeNum(fix.goals.home),aa=safeNum(fix.goals.away);
+      const aTot=ah+aa,aExact=`${ah}-${aa}`,aOut=ah>aa?'1':ah<aa?'2':'X',aBtts=ah>0&&aa>0;
+      stats.games++;
+      
+      let isHit1X2 = false;
+      if (p.outPick && p.outPick !== '-') {
+          isHit1X2 = p.outPick === aOut;
+          if(p.omegaPick && p.omegaPick.includes('AH')) {
+              if(p.omegaPick.includes('ΑΣΟΣ')) isHit1X2 = (ah - aa) >= 2;
+              if(p.omegaPick.includes('ΔΙΠΛΟ')) isHit1X2 = (aa - ah) >= 2;
+          }
+          if(!p.omegaPick?.includes('ΗΜΙΧΡΟΝΟ')) {
+              stats.validOut++;
+              if(isHit1X2) stats.outHit++;
+          }
+      }
+
+      if(p.predOver25){stats.o25T++;if(aTot>2.5)stats.o25H++;}
+      if(p.predOver35){stats.o35T++;if(aTot>3.5)stats.o35H++;}
+      if(p.predUnder25){stats.u25T++;if(aTot<2.5)stats.u25H++;}
+      if(p.predBTTS){stats.bttsT++;if(aBtts)stats.bttsH++;}
+      if(p.exactScorePred===aExact)stats.exHit++;
+      curveData.push({tXG:p.tXG||2.5,hitO25:aTot>2.5?1:0});
+      rows.push({p,ah,aa,aTot,aExact,aOut,aBtts,isHit1X2});
+    }
+    
+    const rv=(h,t)=>t>0?h/t*100:0;
+    const col=v=>v>=80?'var(--accent-green)':v>=60?'var(--accent-gold)':'var(--accent-red)';
+    
+    // --- 🤖 AI ADVISOR LOGIC ---
+    let advisorHTML = '';
+    const recs = [];
+    const rO25 = rv(stats.o25H, stats.o25T);
+    const rO35 = rv(stats.o35H, stats.o35T);
+    const r1X2 = rv(stats.outHit, stats.validOut);
+
+    if(stats.o25T >= 10 && rO25 < 55) {
+      recs.push(`⚠️ Το <b>Over 2.5</b> χάνει (Win Rate: ${rO25.toFixed(1)}%). Προτείνεται αύξηση του <i>Min Total xG (O2.5)</i> κατά <b>+0.10</b> στα Global Settings.`);
+    } else if(stats.o25T >= 10 && rO25 > 70) {
+      recs.push(`💡 Το <b>Over 2.5</b> είναι υπερ-κερδοφόρο (${rO25.toFixed(1)}%). Προτείνεται μείωση του <i>Min Total xG (O2.5)</i> κατά <b>-0.05</b> για να βρίσκει περισσότερα σημεία.`);
+    }
+
+    if(stats.o35T >= 8 && rO35 < 50) {
+      recs.push(`⚠️ Το <b>Over 3.5</b> υστερεί (${rO35.toFixed(1)}%). Προτείνεται αυστηροποίηση του <i>Min Total xG (O3.5)</i> κατά <b>+0.15</b>.`);
+    }
+
+    if(stats.validOut >= 8 && r1X2 < 50) {
+      recs.push(`⚠️ Χαμηλό ποσοστό στα <b>Σημεία (1X2/AH)</b> (${r1X2.toFixed(1)}%). Προτείνεται αύξηση του απαιτούμενου <i>xG Diff</i> κατά <b>+0.05</b> (π.χ. από 0.48 σε 0.53).`);
+    }
+
+    if(recs.length > 0) {
+      advisorHTML = `<div style="background:rgba(251,191,36,0.1); border:1px solid var(--accent-gold); border-radius:var(--radius-sm); padding:15px; margin-bottom:20px;">
+        <h4 style="color:var(--accent-gold); margin-bottom:10px; font-size:0.9rem; text-transform:uppercase; display:flex; align-items:center; gap:8px;">🤖 AI Advisor Recommendations</h4>
+        <ul style="color:var(--text-main); font-size:0.85rem; padding-left:20px; line-height:1.6;">
+          ${recs.map(r => `<li style="margin-bottom:5px;">${r}</li>`).join('')}
+        </ul>
+      </div>`;
+    } else if (stats.games > 0) {
+       advisorHTML = `<div style="background:rgba(16,185,129,0.1); border:1px solid var(--accent-green); border-radius:var(--radius-sm); padding:15px; margin-bottom:20px; text-align:center;">
+        <span style="color:var(--accent-green); font-weight:700;">✅ Το σύστημα είναι άριστα καλιμπραρισμένο. Δεν προτείνονται αλλαγές!</span>
+      </div>`;
+    }
+
+    const statsCards=[{lbl:'1X2 / AH',h:stats.outHit,t:stats.validOut},{lbl:'O2.5',h:stats.o25H,t:stats.o25T},{lbl:'O3.5',h:stats.o35H,t:stats.o35T},{lbl:'U2.5',h:stats.u25H,t:stats.u25T},{lbl:'BTTS',h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];
+    
+    let html=`<div class="quant-panel">
+      <div class="panel-title">📊 Audit Results — ${cands.length} predictions</div>
+      ${advisorHTML}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:15px;margin-bottom:20px;">
+        ${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:20px;text-align:center;"><div style="font-size:0.85rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">${m.lbl}</div><div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.75rem;color:var(--text-muted);margin-top:5px;">${m.h}/${m.t}</div></div>`;}).join('')}
+      </div>
+      <div style="font-size:0.85rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve (Over 2.5)</div>
+      ${buildMiniCurve(engineConfig.tXG_O25,curveData)}
+      <div class="data-table-wrapper"><table class="summary-table" style="font-size:0.9rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>1X2 / AH</th><th>O2.5</th><th>O3.5</th><th>U2.5</th><th>BTTS</th><th>Exact</th></tr></thead><tbody>`;
+      
+    rows.forEach(({p,ah,aa,aTot,aExact,aOut,aBtts,isHit1X2})=>{
+      const cell=(pred,hit)=>pred?`<span class="${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'}</span>`:'<span style="color:var(--text-dim)">—</span>';
+      
+      let outHitHtml = '—';
+      if (p.outPick && p.outPick !== '-') {
+         if(p.omegaPick && p.omegaPick.includes('ΗΜΙΧΡΟΝΟ')) {
+             outHitHtml = `<span style="color:var(--text-dim)">HT (Skipped)</span>`;
+         } else {
+             outHitHtml = `<span class="${isHit1X2?'audit-omega-hit':'audit-omega-miss'}">${isHit1X2?'✅':'❌'}</span>`;
+         }
+      }
+
+      html+=`<tr><td class="left-align" style="font-weight:700;font-size:1rem;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.75rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num" style="font-size:1.1rem;">${ah}-${aa}</td><td style="font-size:1.1rem;">${outHitHtml}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td style="font-size:1.1rem;">${p.exactScorePred?`<span class="${p.exactScorePred===aExact?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`:'—'}</td></tr>`;
+    });
+    
+    html+=`</tbody></table></div></div>`;
+    document.getElementById('auditSection').innerHTML=html;
+    showOk('Audit & AI Analysis ολοκληρώθηκε.');
+  }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
+};
 function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:0.65rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:5px; margin-bottom:25px;">${bars}</div>`;}
 function saveToVault(data){try{let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");const map=new Map(store.map(x=>[String(x.fixtureId),x]));data.forEach(d=>{if(d.omegaPick==="NO BET")return;map.set(String(d.fixId),{fixtureId:d.fixId,date:d.m.fixture.date,leagueId:d.leagueId,league:d.lg,homeTeam:d.ht,awayTeam:d.at,outPick:d.outPick,exactScorePred:d.exact,predOver25:d.omegaPick.includes('OVER 2')||d.omegaPick.includes('OVER 3'),predBTTS:d.omegaPick.includes('GOAL'),omegaPick:d.omegaPick,tXG:d.tXG});});localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));}catch(e){}}
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
