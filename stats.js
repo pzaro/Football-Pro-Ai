@@ -1611,97 +1611,121 @@ function buildAccordionHTML(x) {
           const ld = x.lineupData;
           const confirmed = ld?.available === true;
 
-          // ── helper: renders one side (home or away) ──────────
-          const renderXI = (team, adj, sideLabel, sideColor) => {
-            const xiList  = team?.xi || [];
-            const outList = adj?.outPlayers || [];
-            const covPct  = adj?.coverage != null ? Math.round(adj.coverage*100) : null;
-            const covCol  = covPct==null?'var(--text-muted)':covPct>=90?'var(--accent-green)':covPct>=75?'var(--accent-gold)':'var(--accent-red)';
-            const posOrder = {G:0,D:1,M:2,F:3};
-            const sorted = [...xiList].sort((a,b)=>(posOrder[a.pos]??2)-(posOrder[b.pos]??2));
-
-            const rows = sorted.map(p=>{
-              const profile = (adj?.xiPlayers||[]).find(pp=>pp.id===p.id);
-              const xgPct   = profile ? `${(profile.xGContrib*100).toFixed(0)}%` : '—';
-              const cardAdj = profile?.adjCardProb ?? profile?.cardProb ?? 0;
-              const cCol    = cardAdj>=40?'var(--accent-red)':cardAdj>=20?'var(--accent-gold)':'var(--text-dim)';
-              const posCol  = p.pos==='G'?'var(--text-dim)':p.pos==='D'?'var(--accent-blue)':p.pos==='M'?'var(--accent-teal)':'var(--accent-gold)';
-              return `<div style="display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
-                <span style="font-size:0.62rem;font-weight:800;color:${posCol};min-width:14px;flex-shrink:0;">${p.pos||'?'}</span>
-                <span style="font-size:0.83rem;font-weight:600;color:var(--text-main);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
-                <span style="font-size:0.7rem;color:var(--text-muted);min-width:28px;text-align:right;">${xgPct}</span>
-                <span style="font-size:0.7rem;color:${cCol};min-width:34px;text-align:right;">${cardAdj>=1?'🟨':''}${cardAdj.toFixed(0)}%</span>
-              </div>`;
-            }).join('');
-
-            const outRows = outList.map(p=>`
-              <div style="display:flex;align-items:center;gap:5px;padding:3px 0;background:rgba(248,113,113,0.04);border-radius:4px;padding:3px 5px;margin-bottom:2px;">
-                <span style="font-size:0.62rem;font-weight:800;color:var(--accent-red);min-width:28px;">OUT</span>
-                <span style="font-size:0.8rem;color:var(--accent-red);flex:1;text-decoration:line-through;opacity:0.75;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
-                <span style="font-size:0.68rem;color:var(--accent-red);font-weight:700;">−${(p.xGContrib*100).toFixed(0)}% xG</span>
-              </div>`).join('');
-
-            return `<div>
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">
-                <div>
-                  <span style="font-size:0.72rem;font-weight:800;color:${sideColor};text-transform:uppercase;letter-spacing:0.05em;">${sideLabel}</span>
-                  ${team?.formation?`<span style="font-size:0.65rem;color:var(--text-muted);margin-left:6px;font-family:var(--font-mono);">${team.formation}</span>`:''}
-                </div>
-                ${covPct!=null?`<span style="font-size:0.68rem;font-weight:700;color:${covCol};background:${covPct>=90?'rgba(52,211,153,0.1)':covPct>=75?'rgba(251,191,36,0.1)':'rgba(248,113,113,0.1)'};padding:2px 7px;border-radius:10px;border:1px solid ${covPct>=90?'rgba(52,211,153,0.2)':covPct>=75?'rgba(251,191,36,0.2)':'rgba(248,113,113,0.2)'};">GAP ${covPct}%</span>`:''}
-              </div>
-              ${rows || '<span style="font-size:0.8rem;color:var(--text-dim);">Αναμονή ενδεκάδας…</span>'}
-              ${outRows?`<div style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(248,113,113,0.2);">${outRows}</div>`:''}
-            </div>`;
-          };
-
           // ── projected XI από players όταν δεν υπάρχει lineup ──
+          const estimatePos = p => p.xGContrib>0.14?'F':p.xGContrib>0.07?'M':p.xGContrib>0.02?'D':'G';
           const projectedXI = (players, adj) => {
-            if(!players?.length) return {xi:[], subs:[], formation:'?-?-?', xiIds: new Set()};
-            const sorted = [...players].sort((a,b)=>b.xGContrib-a.xGContrib);
+            if(!players?.length) return {xi:[], formation:'', xiIds:new Set()};
             const injIds = new Set((adj?.injured||[]).map(p=>p.id));
-            // Εξαίρεση τραυματισμένων, κράτα top 11
-            const available = sorted.filter(p=>!injIds.has(p.id));
-            const xi = available.slice(0,11).map(p=>({id:p.id,name:p.name,pos:p.pos||estimatePos(p),number:'?'}));
-            return {xi, subs: available.slice(11,14).map(p=>({id:p.id,name:p.name,pos:p.pos||'?',number:'?'})), formation:'~4-3-3', xiIds: new Set(xi.map(p=>p.id))};
+            const avail = [...players].filter(p=>!injIds.has(p.id)).sort((a,b)=>b.xGContrib-a.xGContrib);
+            const xi = avail.slice(0,11).map(p=>({id:p.id,name:p.name,pos:p.pos||estimatePos(p),number:''}));
+            return {xi, formation:'', xiIds:new Set(xi.map(p=>p.id))};
           };
-          const estimatePos = p => p.xGContrib>0.12?'F':p.xGContrib>0.06?'M':'D';
 
-          // Αν δεν έχουμε lineup, χρησιμοποιούμε projected από player profiles
           const hTeam = confirmed ? ld.home : projectedXI(x.hPlayers, x.hInjAdj);
           const aTeam = confirmed ? ld.away : projectedXI(x.aPlayers, x.aInjAdj);
 
-          // Substitution log
+          // ── pitch-style column: groups players by position ──────
+          const pitchCol = (team, adj, sideColor) => {
+            const xi = team?.xi || [];
+            if(!xi.length) return `<div style="text-align:center;padding:20px 0;color:var(--text-dim);font-size:0.8rem;">Δεν υπάρχουν δεδομένα</div>`;
+
+            const posOrder = {G:0,D:1,M:2,F:3};
+            const groups = {G:[],D:[],M:[],F:[]};
+            [...xi].sort((a,b)=>(posOrder[a.pos]??2)-(posOrder[b.pos]??2))
+                   .forEach(p => (groups[p.pos in groups ? p.pos : 'M']).push(p));
+
+            const posLabel = {G:'Τερ.',D:'Αμυν.',M:'Μεσ.',F:'Επιθ.'};
+            const posColor = {G:'var(--text-dim)',D:'var(--accent-blue)',M:'var(--accent-teal)',F:'var(--accent-gold)'};
+
+            const playerChip = (p) => {
+              const prof = (adj?.xiPlayers||[]).find(pp=>pp.id===p.id);
+              const cProb = prof?.adjCardProb ?? prof?.cardProb ?? 0;
+              const xgW = prof ? Math.min(Math.round(prof.xGContrib*100*2.5),100) : 0;
+              const cCol = cProb>=40?'var(--accent-red)':cProb>=20?'var(--accent-gold)':'var(--text-dim)';
+              const surname = (p.name||'?').split(' ').pop();
+              const isOut = (adj?.outPlayers||[]).some(op=>op.id===p.id);
+              return `<div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:5px;background:var(--bg-surface);border:1px solid ${isOut?'rgba(248,113,113,0.25)':'var(--border)'};margin-bottom:3px;${isOut?'opacity:0.6':''};">
+                <span style="font-size:0.72rem;font-weight:700;color:${posColor[p.pos]||'var(--text-muted)'};min-width:12px;">${p.pos||'?'}</span>
+                <span style="flex:1;font-size:0.83rem;font-weight:600;color:${isOut?'var(--accent-red)':'var(--text-main)'};${isOut?'text-decoration:line-through;':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(surname)}</span>
+                ${xgW>0?`<div style="width:28px;height:3px;background:var(--bg-raised);border-radius:2px;flex-shrink:0;"><div style="width:${xgW}%;height:100%;background:var(--accent-blue);border-radius:2px;"></div></div>`:''}
+                ${cProb>=5?`<span style="font-size:0.68rem;color:${cCol};font-weight:700;min-width:26px;text-align:right;">${cProb.toFixed(0)}%</span>`:''}
+              </div>`;
+            };
+
+            return Object.entries(groups)
+              .filter(([,arr])=>arr.length>0)
+              .map(([pos,arr])=>`
+                <div style="margin-bottom:8px;">
+                  <div style="font-size:0.62rem;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:${posColor[pos]};margin-bottom:4px;padding-left:2px;">${posLabel[pos]}</div>
+                  ${arr.map(playerChip).join('')}
+                </div>`).join('');
+          };
+
+          // ── Coverage badge ───────────────────────────────────────
+          const covBadge = (adj) => {
+            if(adj?.coverage == null) return '';
+            const pct = Math.round(adj.coverage*100);
+            const col = pct>=90?'var(--accent-green)':pct>=72?'var(--accent-gold)':'var(--accent-red)';
+            const bg  = pct>=90?'rgba(52,211,153,0.1)':pct>=72?'rgba(251,191,36,0.1)':'rgba(248,113,113,0.1)';
+            return `<div style="font-size:0.68rem;font-weight:700;color:${col};background:${bg};padding:1px 7px;border-radius:10px;border:1px solid ${col}33;margin-top:4px;">GAP ${pct}%</div>`;
+          };
+
+          // ── Status bar ───────────────────────────────────────────
+          const statusBar = confirmed
+            ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.2);border-radius:8px;">
+                <span style="width:7px;height:7px;background:var(--accent-teal);border-radius:50%;flex-shrink:0;box-shadow:0 0 6px var(--accent-teal);"></span>
+                <span style="font-size:0.72rem;font-weight:700;color:var(--accent-teal);">Επιβεβαιωμένη Ενδεκάδα</span>
+                <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);margin-left:auto;">${ld.home?.formation||''} vs ${ld.away?.formation||''}</span>
+              </div>`
+            : `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px dashed var(--border-md);border-radius:8px;">
+                <span style="width:7px;height:7px;background:var(--text-dim);border-radius:50%;flex-shrink:0;animation:pulseRed 2.5s infinite;"></span>
+                <span style="font-size:0.72rem;font-weight:600;color:var(--text-muted);">Εκτιμώμενη σύνθεση · Αναμονή επίσημης ανακοίνωσης (~60' πριν)</span>
+                <button onclick="window.fetchLineupForMatch('${x.fixId}')" style="margin-left:auto;font-size:0.68rem;font-weight:700;padding:3px 10px;background:var(--bg-raised);color:var(--text-sub);border:1px solid var(--border-md);border-radius:8px;cursor:pointer;white-space:nowrap;transition:all 0.15s;" onmouseover="this.style.borderColor='var(--accent-teal)';this.style.color='var(--accent-teal)'" onmouseout="this.style.borderColor='var(--border-md)';this.style.color='var(--text-sub)'">↻ Fetch XI</button>
+              </div>`;
+
+          // ── Substitution log ─────────────────────────────────────
           const subLog = (x.lastSubEvents||[]).length ? `
-            <div style="margin-top:12px;padding:10px;background:rgba(251,191,36,0.05);border:1px solid rgba(251,191,36,0.15);border-radius:6px;">
-              <div style="font-size:0.68rem;font-weight:800;color:var(--accent-gold);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">🔄 Αντικαταστάσεις</div>
-              ${x.lastSubEvents.map(s=>`<div style="font-size:0.8rem;color:var(--text-muted);padding:3px 0;display:flex;align-items:center;gap:6px;">
-                <span>${s.team==='home'?'🏠':'✈️'}</span>
-                <span style="color:var(--accent-red);text-decoration:line-through;">${esc((s.out||'').split(' ').slice(-1)[0])}</span>
-                <span style="color:var(--text-dim);">→</span>
-                <span style="color:var(--accent-green);font-weight:700;">${esc((s.in||'').split(' ').slice(-1)[0])}</span>
-              </div>`).join('')}
+            <div style="margin-top:12px;padding:8px 10px;background:rgba(251,191,36,0.04);border-left:2px solid var(--accent-gold);border-radius:0 6px 6px 0;">
+              <div style="font-size:0.65rem;font-weight:800;color:var(--accent-gold);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.08em;">🔄 Αντικαταστάσεις</div>
+              ${x.lastSubEvents.map(s=>`
+                <div style="display:flex;align-items:center;gap:6px;font-size:0.8rem;padding:2px 0;">
+                  <span style="font-size:0.75rem;">${s.team==='home'?'🏠':'✈️'}</span>
+                  <span style="color:var(--accent-red);opacity:0.75;text-decoration:line-through;">${esc((s.out||'').split(' ').pop())}</span>
+                  <span style="color:var(--text-dim);font-size:0.7rem;">→</span>
+                  <span style="color:var(--accent-green);font-weight:700;">${esc((s.in||'').split(' ').pop())}</span>
+                </div>`).join('')}
             </div>` : '';
 
-          return `<div class="accordion-card" style="min-width:580px;border-color:${confirmed?'rgba(45,212,191,0.35)':'rgba(255,255,255,0.08)'};">
-            <h4 style="color:${confirmed?'var(--accent-teal)':'var(--text-muted)'};">
-              📋 ${confirmed ? 'Starting XI' : 'Projected XI (Αναμονή Επιβεβαίωσης)'}
-              ${confirmed
-                ? `<span style="margin-left:auto;font-size:0.65rem;font-weight:700;padding:2px 8px;background:rgba(45,212,191,0.12);color:var(--accent-teal);border:1px solid rgba(45,212,191,0.25);border-radius:10px;">✓ Επιβεβαιωμένη</span>`
-                : `<button onclick="window.fetchLineupForMatch('${x.fixId}')" style="margin-left:auto;font-size:0.65rem;font-weight:700;padding:3px 10px;background:var(--bg-raised);color:var(--text-muted);border:1px solid var(--border-light);border-radius:10px;cursor:pointer;">↻ Fetch XI</button>`
-              }
+          return `<div class="accordion-card" style="border-color:${confirmed?'rgba(45,212,191,0.28)':'rgba(255,255,255,0.06)'};">
+            <h4 style="color:${confirmed?'var(--accent-teal)':'var(--text-muted)'};margin-bottom:10px;">
+              📋 ${confirmed?'Starting XI':'XI'}
             </h4>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
-              ${renderXI(hTeam, x.hInjAdj, '🏠 '+esc(x.ht.split(' ').slice(0,2).join(' ')), 'var(--accent-gold)')}
-              ${renderXI(aTeam, x.aInjAdj, '✈️ '+esc(x.at.split(' ').slice(0,2).join(' ')), 'var(--accent-blue)')}
+            ${statusBar}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                  <span style="font-size:0.72rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.04em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
+                  ${covBadge(x.hInjAdj)}
+                </div>
+                ${pitchCol(hTeam, x.hInjAdj, 'var(--accent-gold)')}
+              </div>
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                  <span style="font-size:0.72rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.04em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
+                  ${covBadge(x.aInjAdj)}
+                </div>
+                ${pitchCol(aTeam, x.aInjAdj, 'var(--accent-blue)')}
+              </div>
             </div>
             ${subLog}
-            <div style="margin-top:10px;font-size:0.63rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;">
-              <span><span style="color:var(--accent-gold);">F</span>=Επίθεση</span>
-              <span><span style="color:var(--accent-teal);">M</span>=Μεσαία</span>
-              <span><span style="color:var(--accent-blue);">D</span>=Άμυνα</span>
-              <span><span style="color:var(--text-dim);">G</span>=Τερματοφύλακας</span>
-              <span>GAP% = Goal-Assist Coverage</span>
-              <span style="color:var(--accent-red);">OUT = εκτός ενδεκάδας</span>
+            <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;font-size:0.63rem;color:var(--text-dim);">
+              <span><b style="color:var(--accent-gold)">F</b> Επίθ.</span>
+              <span><b style="color:var(--accent-teal)">M</b> Μεσ.</span>
+              <span><b style="color:var(--accent-blue)">D</b> Αμυν.</span>
+              <span><b style="color:var(--text-dim)">G</b> Τερ.</span>
+              <span>bar = xG%</span>
+              <span>% = 🟨 prob</span>
+              ${confirmed?'':'<span style="color:var(--text-dim)">~ = εκτίμηση</span>'}
             </div>
           </div>`;
         })()}
