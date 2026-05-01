@@ -149,6 +149,7 @@
         <button class="btn btn-outline" onclick="exportData()">↓ Export</button>
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
         <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">↑ Import</button>
+        <button class="btn btn-outline" id="btnFetchLineups" onclick="window.fetchAllLineups()" style="color:var(--teal);border-color:rgba(45,212,191,0.3);">📋 Fetch Lineups</button>
         <button class="btn btn-primary" id="btnPre" onclick="runScan()">▶ Run Scan</button>
       </div>
     </div>
