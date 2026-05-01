@@ -108,10 +108,36 @@ window.importData=function(ev){const file=ev.target.files[0];if(!file)return;con
 // ================================================================
 function normalCDF(z){if(z<-6)return 0;if(z>6)return 1;const t=1/(1+0.2316419*Math.abs(z));const poly=t*(0.319381530+t*(-0.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429))));const pdf=Math.exp(-0.5*z*z)/Math.sqrt(2*Math.PI);return z>=0?1-pdf*poly:pdf*poly;}
 function poissonProb(lambda,k){if(lambda<=0)return k===0?1:0;let logP=-lambda+k*Math.log(lambda);for(let i=1;i<=k;i++)logP-=Math.log(i);return Math.exp(logP);}
+
+// Dixon-Coles τροποποίηση πιθανότητας για χαμηλά σκορ (0-0,1-0,0-1,1-1)
+// Rho ≈ -0.13: διορθώνει την ανεξαρτησία του Poisson στα χαμηλά σκορ
+function dixonColesCorr(h,a,lH,lA,rho=-0.13){
+  if(h===0&&a===0)return 1-lH*lA*rho;
+  if(h===1&&a===0)return 1+lA*rho;
+  if(h===0&&a===1)return 1+lH*rho;
+  if(h===1&&a===1)return 1-rho;
+  return 1;
+}
+
 function getPoissonProbabilities(hL,aL){
-  let pHome=0,pDraw=0,pAway=0,pO25=0,pO35=0,pU25=0,pBTTS=0;let best={h:1,a:1,prob:0};const matrix=[];
-  for(let h=0;h<=6;h++){matrix[h]=[];for(let a=0;a<=6;a++){const p=poissonProb(hL,h)*poissonProb(aL,a);matrix[h][a]=p;if(h>a)pHome+=p;else if(h<a)pAway+=p;else pDraw+=p;if(h+a>2.5)pO25+=p;if(h+a>3.5)pO35+=p;if(h+a<2.5)pU25+=p;if(h>0&&a>0)pBTTS+=p;if(p>best.prob)best={h,a,prob:p};}}
-  return{pHome,pDraw,pAway,pO25,pO35,pU25,pBTTS,bestScore:best,matrix};
+  let pHome=0,pDraw=0,pAway=0,pO25=0,pO35=0,pU25=0,pBTTS=0;
+  const matrix=[]; const scoreList=[];
+  for(let h=0;h<=6;h++){
+    matrix[h]=[];
+    for(let a=0;a<=6;a++){
+      let p=poissonProb(hL,h)*poissonProb(aL,a);
+      // Εφαρμογή Dixon-Coles correction για h,a <= 1
+      if(h<=1&&a<=1) p*=Math.max(dixonColesCorr(h,a,hL,aL),0);
+      matrix[h][a]=p;
+      scoreList.push({h,a,prob:p});
+      if(h>a)pHome+=p;else if(h<a)pAway+=p;else pDraw+=p;
+      if(h+a>2.5)pO25+=p;if(h+a>3.5)pO35+=p;if(h+a<2.5)pU25+=p;if(h>0&&a>0)pBTTS+=p;
+    }
+  }
+  scoreList.sort((x,y)=>y.prob-x.prob);
+  const best=scoreList[0]||{h:1,a:1,prob:0};
+  const second=scoreList[1]||{h:1,a:0,prob:0};
+  return{pHome,pDraw,pAway,pO25,pO35,pU25,pBTTS,bestScore:best,secondScore:second,matrix};
 }
 function getPoissonMatrixHTML(hL,aL,maxGoals=4){
   let html=`<div class="poisson-grid" style="grid-template-columns:repeat(${maxGoals+2},1fr);">`;
@@ -158,15 +184,18 @@ const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===Stri
 // ================================================================
 async function batchCalc(list,tId){
   if(!list?.length)return{xg:'1.10',xga:'1.10',cor:'4.5',crd:'2.0',corRatio:'3.5'};
-  let tXG=0,tXGA=0,tCor=0,tCrd=0,n=0;
-  for(const f of list){
+  // Recency decay: most recent match has weight 1.0, older matches fade
+  const DECAY=[1.00,0.82,0.67,0.54,0.43,0.35,0.27,0.20];
+  let tXG=0,tXGA=0,tCor=0,tCrd=0,tw=0;
+  list.slice(0,8).forEach((f,i)=>{
+    const w=DECAY[i]??0.15;
     const myG=getTeamGoals(f,tId), opG=getOppGoals(f,tId);
-    tXG+=myG>0?myG*1.10:0.42; tXGA+=opG>0?opG*1.10:0.42;
+    tXG+=(myG>0?myG*1.10:0.42)*w; tXGA+=(opG>0?opG*1.10:0.42)*w;
     const simCor=3.5+(myG*1.2)+(opG*0.3); const simCrd=1.5+(opG*0.8)+(myG*0.2);
-    tCor+=simCor; tCrd+=simCrd; n++;
-  }
-  const avgXG=n>0?tXG/n:1.10; const avgCor=n>0?tCor/n:4.5; const ratio=avgXG>0?avgCor/Math.max(avgXG,0.5):3.5;
-  return{xg:avgXG.toFixed(2),xga:n>0?(tXGA/n).toFixed(2):'1.10',cor:avgCor.toFixed(1),crd:n>0?(tCrd/n).toFixed(1):'2.0',corRatio:clamp(ratio,2.0,5.5).toFixed(2)};
+    tCor+=simCor*w; tCrd+=simCrd*w; tw+=w;
+  });
+  const avgXG=tw>0?tXG/tw:1.10; const avgCor=tw>0?tCor/tw:4.5; const ratio=avgXG>0?avgCor/Math.max(avgXG,0.5):3.5;
+  return{xg:avgXG.toFixed(2),xga:tw>0?(tXGA/tw).toFixed(2):'1.10',cor:avgCor.toFixed(1),crd:tw>0?(tCrd/tw).toFixed(1):'2.0',corRatio:clamp(ratio,2.0,5.5).toFixed(2)};
 }
 
 function getFormHistory(fixtures,teamId){return fixtures.map(f=>{const my=getTeamGoals(f,teamId),op=getOppGoals(f,teamId);return my>op?{res:'W',cls:'W'}:my<op?{res:'L',cls:'L'}:{res:'D',cls:'D'};}).reverse();}
@@ -291,8 +320,14 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   else if(cornerRes.conf>=72){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
   else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 OVER 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Avg Cards: ${totCards.toFixed(1)}`;}
   
-  const exactConf=Math.round(clamp(pp.bestScore.prob*100*8,0,99));
-  return{omegaPick,reason,pickScore,outPick,hG:pp.bestScore.h,aG:pp.bestScore.a,hExp:hL,aExp:aL,exactConf,xgDiff,pp,cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL};
+  // exactConf: αθροίζει πιθανότητες Top-1 + Top-2 (Dixon-Coles adjusted) — πιο ρεαλιστικό
+  const top1P=pp.bestScore.prob, top2P=pp.secondScore.prob;
+  const exactConf=Math.round(clamp((top1P+top2P)*100*4.2,0,99));
+  return{omegaPick,reason,pickScore,outPick,
+    hG:pp.bestScore.h,aG:pp.bestScore.a,
+    hG2:pp.secondScore.h,aG2:pp.secondScore.a,
+    hExp:hL,aExp:aL,exactConf,xgDiff,pp,
+    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL};
 }
 
 // ================================================================
@@ -310,7 +345,22 @@ async function analyzeMatchSafe(m,index,total){
       getLeagueTopScorers(m.league.id, m.league.season)
     ]);
     
-    const lp=getLeagueParams(m.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
+    const lp=getLeagueParams(m.league.id);
+    
+    // H2H Lambda Blend: αν υπάρχουν >= 4 H2H αγώνες, μεταθέτουμε 12% του λ προς το H2H avg goals
+    const h2hSummary=summarizeH2H(h2hFix,m.teams.home.id,m.teams.away.id);
+    const h2hGames=h2hSummary.homeWins+h2hSummary.awayWins+h2hSummary.draws;
+    let hXG=Number(hS.fXG)*lp.mult, aXG=Number(aS.fXG)*lp.mult;
+    if(h2hGames>=4){
+      const h2hAvg=parseFloat(h2hSummary.h2hAvgGoals)||0;
+      const modelAvg=hXG+aXG;
+      if(modelAvg>0&&h2hAvg>0){
+        const scale=h2hAvg/modelAvg; const blend=0.12;
+        hXG=hXG*(1-blend)+(hXG*scale)*blend;
+        aXG=aXG*(1-blend)+(aXG*scale)*blend;
+      }
+    }
+    
     const tXG=hXG+aXG,bttsScore=Math.min(hXG,aXG);const result=computePick(hXG,aXG,tXG,bttsScore,lp,hS,aS);
     
     const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason);
@@ -332,9 +382,10 @@ async function analyzeMatchSafe(m,index,total){
 
     window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
-      tXG,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,exact:`${result.hG}-${result.aG}`,exactConf:result.exactConf,
+      tXG,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
+      exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
-      lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:summarizeH2H(h2hFix,m.teams.home.id,m.teams.away.id),
+      lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:h2hSummary,
       actStats, isBomb:false, hScorerProb, aScorerProb
     });
   }catch(err){
@@ -444,7 +495,7 @@ function renderTopSections(){
     else{
       html+=`<div style="display:flex;flex-direction:column;gap:10px;">`;
       tab.d.forEach((x,j)=>{
-        let val=tab.id==='exact'?x.exact||'?-?':Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
+        let val=tab.id==='exact'?(x.exact||'?-?')+(x.exact2&&x.exact2!==x.exact?` / ${x.exact2}`:''):Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
         html+=`<div onclick="scrollToMatch('row-${x.fixId}')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.18s;">
           <div style="font-family:var(--font-mono);font-size:1.2rem;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
           <div style="flex:1;min-width:0;">
@@ -520,8 +571,28 @@ function buildAccordionHTML(x) {
           <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
         </div>
         
+        <div class="accordion-card">
+          <h4>🎯 Exact Score Duo (D-C)</h4>
+          <div style="display:flex; gap:10px; margin-bottom:14px;">
+            <div style="flex:1; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.3); border-radius:8px; padding:14px; text-align:center;">
+              <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px; font-weight:700;">🥇 Top Pick</div>
+              <div style="font-family:var(--font-mono); font-size:1.8rem; font-weight:900; color:var(--accent-blue);">${x.exact||'?-?'}</div>
+              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:6px;">${x.pp?pct(x.pp.bestScore.prob):'—'} Prob (D-C)</div>
+            </div>
+            <div style="flex:1; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.3); border-radius:8px; padding:14px; text-align:center;">
+              <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px; font-weight:700;">🥈 Alt Pick</div>
+              <div style="font-family:var(--font-mono); font-size:1.8rem; font-weight:900; color:var(--accent-purple);">${x.exact2||'?-?'}</div>
+              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:6px;">${x.pp?pct(x.pp.secondScore.prob):'—'} Prob (D-C)</div>
+            </div>
+          </div>
+          <div style="background:var(--bg-dark); border-radius:6px; padding:10px; text-align:center;">
+            <span style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Combined Conf</span>
+            <span style="font-family:var(--font-mono); font-size:1.2rem; font-weight:800; color:${(x.exactConf||0)>=50?'var(--accent-green)':(x.exactConf||0)>=30?'var(--accent-gold)':'var(--text-muted)'}; margin-left:10px;">${x.exactConf||0}%</span>
+          </div>
+        </div>
+
         <div class="accordion-card" style="min-width: 320px;">
-          <h4 style="text-align:center;">📊 Poisson Score Matrix</h4>
+          <h4 style="text-align:center;">📊 Poisson Score Matrix (Dixon-Coles)</h4>
           ${pHtml}
         </div>
       </div>
@@ -561,7 +632,7 @@ function renderSummaryTable() {
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
           <td class="col-btts data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
-          <td class="col-exact data-num" style="font-size:1.1rem;">${x.exact||'?-?'}</td>
+          <td class="col-exact data-num" style="font-size:1rem; line-height:1.3;"><span style="color:var(--accent-blue);font-weight:800;">${x.exact||'?-?'}</span>${x.exact2&&x.exact2!==x.exact?`<br><span style="color:var(--accent-purple);font-size:0.82rem;">${x.exact2}</span>`:''}</td>
           <td class="col-conf data-num" style="color:${confCol}; font-size:1.1rem;">${conf.toFixed(0)}%</td>
           <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.85rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
         </tr>
@@ -754,7 +825,17 @@ window.runCustomAudit=async function(){
          }
       }
 
-      html+=`<tr><td class="left-align" style="font-weight:700;font-size:1rem;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.75rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num" style="font-size:1.1rem;">${ah}-${aa}</td><td style="font-size:1.1rem;">${outHitHtml}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td style="font-size:1.1rem;">${p.exactScorePred?`<span class="${p.exactScorePred===aExact?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`:'—'}</td></tr>`;
+      // Exact: hit αν πετύχει το Top-1 ή το Top-2 σκορ
+      const exactHit1 = p.exactScorePred === aExact;
+      const exactHit2 = p.exactScorePred2 === aExact;
+      const exactHit = exactHit1 || exactHit2;
+      const exactCell = p.exactScorePred
+        ? `<span class="${exactHit1?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`
+          + (p.exactScorePred2 && p.exactScorePred2 !== p.exactScorePred
+            ? `<br><span class="${exactHit2?'audit-omega-hit':'audit-omega-miss'}" style="font-size:0.85rem;">${p.exactScorePred2}</span>` : '')
+        : '—';
+      
+      html+=`<tr><td class="left-align" style="font-weight:700;font-size:1rem;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.75rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num" style="font-size:1.1rem;">${ah}-${aa}</td><td style="font-size:1.1rem;">${outHitHtml}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td style="font-size:1.1rem;">${exactCell}</td></tr>`;
     });
     
     html+=`</tbody></table></div></div>`;
@@ -763,7 +844,7 @@ window.runCustomAudit=async function(){
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:0.65rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:5px; margin-bottom:25px;">${bars}</div>`;}
-function saveToVault(data){try{let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");const map=new Map(store.map(x=>[String(x.fixtureId),x]));data.forEach(d=>{if(d.omegaPick==="NO BET")return;map.set(String(d.fixId),{fixtureId:d.fixId,date:d.m.fixture.date,leagueId:d.leagueId,league:d.lg,homeTeam:d.ht,awayTeam:d.at,outPick:d.outPick,exactScorePred:d.exact,predOver25:d.omegaPick.includes('OVER 2')||d.omegaPick.includes('OVER 3'),predBTTS:d.omegaPick.includes('GOAL'),omegaPick:d.omegaPick,tXG:d.tXG});});localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));}catch(e){}}
+function saveToVault(data){try{let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");const map=new Map(store.map(x=>[String(x.fixtureId),x]));data.forEach(d=>{if(d.omegaPick==="NO BET")return;map.set(String(d.fixId),{fixtureId:d.fixId,date:d.m.fixture.date,leagueId:d.leagueId,league:d.lg,homeTeam:d.ht,awayTeam:d.at,outPick:d.outPick,exactScorePred:d.exact,exactScorePred2:d.exact2,predOver25:d.omegaPick.includes('OVER 2')||d.omegaPick.includes('OVER 3'),predOver35:d.omegaPick.includes('OVER 3'),predUnder25:d.omegaPick.includes('UNDER 2'),predBTTS:d.omegaPick.includes('GOAL'),omegaPick:d.omegaPick,tXG:d.tXG});});localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));}catch(e){}}
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const sel=document.getElementById('auditLeague');if(!sel)return;const known=new Set(store.map(x=>x.leagueId));sel.innerHTML='<option value="ALL">Global (All)</option>';(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).forEach(l=>{if(known.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
 
@@ -818,7 +899,7 @@ window.saveLeagueMods = function() {
 // ================================================================
 window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}try{const lm=JSON.parse(localStorage.getItem(LS_LGMODS));if(lm)leagueMods=lm;}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
 window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Global Settings!');};
-window.resimulateMatches=function(){if(!window.scannedMatchesData.length)return;window.scannedMatchesData.forEach(d=>{if(!d.hS)return;const lp=getLeagueParams(d.leagueId);const hXG=Number(d.hS.fXG)*lp.mult,aXG=Number(d.aS.fXG)*lp.mult;const tXG=hXG+aXG,btts=Math.min(hXG,aXG);const res=computePick(hXG,aXG,tXG,btts,lp,d.hS,d.aS);Object.assign(d,{tXG,btts,outPick:res.outPick,xgDiff:res.xgDiff,exact:`${res.hG}-${res.aG}`,exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,hExp:res.hExp,aExp:res.aExp,pp:res.pp,lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor});});rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');};
+window.resimulateMatches=function(){if(!window.scannedMatchesData.length)return;window.scannedMatchesData.forEach(d=>{if(!d.hS)return;const lp=getLeagueParams(d.leagueId);const hXG=Number(d.hS.fXG)*lp.mult,aXG=Number(d.aS.fXG)*lp.mult;const tXG=hXG+aXG,btts=Math.min(hXG,aXG);const res=computePick(hXG,aXG,tXG,btts,lp,d.hS,d.aS);Object.assign(d,{tXG,btts,outPick:res.outPick,xgDiff:res.xgDiff,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,hExp:res.hExp,aExp:res.aExp,pp:res.pp,lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor});});rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');};
 
 window.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('pin')?.addEventListener('input',function(){
