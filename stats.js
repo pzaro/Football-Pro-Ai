@@ -73,7 +73,8 @@ let teamStatsCache = new BoundedCache(150),
     assistsCache   = new BoundedCache(60),
     cardsCache     = new BoundedCache(60),
     injuryCache    = new BoundedCache(200),
-    liveStatsCache = new BoundedCache(50);   // live fixture stats, short-lived
+    liveStatsCache = new BoundedCache(50),
+    lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
 let isRunning = false, currentCredits = null;
 let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[] };
 window.scannedMatchesData = [];
@@ -285,6 +286,44 @@ async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has
 async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
 async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return standCache.get(k);const d=await apiReq(`standings?league=${lg}&season=${s}`);const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];standCache.set(k,f);return f;}
 async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
+
+// 📋 LINEUPS per fixture (1 credit, cached until sub detected)
+async function getFixtureLineups(fixtureId) {
+  const k = String(fixtureId);
+  if(lineupsCache.has(k)) return lineupsCache.get(k);
+  const d = await apiReq(`fixtures/lineups?fixture=${fixtureId}`);
+  const result = parseLineup(d?.response || []);
+  if(result.available) lineupsCache.set(k, result);
+  return result;
+}
+
+/**
+ * Επεξεργάζεται το API lineup response.
+ * Επιστρέφει { available, home: {teamId, xi:[{id,name,pos,number}], subs:[...]}, away: {...} }
+ */
+function parseLineup(response) {
+  if(!response?.length) return { available: false };
+  const parse = (team) => {
+    const xi = (team.startXI || []).map(p => ({
+      id:     p.player.id,
+      name:   p.player.name,
+      pos:    p.player.pos || '?',
+      number: p.player.number
+    }));
+    const subs = (team.substitutes || []).map(p => ({
+      id:     p.player.id,
+      name:   p.player.name,
+      pos:    p.player.pos || '?',
+      number: p.player.number
+    }));
+    return { teamId: team.team.id, formation: team.formation || '?-?-?', xi, subs, xiIds: new Set(xi.map(p=>p.id)) };
+  };
+  return {
+    available: true,
+    home: parse(response[0]),
+    away: parse(response[1])
+  };
+}
 
 // 🎯 TOP SCORERS CACHE
 async function getLeagueTopScorers(lg, s) {
@@ -531,6 +570,66 @@ function applyInjuryAdjustment(baseXG, playerProfiles, rawInjuries) {
 }
 
 /**
+ * LINEUP-BASED xG ADJUSTMENT — κύρια πηγή αλήθειας όταν υπάρχει lineup.
+ *
+ * Λογική:
+ *   1. Υπολόγισε το GAP (xG contribution) ΜΟΝΟ για τους παίκτες που παίζουν (XI)
+ *   2. "GAP coverage" = ποσοστό του συνολικού team GAP που εκπροσωπείται
+ *   3. Αν κάποιος key player δεν είναι στο XI → εφαρμόζεται παρόμοια
+ *      injury-style correction (compensation factor 0.72 — χαμηλότερο από injury
+ *      γιατί η απόφαση να μη βγει ξεκούραστος παίκτης είναι διαφορετική από τραυματισμό)
+ *   4. Η injury list επιβεβαιώνει / ενισχύει τη διόρθωση αλλά ΔΕΝ είναι απαραίτητη
+ *
+ * Επιστρέφει:
+ *   adjXG, delta, factor, source ('lineup'|'injury'|'base')
+ *   xiPlayers  — οι παίκτες που ξεκινούν (με enriched profile)
+ *   outPlayers — key players εκτός XI (με contribution%)
+ */
+function applyLineupAdjustment(baseXG, allPlayers, lineupXI, rawInjuries) {
+  // Fallback σε injury adjustment αν δεν υπάρχει lineup
+  if(!lineupXI?.xiIds?.size) {
+    const injAdj = applyInjuryAdjustment(baseXG, allPlayers, rawInjuries);
+    return { ...injAdj, source: 'injury', xiPlayers: [], outPlayers: [] };
+  }
+
+  const COMPENSATION = 0.72; // χαμηλότερο από injury (0.78): rotation ≠ injury
+  const injuredIds = new Set((rawInjuries||[]).map(i=>i.player?.id).filter(Boolean));
+
+  const xiPlayers  = [];
+  const outPlayers = [];
+
+  allPlayers.forEach(p => {
+    const inXI     = lineupXI.xiIds.has(p.id);
+    const isInjured = injuredIds.has(p.id);
+    p.inXI     = inXI;
+    p.injured  = isInjured; // override από injury API αν διαθέσιμο
+    if(inXI) xiPlayers.push(p);
+    else if(p.gap > 0) outPlayers.push(p); // μόνο key players εκτός XI
+  });
+
+  // GAP coverage: τι % του συνολικού team attack παίζει
+  const totalGAP = allPlayers.reduce((s,p) => s + p.gap, 0) || 1;
+  const xiGAP    = xiPlayers.reduce((s,p)  => s + p.gap, 0);
+  const coverage = clamp(xiGAP / totalGAP, 0.30, 1.0);
+
+  // Μόνο αν coverage < 95% εφαρμόζεται ουσιαστική διόρθωση
+  const xGLoss = coverage < 0.95 ? (1 - coverage) * COMPENSATION : 0;
+  const factor  = clamp(1 - xGLoss, 0.52, 1.0);
+  const adjXG   = baseXG * factor;
+  const delta   = adjXG - baseXG;
+
+  return {
+    adjXG, delta, factor,
+    source: 'lineup',
+    coverage,
+    xiPlayers,
+    outPlayers: outPlayers.sort((a,b) => b.gap - a.gap).slice(0, 5),
+    // backward-compat: injured = out players (for INJ badge)
+    injured: outPlayers.filter(p => injuredIds.has(p.id))
+  };
+}
+
+/**
  * Διορθώνει την πιθανότητα κάρτας κάθε παίκτη λαμβάνοντας υπόψη:
  *
  *  1. Αντίπαλη ομάδα (oppStats.crd):
@@ -700,7 +799,7 @@ async function analyzeMatchSafe(m,index,total){
   try{
     setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
     
-    const[hS, aS, stand, h2hFix, leagueScorers, leagueAssists, leagueCards, hInjuries, aInjuries] = await Promise.all([
+    const[hS, aS, stand, h2hFix, leagueScorers, leagueAssists, leagueCards, hInjuries, aInjuries, lineupData] = await Promise.all([
       buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
       buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
       getStand(m.league.id, m.league.season),
@@ -709,7 +808,8 @@ async function analyzeMatchSafe(m,index,total){
       getLeagueTopAssists(m.league.id, m.league.season),
       getLeagueTopCards(m.league.id, m.league.season),
       getTeamInjuries(m.teams.home.id, m.league.id, m.league.season),
-      getTeamInjuries(m.teams.away.id, m.league.id, m.league.season)
+      getTeamInjuries(m.teams.away.id, m.league.id, m.league.season),
+      getFixtureLineups(m.fixture.id)        // 📋 Starting XI — primary source of truth
     ]);
     
     const lp=getLeagueParams(m.league.id);
@@ -734,9 +834,11 @@ async function analyzeMatchSafe(m,index,total){
     const hPlayers = buildPlayerProfiles(m.teams.home.id, leagueScorers, leagueAssists, leagueCards, hS.totalTeamGoalsSeason);
     const aPlayers = buildPlayerProfiles(m.teams.away.id, leagueScorers, leagueAssists, leagueCards, aS.totalTeamGoalsSeason);
 
-    // ⚠️ INJURY ADJUSTMENT — μειώνει το xG ανάλογα με το contribution των τραυματισμένων
-    const hInjAdj = applyInjuryAdjustment(hXG, hPlayers, hInjuries);
-    const aInjAdj = applyInjuryAdjustment(aXG, aPlayers, aInjuries);
+    // ⚠️ ADJUSTMENT — Lineup-first: αν υπάρχει XI → lineup-based, αλλιώς injury-based
+    const hXI = lineupData?.available ? lineupData.home : null;
+    const aXI = lineupData?.available ? lineupData.away  : null;
+    const hInjAdj = applyLineupAdjustment(hXG, hPlayers, hXI, hInjuries);
+    const aInjAdj = applyLineupAdjustment(aXG, aPlayers, aXI, aInjuries);
     const hXGfinal = hInjAdj.adjXG;
     const aXGfinal = aInjAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
@@ -771,10 +873,11 @@ async function analyzeMatchSafe(m,index,total){
     window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
       tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
-      hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,   // base vs injury-adjusted
-      hInjAdj, aInjAdj,                                 // {adjXG,delta,factor,injured:[]}
-      hPlayers, aPlayers,                               // player profiles
-      htAnalysis,                                       // ⏱️ HT analysis object
+      hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,
+      hInjAdj, aInjAdj,
+      hPlayers, aPlayers,
+      htAnalysis,
+      lineupData,                                       // 📋 Starting XI (raw parsed data)
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:h2hSummary,
@@ -897,6 +1000,90 @@ function computeLiveIntelligence(hStatsArr, aStatsArr, elapsed) {
   };
 }
 
+// ================================================================
+//  SUBSTITUTION ENGINE — live αντικατάσταση → recalculate metrics
+// ================================================================
+
+/**
+ * Εντοπίζει αντικαταστάσεις συγκρίνοντας το stored XI με το νέο
+ * και επανυπολογίζει xG, exact scores, HT, picks για αυτό το match.
+ *
+ * Επιστρέφει τα changed fields για flash animation.
+ */
+function applySubstitution(d, newLineupData) {
+  if(!newLineupData?.available || !d.lineupData?.available) return null;
+
+  const prevHxi = d.lineupData.home.xiIds;
+  const prevAxi = d.lineupData.away.xiIds;
+  const newHxi  = newLineupData.home.xiIds;
+  const newAxi  = newLineupData.away.xiIds;
+
+  // Βρες ποιοι παίκτες αλλαξαν (subbed out)
+  const hSubbed = [...prevHxi].filter(id => !newHxi.has(id));
+  const aSubbed = [...prevAxi].filter(id => !newAxi.has(id));
+  const hSubbedIn  = [...newHxi].filter(id => !prevHxi.has(id));
+  const aSubbedIn  = [...newAxi].filter(id => !prevAxi.has(id));
+
+  if(!hSubbed.length && !aSubbed.length) return null; // δεν έγινε αντικατάσταση
+
+  // Ενημέρωση lineupData
+  d.lineupData = newLineupData;
+  lineupsCache.set(String(d.fixId), newLineupData);
+
+  // Ποιοι παίκτες αλλαξαν (για display)
+  const subEvents = [];
+  const getName = (players, id) => players.find(p=>p.id===id)?.name || `#${id}`;
+
+  hSubbed.forEach((id, i) => {
+    const out = getName([...d.hPlayers], id);
+    const inP = d.hPlayers.find(p=>p.id===hSubbedIn[i]);
+    const inName = inP?.name || getName([...d.lineupData?.home?.subs||[]], hSubbedIn[i]);
+    subEvents.push({ team:'home', out, in: inName, outId:id, inId:hSubbedIn[i] });
+  });
+  aSubbed.forEach((id, i) => {
+    const out = getName([...d.aPlayers], id);
+    const inP = d.aPlayers.find(p=>p.id===aSubbedIn[i]);
+    const inName = inP?.name || getName([...d.lineupData?.away?.subs||[]], aSubbedIn[i]);
+    subEvents.push({ team:'away', out, in: inName, outId:id, inId:aSubbedIn[i] });
+  });
+
+  // Recalculate adjustment με νέο XI
+  const lp = getLeagueParams(d.leagueId);
+  const prevHXGfinal = d.hXGfinal, prevAXGfinal = d.aXGfinal;
+
+  const newHAdj = applyLineupAdjustment(d.hXGbase, d.hPlayers, newLineupData.home, []);
+  const newAAdj = applyLineupAdjustment(d.aXGbase, d.aPlayers, newLineupData.away, []);
+  const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
+  const tXGfinal = hXGfinal + aXGfinal;
+  const btts = Math.min(hXGfinal, aXGfinal);
+  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS);
+  const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
+
+  // Παρακολούθηση changed fields (για flash)
+  const changed = {};
+  if(Math.abs(hXGfinal - prevHXGfinal) > 0.02) changed.hXGfinal = { prev: prevHXGfinal, next: hXGfinal };
+  if(Math.abs(aXGfinal - prevAXGfinal) > 0.02) changed.aXGfinal = { prev: prevAXGfinal, next: aXGfinal };
+  if(result.omegaPick !== d.omegaPick)          changed.omegaPick = { prev: d.omegaPick, next: result.omegaPick };
+  if(`${result.hG}-${result.aG}` !== d.exact)   changed.exact = { prev: d.exact, next:`${result.hG}-${result.aG}` };
+
+  // Apply updates
+  Object.assign(d, {
+    hXGfinal, aXGfinal, tXG: tXGfinal, btts,
+    hInjAdj: newHAdj, aInjAdj: newAAdj, htAnalysis,
+    outPick: result.outPick, xgDiff: result.xgDiff,
+    exact: `${result.hG}-${result.aG}`, exact2: `${result.hG2}-${result.aG2}`,
+    exactConf: result.exactConf, omegaPick: result.omegaPick,
+    strength: result.pickScore, reason: result.reason,
+    hExp: result.hExp, aExp: result.aExp, pp: result.pp,
+    lambdaTotal: result.lambdaTotal, cornerConf: result.cornerConf, expCor: result.expCor,
+    lastSubEvents: subEvents,   // για accordion display
+    subChanged: changed,        // για flash animation
+    subTimestamp: Date.now()
+  });
+
+  return { subEvents, changed };
+}
+
 window.syncLiveScores=async function(){
   if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
   try{
@@ -904,37 +1091,90 @@ window.syncLiveScores=async function(){
     if(!liveArr.length){showOk('Δεν υπάρχουν live αγώνες.');return;}
     const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));
 
-    // 1. Βασική ενημέρωση σκορ + events (χωρίς extra credits)
+    // 1. Score + events (1 credit)
     let n=0;
     window.scannedMatchesData.forEach(d=>{
       if(!liveMap.has(d.fixId))return;const ld=liveMap.get(d.fixId);
       d.m.goals=ld.goals;d.m.fixture.status=ld.fixture.status;
       const evts=ld.events||[];let cor=0,yel=0,red=0;
-      evts.forEach(ev=>{const t=(ev.type||'').toLowerCase(),det=(ev.detail||'').toLowerCase();if(t==='corner')cor++;else if(t==='card'){if(det.includes('yellow'))yel++;else if(det.includes('red')&&!det.includes('yellow'))red++;}});
+      evts.forEach(ev=>{const t=(ev.type||'').toLowerCase(),det=(ev.detail||'').toLowerCase();
+        if(t==='corner')cor++;
+        else if(t==='card'){if(det.includes('yellow'))yel++;else if(det.includes('red')&&!det.includes('yellow'))red++;}
+      });
       if(evts.length>0){d.liveCorners=cor;d.liveYellows=yel;d.liveReds=red;}n++;
     });
 
-    // 2. Live Intelligence — fetch statistics για κάθε live match (1 credit/match)
     const liveTracked=window.scannedMatchesData.filter(d=>liveMap.has(d.fixId));
-    if(liveTracked.length>0){
-      await Promise.all(liveTracked.map(async d=>{
-        try{
-          const sr=await apiReq(`fixtures/statistics?fixture=${d.fixId}`);
-          if(!sr.response||sr.response.length<2)return;
-          const hStArr=sr.response[0].statistics;
-          const aStArr=sr.response[1].statistics;
+    if(!liveTracked.length){renderSummaryTable();tickerRefresh();showOk(`✅ 1 Credit · Synced ${n} αγώνες`);return;}
+
+    // 2. Live Stats + Lineups (parallel per match)
+    let subCount=0, liveIntelCount=0;
+    await Promise.all(liveTracked.map(async d=>{
+      try{
+        const[srStats, srLineup] = await Promise.all([
+          apiReq(`fixtures/statistics?fixture=${d.fixId}`),
+          apiReq(`fixtures/lineups?fixture=${d.fixId}`)
+        ]);
+        // Live stats → liveIntel
+        if(srStats.response?.length>=2){
           const elapsed=d.m?.fixture?.status?.elapsed||45;
-          d.liveIntel=computeLiveIntelligence(hStArr,aStArr,elapsed);
-          // Cache για τυχόν αναφορά
-          liveStatsCache.set(String(d.fixId),{h:hStArr,a:aStArr,ts:Date.now()});
-        }catch{}
-      }));
-    }
+          d.liveIntel=computeLiveIntelligence(srStats.response[0].statistics, srStats.response[1].statistics, elapsed);
+          liveStatsCache.set(String(d.fixId),{h:srStats.response[0].statistics,a:srStats.response[1].statistics,ts:Date.now()});
+          liveIntelCount++;
+        }
+        // Lineups → substitution detection & recalculation
+        const newLineup = parseLineup(srLineup?.response||[]);
+        if(newLineup.available){
+          const subResult = applySubstitution(d, newLineup);
+          if(subResult){
+            subCount++;
+            flashMatchUpdate(d.fixId, subResult);
+          } else {
+            // Ακόμα και χωρίς sub, store νέο lineup
+            d.lineupData = newLineup;
+          }
+        }
+      }catch(e){ console.warn('[APEX] live sync error fix',d.fixId,e.message); }
+    }));
 
     renderSummaryTable();tickerRefresh();
-    showOk(`✅ ${1+liveTracked.length} Credits · Synced ${n} live αγώνες · Live Intel: ${liveTracked.filter(d=>d.liveIntel).length} matches`);
-  }catch(e){showErr('Sync error: '+e.message);}finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
+    const credits = 1 + liveTracked.length * 2;
+    showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}`);
+  }catch(e){showErr('Sync error: '+e.message);}
+  finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
 };
+
+/**
+ * Εφαρμόζει flash animation στη summary table row και τα accordion cells
+ * που άλλαξαν λόγω αντικατάστασης.
+ */
+function flashMatchUpdate(fixId, subResult){
+  if(!subResult) return;
+  const row = document.getElementById(`row-${fixId}`);
+  if(!row) return;
+
+  // Flash ολόκληρης γραμμής (CSS class)
+  row.classList.remove('row-flash');
+  void row.offsetWidth; // reflow για restart animation
+  row.classList.add('row-flash');
+
+  // Flash cells που άλλαξαν
+  const changed = subResult.changed || {};
+  const cellMap = { exact:'.col-exact', omegaPick:'.col-signal' };
+  Object.keys(changed).forEach(field=>{
+    const cell = row.querySelector(cellMap[field]||'');
+    if(!cell) return;
+    cell.classList.remove('cell-flash');
+    void cell.offsetWidth;
+    cell.classList.add('cell-flash');
+  });
+
+  // Sub toast
+  const subLines = (subResult.subEvents||[]).map(s=>
+    `${s.team==='home'?'🏠':'✈️'} <b>${(s.out||'').split(' ').slice(-1)[0]}</b> → ${(s.in||'').split(' ').slice(-1)[0]}`
+  ).join(' · ');
+  if(subLines) showOk(`🔄 ${subLines}`);
+}
 
 let _autoSyncTimer=null;
 function startAutoSync(){if(_autoSyncTimer)clearInterval(_autoSyncTimer);_autoSyncTimer=setInterval(()=>{const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));if(hasLive&&!isRunning)syncLiveScores();},90000);}
@@ -1160,6 +1400,79 @@ function buildAccordionHTML(x) {
 
         ${liveIntelCard}
 
+        ${liveIntelCard}
+
+        ${x.lineupData?.available ? (()=>{
+          const ld = x.lineupData;
+          const renderXI = (team, adj, sideLabel, sideColor) => {
+            const xiList = team.xi || [];
+            const outList = adj?.outPlayers || [];
+            const outIds = new Set(outList.map(p=>p.id));
+            const covPct = adj?.coverage != null ? Math.round(adj.coverage*100) : null;
+            const covCol = covPct == null ? 'var(--text-muted)' : covPct>=90?'var(--accent-green)':covPct>=75?'var(--accent-gold)':'var(--accent-red)';
+
+            const posOrder = { G:0, D:1, M:2, F:3 };
+            const sorted = [...xiList].sort((a,b)=>(posOrder[a.pos]??2)-(posOrder[b.pos]??2));
+
+            const rows = sorted.map(p=>{
+              const profile = (adj?.xiPlayers||[]).find(pp=>pp.id===p.id);
+              const xgPct = profile ? `${(profile.xGContrib*100).toFixed(0)}%` : '—';
+              const cardAdj = profile?.adjCardProb ?? profile?.cardProb ?? 0;
+              const cCol = cardAdj>=40?'var(--accent-red)':cardAdj>=20?'var(--accent-gold)':'var(--text-dim)';
+              const isKey = profile && profile.gap > 0;
+              const posCol = p.pos==='G'?'var(--text-dim)':p.pos==='D'?'var(--accent-blue)':p.pos==='M'?'var(--accent-teal)':'var(--accent-gold)';
+              return `<div style="display:flex;align-items:center;gap:5px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                <span style="font-size:0.65rem;font-weight:700;color:${posCol};min-width:14px;">${p.pos||'?'}</span>
+                <span style="font-size:0.82rem;font-weight:${isKey?700:500};color:var(--text-main);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
+                <span style="font-size:0.72rem;color:var(--text-muted);min-width:28px;text-align:right;">${xgPct}</span>
+                <span style="font-size:0.72rem;color:${cCol};min-width:26px;text-align:right;">${cardAdj>=1?'🟨':''}${cardAdj.toFixed(0)}%</span>
+              </div>`;
+            }).join('');
+
+            const outRows = outList.map(p=>`<div style="display:flex;align-items:center;gap:5px;padding:3px 0;opacity:0.7;">
+              <span style="font-size:0.7rem;color:var(--accent-red);">OUT</span>
+              <span style="font-size:0.8rem;color:var(--accent-red);flex:1;text-decoration:line-through;">${esc((p.name||'').split(' ').slice(-1)[0])}</span>
+              <span style="font-size:0.7rem;color:var(--accent-red);">−${(p.xGContrib*100).toFixed(0)}%</span>
+            </div>`).join('');
+
+            return `<div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="font-size:0.75rem;font-weight:800;color:${sideColor};text-transform:uppercase;">${sideLabel} · ${team.formation}</span>
+                ${covPct!=null?`<span style="font-size:0.7rem;font-weight:700;color:${covCol};">GAP: ${covPct}%</span>`:''}
+              </div>
+              <div style="font-size:0.68rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:4px;">
+                <span>Παίκτης</span><span>xG%&nbsp;&nbsp;&nbsp;🟨%</span>
+              </div>
+              ${rows}
+              ${outRows}
+            </div>`;
+          };
+
+          // Substitution log (αν υπάρχουν)
+          const subLog = (x.lastSubEvents||[]).length ? `
+            <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-light);">
+              <div style="font-size:0.7rem;font-weight:700;color:var(--accent-gold);margin-bottom:4px;">🔄 Τελευταίες Αντικαταστάσεις</div>
+              ${x.lastSubEvents.map(s=>`<div style="font-size:0.78rem;color:var(--text-muted);padding:2px 0;">
+                ${s.team==='home'?'🏠':'✈️'} <span style="color:var(--accent-red);text-decoration:line-through;">${esc((s.out||'').split(' ').slice(-1)[0])}</span>
+                → <span style="color:var(--accent-green);font-weight:700;">${esc((s.in||'').split(' ').slice(-1)[0])}</span>
+              </div>`).join('')}
+            </div>` : '';
+
+          return `<div class="accordion-card" style="min-width:580px;border-color:rgba(45,212,191,0.35);">
+            <h4 style="color:var(--accent-teal);">📋 Starting XI
+              <span style="font-size:0.7rem;font-weight:400;color:var(--text-dim);margin-left:8px;">${ld.available?'Επιβεβαιωμένη Ενδεκάδα':'Εκκρεμεί'}</span>
+            </h4>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+              ${renderXI(ld.home, x.hInjAdj, '🏠 '+esc(x.ht), 'var(--accent-gold)')}
+              ${renderXI(ld.away, x.aInjAdj, '✈️ '+esc(x.at), 'var(--accent-blue)')}
+            </div>
+            ${subLog}
+            <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);border-top:1px solid var(--border-light);padding-top:5px;">
+              GAP = Goal-Assist Points coverage · G=Τερ D=Αμυν M=Μεσ F=Επιθ · OUT=εκτός XI
+            </div>
+          </div>`;
+        })() : ''}
+
         ${x.htAnalysis ? (() => {
           const ht=x.htAnalysis;
           const hPct=Math.round(ht.pLeadHome*100), dPct=Math.round(ht.pDraw*100), aPct=Math.round(ht.pLeadAway*100);
@@ -1310,6 +1623,12 @@ function renderSummaryTable() {
         
         const hasInjury = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
         const injBadge  = hasInjury ? `<span style="background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:0.65rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:6px;">${acr('INJ')}</span>` : '';
+        const lineupSrcBadge = x.lineupData?.available
+          ? `<span style="background:rgba(45,212,191,0.12);color:var(--accent-teal);font-size:0.62rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:5px;">📋 XI</span>`
+          : `<span style="font-size:0.62rem;color:var(--text-dim);margin-left:5px;">~XI</span>`;
+        // Sub flash pulse badge
+        const subFlash = x.subTimestamp && (Date.now()-x.subTimestamp<120000)
+          ? `<span class="sub-flash-badge">🔄</span>` : '';
 
         // Live Intelligence extras
         const li = live ? x.liveIntel : null;
@@ -1323,7 +1642,7 @@ function renderSummaryTable() {
         </div>` : '';
 
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
-          <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}</td>
+          <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}${lineupSrcBadge}${subFlash}</td>
           <td class="col-score data-num" style="color:${scoreCol}; font-size:1.1rem;">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
@@ -1649,6 +1968,32 @@ window.addEventListener('DOMContentLoaded',()=>{
       transition: opacity 0.15s;
     }
     .acr:hover { opacity: 0.75; }
+
+    /* ── Substitution flash animation ── */
+    @keyframes subPulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:0.5; transform:scale(1.3); }
+    }
+    .sub-flash-badge {
+      font-size: 0.75rem;
+      margin-left: 5px;
+      display: inline-block;
+      animation: subPulse 1.2s ease-in-out 3;
+    }
+    @keyframes flashCell {
+      0%   { background: rgba(251,191,36,0.30); }
+      100% { background: transparent; }
+    }
+    .cell-flash {
+      animation: flashCell 2s ease-out forwards;
+    }
+    @keyframes flashRow {
+      0%   { background: rgba(251,191,36,0.15); }
+      100% { background: transparent; }
+    }
+    .row-flash {
+      animation: flashRow 2.5s ease-out forwards;
+    }
     #apex-tip {
       position: fixed;
       z-index: 999999;
