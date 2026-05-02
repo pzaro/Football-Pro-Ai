@@ -1180,14 +1180,13 @@ window.runScan=async function(){
     for(let i=0;i<all.length;i++) await analyzeMatchSafe(all[i],i,all.length);
     
     saveToVault(window.scannedMatchesData);
-    rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();updateAuditLeagueFilter();
+    rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
     renderBetJournal();
-    // Push to Google Sheets (non-blocking)
     pushToSheets(window.scannedMatchesData).catch(()=>{});
-    showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες. Φόρτωση αποδόσεων…`);
+    // Συγχρονισμός Audit UI με το τρέχον scan
+    syncAuditFromScan(window.scannedMatchesData, startD, endD);
+    showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
     window.fetchAllOdds().catch(()=>{});
-    // Auto-audit σε background: αξιολογεί ιστορικά και βελτιστοποιεί παραμέτρους
-    setTimeout(() => window.runCustomAudit(true).catch(()=>{}), 2000);
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
@@ -3738,11 +3737,11 @@ window.runCustomAudit = async function(autoMode = false) {
       return d >= s && d <= e;
     });
 
-    // Σε autoMode: φίλτρο πρωταθλημάτων από το τρέχον scan
-    if(autoMode && leagueIds.length > 0) {
+    // Φίλτρο πρωταθλήματος — από dropdown (που έχει ήδη οριστεί από syncAuditFromScan)
+    if(lgFilter !== 'ALL') {
+      cands = cands.filter(x => String(x.leagueId) === String(lgFilter));
+    } else if(autoMode && leagueIds.length > 0) {
       cands = cands.filter(x => leagueIds.includes(x.leagueId));
-    } else if(lgFilter !== 'ALL') {
-      cands = cands.filter(x => String(x.leagueId) === lgFilter);
     }
 
     if(!cands.length) {
@@ -3909,11 +3908,15 @@ window.runCustomAudit = async function(autoMode = false) {
         }
       }
 
-      // Scroll στο calibration panel
+      // Άνοιγμα calibration panel αυτόματα
+      const calibBody  = document.getElementById('autoCalibBody');
+      const calibArrow = document.getElementById('autoCalibArrow');
+      if(calibBody)  calibBody.style.display = 'block';
+      if(calibArrow) calibArrow.textContent  = '▲';
       setTimeout(() => {
         const cp = document.getElementById('autoCalibContainer');
-        if(cp) { cp.scrollIntoView({ behavior:'smooth', block:'start' }); }
-      }, 400);
+        if(cp) cp.scrollIntoView({ behavior:'smooth', block:'start' });
+      }, 350);
     }
 
     showOk(`✅ Audit ολοκληρώθηκε — ${settled} αγώνες αξιολογήθηκαν.`);
@@ -3957,7 +3960,76 @@ function saveToVault(data){
   }catch(e){}
 }
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
-function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const sel=document.getElementById('auditLeague');if(!sel)return;const known=new Set(store.map(x=>x.leagueId));sel.innerHTML='<option value="ALL">Global (All)</option>';(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).forEach(l=>{if(known.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
+function updateAuditLeagueFilter() {
+  const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
+  const sel = document.getElementById('auditLeague');
+  if(!sel) return;
+  const known = new Set(store.map(x => x.leagueId));
+  sel.innerHTML = '<option value="ALL">🌐 Όλα τα Πρωταθλήματα</option>';
+  (typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA : []).forEach(l => {
+    if(known.has(l.id))
+      sel.innerHTML += `<option value="${l.id}">${l.name}</option>`;
+  });
+}
+
+/**
+ * Καλείται αμέσως μετά το scan.
+ * Συγχρονίζει το Audit UI με:
+ * - το πρωτάθλημα που μόλις σκαναρίστηκε (επιλέγει αυτόματα)
+ * - το date range του scan (από scanStart έως scanEnd)
+ * - scroll στο Audit panel
+ */
+function syncAuditFromScan(scannedData, scanStart, scanEnd) {
+  // 1. Ανανέωση dropdown με νέα πρωταθλήματα
+  updateAuditLeagueFilter();
+
+  // 2. Βρες τα μοναδικά leagueIds από το scan
+  const scannedLeagueIds = [...new Set((scannedData || []).map(d => d.leagueId).filter(Boolean))];
+
+  // 3. Επέλεξε αυτόματα: αν ένα πρωτάθλημα → επέλεξέ το, αν πολλά → ALL
+  const sel = document.getElementById('auditLeague');
+  if(sel) {
+    if(scannedLeagueIds.length === 1) {
+      sel.value = String(scannedLeagueIds[0]);
+      // Αν δεν βρεθεί η option (race condition), fallback σε ALL
+      if(!sel.value || sel.value !== String(scannedLeagueIds[0])) sel.value = 'ALL';
+    } else {
+      sel.value = 'ALL';
+    }
+  }
+
+  // 4. Συγχρόνισε date range — χρησιμοποιεί το ίδιο εύρος με το scan
+  const asEl = document.getElementById('auditStart');
+  const aeEl = document.getElementById('auditEnd');
+  if(asEl && scanStart) asEl.value = scanStart;
+  if(aeEl && scanEnd)   aeEl.value = scanEnd;
+
+  // 5. Άνοιγμα Audit panel (αν είναι collapsed)
+  const auditBody = document.getElementById('auditPanelBody');
+  if(auditBody && auditBody.style.display === 'none') {
+    auditBody.style.display = 'block';
+    const arrow = document.getElementById('auditPanelArrow');
+    if(arrow) arrow.textContent = '▲';
+  }
+
+  // 6. Flash στο audit section για να τραβήξει την προσοχή
+  const auditSec = document.getElementById('auditSection');
+  if(auditSec) {
+    auditSec.innerHTML = `<div style="background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.25);border-radius:8px;padding:14px 18px;font-size:0.82rem;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1.2rem;">📊</span>
+      <div>
+        <div style="font-weight:700;color:var(--accent-gold);margin-bottom:3px;">Audit έτοιμο για εκτέλεση</div>
+        <div style="color:var(--text-muted);">Πρωτάθλημα: <strong style="color:var(--text-main);">${
+          scannedLeagueIds.length === 1
+            ? ((typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA.find(l=>l.id===scannedLeagueIds[0])?.name : null) || scannedLeagueIds[0])
+            : 'Όλα'
+        }</strong> · Περίοδος: <strong style="color:var(--text-main);">${scanStart||'—'} → ${scanEnd||'—'}</strong></div>
+        <div style="color:var(--text-muted);font-size:0.75rem;margin-top:4px;">Πατήστε <strong>Run Audit</strong> για αξιολόγηση & βελτιστοποίηση παραμέτρων</div>
+      </div>
+      <button onclick="runCustomAudit(false)" class="btn btn-purple" style="margin-left:auto;white-space:nowrap;">▶ Run Audit</button>
+    </div>`;
+  }
+}
 
 // ================================================================
 //  LEAGUE MODS MANAGER
