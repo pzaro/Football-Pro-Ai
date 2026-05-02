@@ -576,7 +576,8 @@ async function buildIntel(tId,lg,s,isHome){
         sdGoals:r6Data.sdGoals,sdGoalsAgainst:r6Data.sdGoalsAgainst,
         sdCorners:r6Data.sdCorners,sdCards:r6Data.sdCards,
         varGoals:r6Data.varGoals,varCorners:r6Data.varCorners,varCards:r6Data.varCards,
-        goalsArr:r6Data.goalsArr,cornersArr:r6Data.cornersArr,cardsArr:r6Data.cardsArr,
+        goalsArr:r6Data.goalsArr,goalsAgainstArr:r6Data.goalsAgainstArr,
+        cornersArr:r6Data.cornersArr,cardsArr:r6Data.cardsArr,
       },
       // Season variance (empirical από fixture stats όπου διαθέσιμο, αλλιώς Poisson θεωρητικό)
       sea:{
@@ -2283,16 +2284,18 @@ window.scrollToMatch=function(id){const el=document.getElementById(id);if(!el)re
 // Scroll + αυτόματο άνοιγμα accordion
 window.scrollToMatchAndOpen=function(id){
   const el=document.getElementById(id);if(!el)return;
-  // Αν υπάρχει κουμπί "▼" στο row, το πατάμε
-  const toggler = el.querySelector?.('.row-toggle') || document.querySelector(`[data-rowtoggle="${id}"]`);
   el.scrollIntoView({behavior:'smooth',block:'center'});
   el.style.outline='2px solid var(--accent-gold)';
   setTimeout(()=>{
-    // Βρίσκουμε το TR και κάνουμε click αν δεν είναι ανοιχτό
-    if(toggler && typeof toggler.click==='function') toggler.click();
-    else { const btn=el.querySelector('button[onclick*="toggleRow"]'); if(btn) btn.click(); }
+    // Ο summary table χρησιμοποιεί toggleMatchDetails(fixId)
+    const fixId = id.replace('row-','');
+    const detailRow = document.getElementById('detail-'+fixId);
+    // Αν δεν είναι ήδη ανοιχτό, το ανοίγουμε
+    if(!detailRow || detailRow.style.display==='none' || detailRow.style.display==='') {
+      if(typeof window.toggleMatchDetails === 'function') window.toggleMatchDetails(fixId);
+    }
     setTimeout(()=>el.style.outline='',2500);
-  },400);
+  },450);
 };
 
 function renderTop3Certainty(bets) {
@@ -2977,106 +2980,139 @@ function buildAccordionHTML(x) {
 }
 
 // ── Volatility Analysis Panel ─────────────────────────────────────────────────
-// ── CI95 helper: Normal approximation ────────────────────────────────────────
-// Επιστρέφει [lower, upper] για 95% CI από δείγμα με mean/sd/n
-function ci95(mean, sd, n) {
-  if(!sd || !n || n < 2) return null;
-  // t-critical για 95% CI (approx: z=1.96 για n≥30, t-table για μικρά n)
-  const tCrit = n >= 30 ? 1.96 : n >= 20 ? 2.09 : n >= 15 ? 2.13 : n >= 10 ? 2.23 : n >= 6 ? 2.57 : 2.57;
-  const se = sd / Math.sqrt(n);
-  return [Math.max(0, mean - tCrit * se), mean + tCrit * se];
+
+function volatilityLabel(sd, baseline){
+  if(sd === null || sd === undefined || isNaN(sd)) return { lbl:'N/A', col:'var(--text-muted)' };
+  const r = sd / baseline;
+  if(r < 0.75) return { lbl:'STABLE ▼',   col:'var(--accent-teal)' };
+  if(r < 1.10) return { lbl:'NORMAL',      col:'var(--accent-blue)' };
+  if(r < 1.40) return { lbl:'VOLATILE ↑',  col:'var(--accent-gold)' };
+  return          { lbl:'HIGH VOL ⚡', col:'var(--accent-red)' };
 }
 
-function renderVolatilityPanel(hS,aS,ht,at){
-  if(!hS||!aS)return'<div style="color:var(--text-muted);font-size:0.75rem;">Δεν υπάρχουν δεδομένα διακύμανσης.</div>';
-  const hr6=hS.r6||{},ar6=aS.r6||{},hSea=hS.sea||{},aSea=aS.sea||{};
-  const BASE_GOALS=1.10,BASE_CORNERS=2.26,BASE_CARDS=2.03;
-  const fmt  = v => v !== null && v !== undefined ? Number(v).toFixed(2) : '—';
-  const fmt1 = v => v !== null && v !== undefined ? Number(v).toFixed(1) : '—';
+// 95% CI — Student t-distribution approximation
+// ΣΗΜΑΝΤΙΚΟ: παράμετρος ονομάζεται μ_ για να μην συγκρούεται με οποιοδήποτε outer scope
+function ci95(μ_, sd_, n_) {
+  if(!sd_ || !n_ || n_ < 2 || isNaN(μ_) || isNaN(sd_)) return null;
+  const t = n_ >= 30 ? 1.96 : n_ >= 20 ? 2.09 : n_ >= 15 ? 2.13 : n_ >= 10 ? 2.23 : 2.57;
+  const se = sd_ / Math.sqrt(n_);
+  return [ Math.max(0, μ_ - t * se), μ_ + t * se ];
+}
 
-  // Υπολογισμός μέσου όρου από array
-  const mean = arr => arr?.length ? arr.reduce((s,v)=>s+v,0)/arr.length : null;
+function arrMean(arr) {
+  if(!arr || !arr.length) return null;
+  return arr.reduce((s, v) => s + Number(v), 0) / arr.length;
+}
 
-  // Στατιστικό block: sparkline + αριθμοί + ΜΟ + CI95
-  const statBlock = (label, arr, sd_r6, mean_sea, sd_sea, n_sea, color, unit='', isCorners=false, seaSource='') => {
-    if(!arr?.length && mean_sea===null) return '';
-    const arrMean  = mean(arr);
-    const arrN     = arr?.length || 0;
-    const arrSD    = sd_r6;
-    const ci       = arrMean !== null && arrSD !== null ? ci95(arrMean, arrSD, arrN) : null;
-    const seaCI    = mean_sea !== null && sd_sea !== null && n_sea > 1 ? ci95(mean_sea, sd_sea, n_sea) : null;
-    const vLbl     = volatilityLabel(arrSD, isCorners ? BASE_CORNERS : label.includes('Κάρτ') ? BASE_CARDS : BASE_GOALS);
+function renderVolatilityPanel(hS, aS, ht, at) {
+  if(!hS || !aS) return '<div style="color:var(--text-muted);font-size:0.75rem;">Δεν υπάρχουν δεδομένα διακύμανσης.</div>';
 
-    const sparkHtml = arr?.length
-      ? `<div style="display:flex;align-items:flex-end;gap:2px;height:32px;margin-bottom:4px;">`
-          + arr.map((v,i)=>{const max=Math.max(...arr,1);const h=Math.max(Math.round((v/max)*32),2);return`<div title="${v}${unit}" style="flex:1;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${0.45+(i/arr.length)*0.55};min-width:5px;"></div>`;}).join('')
-          + `</div>`
-          + `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">`
-          + arr.map(v=>`<span style="font-size:0.6rem;font-family:var(--font-mono);color:${color};background:${color}18;border-radius:3px;padding:1px 5px;">${Number(v).toFixed(0)}${unit}</span>`).join('')
-          + `</div>`
-      : `<div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:6px;">Δεν υπάρχουν δεδομένα</div>`;
+  const hr6  = hS.r6  || {};
+  const ar6  = aS.r6  || {};
+  const hSea = hS.sea || {};
+  const aSea = aS.sea || {};
 
-    return `<div style="margin-bottom:14px;">
-      <div style="font-size:0.62rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">${label}</div>
-      ${sparkHtml}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:0.7rem;">
-        ${arrMean !== null ? `
-        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
-          <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Last ${arrN} · ΜΟ</div>
-          <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:${color};">${fmt1(arrMean)}${unit}</div>
-          <div style="font-size:0.55rem;font-weight:700;color:${vLbl.col};">${vLbl.lbl}</div>
-          ${ci ? `<div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px;">95% CI: [${fmt1(ci[0])}, ${fmt1(ci[1])}]${unit}</div>` : ''}
-        </div>` : '<div></div>'}
-        ${mean_sea !== null ? `
-        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
-          <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Σεζόν · ΜΟ <span style="color:${seaSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${seaSource==='empirical'?'emp':'th'}</span></div>
-          <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:var(--text-main);">${fmt1(mean_sea)}${unit}</div>
-          <div style="font-size:0.55rem;color:var(--text-muted);">σ=${fmt(sd_sea)} · n=${n_sea||'?'}</div>
-          ${seaCI ? `<div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px;">95% CI: [${fmt1(seaCI[0])}, ${fmt1(seaCI[1])}]${unit}</div>` : ''}
-        </div>` : '<div></div>'}
+  const BASE_GOALS   = 1.10;
+  const BASE_CORNERS = 2.26;
+  const BASE_CARDS   = 2.03;
+
+  const f1 = v => (v !== null && v !== undefined && !isNaN(v)) ? Number(v).toFixed(1) : '—';
+  const f2 = v => (v !== null && v !== undefined && !isNaN(v)) ? Number(v).toFixed(2) : '—';
+
+  // ── Ένα στατιστικό block: sparkline + αριθμοί + stats grid ──────
+  function statBlock(label, arr, sdR6, meanSea, sdSea, nSea, color, baseline, seaSource) {
+    const μ6  = arrMean(arr);
+    const n6  = arr ? arr.length : 0;
+    const ci6 = (μ6 !== null && sdR6 > 0) ? ci95(μ6, sdR6, n6) : null;
+    const ciS = (meanSea !== null && sdSea > 0 && nSea > 1) ? ci95(meanSea, sdSea, nSea) : null;
+    const vLbl = volatilityLabel(sdR6, baseline);
+
+    const sparkBars = n6
+      ? (() => {
+          const mx = Math.max(...arr.map(Number), 1);
+          return arr.map((v,i) => {
+            const h = Math.max(Math.round((Number(v)/mx)*32), 2);
+            return `<div title="${Number(v).toFixed(1)}" style="flex:1;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${0.4+(i/n6)*0.6};min-width:4px;"></div>`;
+          }).join('');
+        })()
+      : '';
+
+    const numBadges = n6
+      ? arr.map(v => `<span style="font-size:0.58rem;font-family:var(--font-mono);color:${color};background:${color}18;border:1px solid ${color}30;border-radius:3px;padding:1px 5px;">${Number(v).toFixed(0)}</span>`).join('')
+      : '';
+
+    return `<div style="margin-bottom:16px;">
+      <div style="font-size:0.6rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">${label}</div>
+      ${n6 ? `
+      <div style="display:flex;align-items:flex-end;gap:2px;height:32px;margin-bottom:5px;">${sparkBars}</div>
+      <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:8px;">${numBadges}</div>` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid ${color};">
+          <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Last ${n6} · ΜΟ</div>
+          <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:${μ6!==null?color:'var(--text-dim)'};">${f1(μ6)}</div>
+          <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(sdR6)} · <span style="color:${vLbl.col};font-weight:700;">${vLbl.lbl}</span></div>
+          ${ci6 ? `<div style="font-size:0.52rem;color:var(--text-dim);margin-top:3px;border-top:1px solid var(--border-light);padding-top:2px;">95% CI: [${f1(ci6[0])} — ${f1(ci6[1])}]</div>` : ''}
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid var(--border-light);">
+          <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Σεζόν · ΜΟ <span style="color:${seaSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${seaSource==='empirical'?'emp':'th'}</span></div>
+          <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:${meanSea!==null?'var(--text-main)':'var(--text-dim)'};">${f1(meanSea)}</div>
+          <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(sdSea)} · n=${nSea||'?'}</div>
+          ${ciS ? `<div style="font-size:0.52rem;color:var(--text-dim);margin-top:3px;border-top:1px solid var(--border-light);padding-top:2px;">95% CI: [${f1(ciS[0])} — ${f1(ciS[1])}]</div>` : ''}
+        </div>
       </div>
     </div>`;
-  };
+  }
 
-  const teamBlock = (label, r6, sea, isHome) => {
-    const col = isHome ? 'var(--accent-gold)' : 'var(--accent-blue)';
-    const gaSDV = volatilityLabel(r6.sdGoalsAgainst, BASE_GOALS);
+  // ── Ένα team block ────────────────────────────────────────────────
+  function teamBlock(label, r6, sea, isHome) {
+    const col  = isHome ? 'var(--accent-gold)' : 'var(--accent-blue)';
+
+    // Γκολ Δεχόμενα: το goalsAgainstArr αποθηκεύεται στο r6
+    const μGA  = arrMean(r6.goalsAgainstArr);
+    const n6   = r6.goalsAgainstArr ? r6.goalsAgainstArr.length : 0;
+    const gaCI = (μGA !== null && r6.sdGoalsAgainst > 0) ? ci95(μGA, r6.sdGoalsAgainst, n6) : null;
+    const gaV  = volatilityLabel(r6.sdGoalsAgainst, BASE_GOALS);
+
     return `<div style="flex:1;min-width:240px;">
-      <div style="font-size:0.7rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">${esc(label)}</div>
+      <div style="font-size:0.72rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">${esc(label)}</div>
 
-      ${statBlock('Γκολ Σκοραρίσματος', r6.goalsArr, r6.sdGoals, sea.avgGoals, sea.sdGoals, sea.n, col, '')}
+      ${statBlock('Γκολ Σκοραρίσματος', r6.goalsArr,   r6.sdGoals,   sea.avgGoals,   sea.sdGoals,   sea.n, col,                    BASE_GOALS,   sea.sdGoalsSource  ||'th')}
 
-      <div style="margin-bottom:14px;">
-        <div style="font-size:0.62rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Γκολ Δεχόμενα</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:0.7rem;">
-          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
-            <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Last ${r6.goalsAgainstArr?.length||0} · ΜΟ</div>
-            <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:${gaSDV.col};">${fmt1(mean(r6.goalsAgainstArr))}</div>
-            <div style="font-size:0.55rem;font-weight:700;color:${gaSDV.col};">${gaSDV.lbl}</div>
-            ${(()=>{const ci2=r6.sdGoalsAgainst&&r6.goalsAgainstArr?.length?ci95(mean(r6.goalsAgainstArr),r6.sdGoalsAgainst,r6.goalsAgainstArr.length):null;return ci2?`<div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px;">95% CI: [${fmt1(ci2[0])}, ${fmt1(ci2[1])}]</div>`:'';})()}
+      <div style="margin-bottom:16px;">
+        <div style="font-size:0.6rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Γκολ Δεχόμενα</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid rgba(244,63,94,0.5);">
+            <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Last ${n6} · ΜΟ</div>
+            <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:${gaV.col};">${f1(μGA)}</div>
+            <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(r6.sdGoalsAgainst)} · <span style="color:${gaV.col};font-weight:700;">${gaV.lbl}</span></div>
+            ${gaCI ? `<div style="font-size:0.52rem;color:var(--text-dim);margin-top:3px;border-top:1px solid var(--border-light);padding-top:2px;">95% CI: [${f1(gaCI[0])} — ${f1(gaCI[1])}]</div>` : ''}
           </div>
-          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
-            <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Σεζόν</div>
-            <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:var(--text-main);">${fmt1(sea.avgGoalsAgainst)}</div>
-            <div style="font-size:0.55rem;color:var(--text-muted);">σ=${fmt(sea.sdGoalsAgainst)}</div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid var(--border-light);">
+            <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Σεζόν · ΜΟ</div>
+            <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:var(--text-main);">${f1(sea.avgGoalsAgainst)}</div>
+            <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(sea.sdGoalsAgainst)}</div>
           </div>
         </div>
       </div>
 
-      ${statBlock('Κόρνερ', r6.cornersArr, r6.sdCorners, sea.avgCorners, sea.sdCorners, sea.n, 'var(--accent-teal)', '', true, sea.sdCornersSource||'th')}
-      ${statBlock('Κάρτες', r6.cardsArr, r6.sdCards, sea.avgCards, sea.sdCards, sea.n, 'var(--accent-gold)', '', false, sea.sdCardsSource||'th')}
+      ${statBlock('Κόρνερ',  r6.cornersArr, r6.sdCorners, sea.avgCorners, sea.sdCorners, sea.n, 'var(--accent-teal)', BASE_CORNERS, sea.sdCornersSource||'th')}
+      ${statBlock('Κάρτες',  r6.cardsArr,   r6.sdCards,   sea.avgCards,   sea.sdCards,   sea.n, 'var(--accent-gold)', BASE_CARDS,   sea.sdCardsSource  ||'th')}
     </div>`;
-  };
+  }
 
-  const hSdG=hr6.sdGoals,aSdG=ar6.sdGoals;
-  const bothVolatile=hSdG>BASE_GOALS*1.4&&aSdG>BASE_GOALS*1.4;
-  const bothStable=hSdG!==null&&aSdG!==null&&hSdG<BASE_GOALS*0.75&&aSdG<BASE_GOALS*0.75;
-  const alertBox=bothVolatile
-    ? `<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);border-radius:6px;padding:8px 12px;font-size:0.7rem;margin-bottom:14px;">⚠️ <strong>Υψηλή αμοιβαία διακύμανση</strong> — Μεγαλύτερο εύρος αβεβαιότητας.</div>`
+  // ── Alert box ─────────────────────────────────────────────────────
+  const hSdG = hr6.sdGoals, aSdG = ar6.sdGoals;
+  const bothVolatile = hSdG > BASE_GOALS*1.4 && aSdG > BASE_GOALS*1.4;
+  const bothStable   = hSdG !== null && aSdG !== null && !isNaN(hSdG) && !isNaN(aSdG)
+                    && hSdG < BASE_GOALS*0.75 && aSdG < BASE_GOALS*0.75;
+
+  const alertBox = bothVolatile
+    ? `<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);border-radius:6px;padding:8px 12px;font-size:0.72rem;margin-bottom:14px;">⚠️ <strong>Υψηλή αμοιβαία διακύμανση</strong> — Μεγαλύτερο εύρος αβεβαιότητας στην πρόβλεψη.</div>`
     : bothStable
-    ? `<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:8px 12px;font-size:0.7rem;margin-bottom:14px;">✅ <strong>Σταθερές αποδόσεις</strong> — Υψηλότερη αξιοπιστία πρόβλεψης.</div>`
+    ? `<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:8px 12px;font-size:0.72rem;margin-bottom:14px;">✅ <strong>Σταθερές αποδόσεις και των δύο ομάδων</strong> — Υψηλότερη αξιοπιστία πρόβλεψης.</div>`
     : '';
-  return alertBox + `<div style="display:flex;gap:20px;flex-wrap:wrap;">${teamBlock(ht,hr6,hSea,true)}${teamBlock(at,ar6,aSea,false)}</div>`;
+
+  return alertBox + `<div style="display:flex;gap:18px;flex-wrap:wrap;">${teamBlock(ht,hr6,hSea,true)}${teamBlock(at,ar6,aSea,false)}</div>`;
 }
 
 function renderSummaryTable() {
