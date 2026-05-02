@@ -28,7 +28,7 @@ const ACRONYM_DICT = {
   'xGA':      'xG Against — Αναμενόμενα γκολ που δέχεται η ομάδα. Μετράει αδυναμία άμυνας',
   'xG%':      'xG Contribution % — Ποσοστό συνεισφοράς παίκτη στο team xG βάσει GAP (Γκολ + 0.4 × Ασίστ)',
   'xG Adj':   'xG Adjusted — Διορθωμένο xG μετά αφαίρεση τραυματισμένων παικτών. Εμφανίζεται σε χρυσό χρώμα',
-  'Διαφορά xG':  'Διαφορά xGerence — Διαφορά xG μεταξύ home/away. Κατώφλι για σήματα 1X2 (default: 0.48)',
+  'xG Diff':  'xG Difference — Διαφορά αναμενόμενων γκολ μεταξύ γηπεδούχου/φιλοξενούμενου. Κατώφλι για σήματα 1Χ2 (default: 0.48). Όσο μεγαλύτερο, τόσο πιο ξεκάθαρο το φαβορί.',
   'GAP':      'Goal-Assist Points — Γκολ + 0.4 × Ασίστ. Composite δείκτης επιθετικής συνεισφοράς παίκτη',
   'H2H':      'Head-to-Head — Ιστορικές απευθείας αναμετρήσεις. Χρησιμοποιείται για 12% blend στο λ',
   'D-C':      'Dixon-Coles — Στατιστική διόρθωση Poisson για χαμηλά σκορ (0-0, 1-0, 0-1, 1-1) με ρ = −0.13',
@@ -488,6 +488,37 @@ async function buildIntel(tId,lg,s,isHome){
     const seaLambdaGA=seaPlayed>0?seaGA/seaPlayed:sXGA;
     const LEAGUE_CORNER_MEAN_H=5.1,LEAGUE_CORNER_MEAN_A=4.7;
 
+    // ── Season variance για κόρνερ και κάρτες ─────────────────────
+    // Το teams/statistics API δεν δίνει κόρνερ/κάρτες ανά αγώνα.
+    // Χρησιμοποιούμε τα fixture statistics arrays ως empirical proxy.
+
+    const seaCornersArr = fData.cornersArr?.length >= 3 ? fData.cornersArr : null;
+    const seaCardsArr   = fData.cardsArr?.length   >= 3 ? fData.cardsArr   : null;
+
+    // ── Season σ ΚΟΡΝΕΡ ──────────────────────────────────────────
+    // 1. Empirical αν ≥3 αγώνες με δεδομένα
+    // 2. Poisson √(μέσος ομάδας) — χρησιμοποιεί τον ΠΡΑΓΜΑΤΙΚΟ μέσο, όχι league avg
+    // 3. Fallback league mean
+    const seaAvgCorners = fData.cor > 0 ? safeNum(fData.cor, LEAGUE_CORNER_MEAN_H) : LEAGUE_CORNER_MEAN_H;
+    const seaSdCorners = seaCornersArr
+      ? stdDev(seaCornersArr)
+      : parseFloat(Math.sqrt(seaAvgCorners).toFixed(2));
+
+    // ── Season σ ΚΑΡΤΕΣ ──────────────────────────────────────────
+    // ΣΗΜΑΝΤΙΚΟ: fData.crd είναι weighted ΜΕΣΟΣ ΟΡΟΣ καρτών/αγώνα (~1.5–3.0)
+    // ΔΕΝ είναι count → Math.sqrt(fData.crd) ΔΕΝ είναι Poisson σ.
+    //
+    // Σωστή μεθοδολογία:
+    // 1. Empirical stdDev από cardsArr (ιδανικό — πραγματικές παρατηρήσεις)
+    // 2. Negative Binomial approximation: Var = μ + μ²/k (k≈2.5 για κάρτες)
+    //    Οι κάρτες είναι overdispersed (πολλά 0, μερικά 5+) → NegBin > Poisson
+    // 3. Fallback league avg
+    const CARD_OVERDISPERSION = 2.5; // k parameter NegBin για κάρτες
+    const seaAvgCards = fData.crd > 0 ? safeNum(fData.crd, 2.2) : 2.2;
+    const seaSdCards = seaCardsArr
+      ? stdDev(seaCardsArr)
+      : parseFloat(Math.sqrt(seaAvgCards + (seaAvgCards * seaAvgCards) / CARD_OVERDISPERSION).toFixed(2));
+
     return{
       fXG:Math.max(safeNum(fData.xg,sXG),0.80),fXGA:Math.max(safeNum(fData.xga,sXGA),0.80),sXG:Math.max(safeNum(sData.xg,sXG),0.80),
       formRating:getFormRating(getFormHistory(gen,tId)),
@@ -505,12 +536,17 @@ async function buildIntel(tId,lg,s,isHome){
         varGoals:r6Data.varGoals,varCorners:r6Data.varCorners,varCards:r6Data.varCards,
         goalsArr:r6Data.goalsArr,cornersArr:r6Data.cornersArr,cardsArr:r6Data.cardsArr,
       },
-      // Season variance (Poisson-theoretical from API totals)
+      // Season variance (empirical από fixture stats όπου διαθέσιμο, αλλιώς Poisson θεωρητικό)
       sea:{
         n:seaPlayed,
         avgGoals:parseFloat(seaLambdaGF.toFixed(2)),avgGoalsAgainst:parseFloat(seaLambdaGA.toFixed(2)),
         sdGoals:parseFloat(Math.sqrt(seaLambdaGF).toFixed(2)),sdGoalsAgainst:parseFloat(Math.sqrt(seaLambdaGA).toFixed(2)),
-        sdCorners:parseFloat(Math.sqrt(LEAGUE_CORNER_MEAN_H).toFixed(2)),sdCards:parseFloat(Math.sqrt(2.2).toFixed(2)),
+        avgCorners:parseFloat(seaAvgCorners.toFixed(2)),
+        sdCorners:seaSdCorners !== null ? parseFloat(seaSdCorners.toFixed(2)) : null,
+        sdCornersSource: seaCornersArr ? 'empirical' : 'poisson',
+        avgCards:parseFloat(seaAvgCards.toFixed(2)),
+        sdCards:seaSdCards !== null ? parseFloat(seaSdCards.toFixed(2)) : null,
+        sdCardsSource: seaCardsArr ? 'empirical' : 'poisson',
       }
     };
   }catch{
@@ -519,7 +555,10 @@ async function buildIntel(tId,lg,s,isHome){
       shotsCor:0.22,crd:2.0,shotsOn:4.5,shotsOff:3.5,oppShotsOn:4.0,
       uiXG:'1.35',uiXGA:'1.35',uiSXG:'1.35',uiSXGA:'1.35',history:[],totalTeamGoalsSeason:0,
       r6:{n:0,sdGoals:null,sdGoalsAgainst:null,sdCorners:null,sdCards:null,goalsArr:[],cornersArr:[],cardsArr:[]},
-      sea:{n:0,avgGoals:1.35,avgGoalsAgainst:1.35,sdGoals:1.16,sdGoalsAgainst:1.16,sdCorners:2.26,sdCards:1.48}
+      // Fallback: Poisson για goals (σ=√λ), NegBin για κάρτες (σ=√(μ+μ²/k)), Poisson για κόρνερ
+      sea:{n:0,avgGoals:1.35,avgGoalsAgainst:1.35,sdGoals:1.16,sdGoalsAgainst:1.16,
+           avgCorners:5.1,sdCorners:2.26,sdCornersSource:'poisson',
+           avgCards:2.2,sdCards:parseFloat(Math.sqrt(2.2+(2.2*2.2)/2.5).toFixed(2)),sdCardsSource:'poisson'}
     };
   }
 }
@@ -2355,13 +2394,13 @@ function renderVolatilityPanel(hS,aS,ht,at){
       <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Κόρνερ</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${cV.col};">${fmt(r6.sdCorners)}</div><div style="font-size:0.58rem;font-weight:700;color:${cV.col};">${cV.lbl}</div></div>
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Season · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCorners)}</div></div>
+        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Σεζόν · σ <span style="color:${sea.sdCornersSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};font-size:0.5rem;">${sea.sdCornersSource==='empirical'?'●emp':'●th'}</span></div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCorners)}</div><div style="font-size:0.55rem;color:var(--text-dim);">μ=${fmt(sea.avgCorners)}</div></div>
       </div>
       <div style="margin-bottom:10px;">${miniSparkline(r6.cornersArr,'var(--accent-teal)')}<div style="font-size:0.58rem;color:var(--text-muted);margin-top:2px;">Κόρνερ ανά αγώνα (last ${r6.cornersArr?.length||0})</div></div>
       <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Κάρτες</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${cdV.col};">${fmt(r6.sdCards)}</div><div style="font-size:0.58rem;font-weight:700;color:${cdV.col};">${cdV.lbl}</div></div>
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Season · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCards)}</div></div>
+        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Σεζόν · σ <span style="color:${sea.sdCardsSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};font-size:0.5rem;">${sea.sdCardsSource==='empirical'?'●emp':'●th'}</span></div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCards)}</div><div style="font-size:0.55rem;color:var(--text-dim);">μ=${fmt(sea.avgCards)}</div></div>
       </div>
       <div>${miniSparkline(r6.cardsArr,'var(--accent-gold)')}<div style="font-size:0.58rem;color:var(--text-muted);margin-top:2px;">Κάρτες ανά αγώνα (last ${r6.cardsArr?.length||0})</div></div>
     </div>`;
@@ -3139,11 +3178,16 @@ async function pushToSheets(data) {
 // ================================================================
 
 const STABILITY_THRESHOLDS = {
-  goals:   { stable: 0.82, volatile: 1.30 },  // σ / baseline 1.10
-  corners: { stable: 0.75, volatile: 1.35 },  // σ / baseline 2.26
-  cards:   { stable: 0.80, volatile: 1.40 },  // σ / baseline 1.48
+  goals:   { stable: 0.82, volatile: 1.30 },
+  corners: { stable: 0.75, volatile: 1.35 },
+  cards:   { stable: 0.80, volatile: 1.40 },
 };
-const BASE_SD = { goals: 1.10, corners: 2.26, cards: 1.48 };
+// Baseline σ για σύγκριση (league average):
+// goals:   Poisson √1.35 ≈ 1.16
+// corners: Poisson √5.1  ≈ 2.26
+// cards:   NegBin √(2.2 + 2.2²/2.5) = √(2.2 + 1.936) = √4.136 ≈ 2.03
+//          (overdispersion k=2.5 γιατί κάρτες δεν ακολουθούν Poisson)
+const BASE_SD = { goals: 1.16, corners: 2.26, cards: 2.03 };
 
 function assessStability(sd, metric) {
   if(sd === null || sd === undefined) return 'unknown';
