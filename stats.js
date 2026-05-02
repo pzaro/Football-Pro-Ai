@@ -2753,14 +2753,58 @@ function buildAccordionHTML(x) {
 
         <div class="accordion-card">
           <h4>🎯 Top Scorer Projections</h4>
-          <div style="margin-bottom:15px;">
-            <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">🏠 Home Team Scorer</div>
-            ${x.hScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="font-weight:700; font-size:0.95rem;">${esc(x.hScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.hScorerProb.goals}G)</span></span><span style="color:${x.hScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.hScorerProb.prob.toFixed(1)}%</span></div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No data available</span>`}
-          </div>
-          <div style="border-top:1px solid var(--border-light); padding-top:15px;">
-            <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">✈️ Away Team Scorer</div>
-            ${x.aScorerProb ? `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="font-weight:700; font-size:0.95rem;">${esc(x.aScorerProb.name)} <span style="color:var(--accent-gold); font-size:0.75rem;">(${x.aScorerProb.goals}G)</span></span><span style="color:${x.aScorerProb.prob >= 40 ? 'var(--accent-green)' : 'var(--text-main)'}; font-family:var(--font-mono); font-weight:800; font-size:1.1rem;">${x.aScorerProb.prob.toFixed(1)}%</span></div>` : `<span style="font-size:0.85rem; color:var(--text-dim);">No data available</span>`}
-          </div>
+          ${['home','away'].map(side => {
+            const sp    = side==='home' ? x.hScorerProb : x.aScorerProb;
+            const players = side==='home' ? (x.hPlayers||[]) : (x.aPlayers||[]);
+            const label = side==='home' ? `🏠 ${esc(x.ht)}` : `✈️ ${esc(x.at)}`;
+            const col   = side==='home' ? 'var(--accent-gold)' : 'var(--accent-blue)';
+
+            // Βρες τους top-3 διαθέσιμους (inXI ή δεν είναι injured)
+            const avail = players
+              .filter(p => p.inXI !== undefined ? (p.inXI && !p.injured) : !p.injured)
+              .filter(p => (p.goals||0) > 0)
+              .sort((a,b) => (b.goals||0) - (a.goals||0));
+
+            // Penalty taker: ο πρώτος με isPenaltyTaker ή ο με τα περισσότερα γκολ
+            const penTaker = players.find(p => p.isPenaltyTaker && !p.injured);
+
+            // Απόντες: injured ή not in XI αλλά με γκολ
+            const absent = players.filter(p => {
+              const isOut = p.injured || (p.inXI !== undefined && !p.inXI);
+              return isOut && (p.goals||0) > 0;
+            }).sort((a,b)=>(b.goals||0)-(a.goals||0)).slice(0,2);
+
+            const playerRow = (p, rank, extra='') => {
+              const pXG    = sp?.modelLambda ? sp.modelLambda * Math.min((p.goals||0) / Math.max(sp.teamTotalGoals||10, 1), 0.70) : 0;
+              const pProb  = pXG > 0 ? (1 - Math.exp(-pXG)) * 100 : 0;
+              const probCol = pProb >= 45 ? 'var(--accent-green)' : pProb >= 25 ? 'var(--accent-gold)' : 'var(--text-muted)';
+              return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-light);">
+                <span style="font-size:0.65rem;color:var(--text-dim);min-width:14px;">${rank}</span>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:0.8rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.name||'—')}</div>
+                  <div style="font-size:0.62rem;color:var(--text-muted);">${p.goals||0}G${p.assists?` · ${p.assists}A`:''}${extra}</div>
+                </div>
+                <span style="font-family:var(--font-mono);font-weight:800;font-size:0.95rem;color:${probCol};">${pProb>0?pProb.toFixed(1)+'%':'—'}</span>
+              </div>`;
+            };
+
+            return `<div style="margin-bottom:14px;${side==='away'?'border-top:1px solid var(--border-light);padding-top:14px;':''}">
+              <div style="font-size:0.7rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">${label}</div>
+              ${avail.length
+                ? avail.slice(0,3).map((p,i) => playerRow(p, ['🥇','🥈','🥉'][i]||`${i+1}.`, p.isPenaltyTaker?' 🅿':'') ).join('')
+                : `<div style="font-size:0.8rem;color:var(--text-muted);">Δεν υπάρχουν δεδομένα lineup.</div>`
+              }
+              ${penTaker && !avail.slice(0,3).find(p=>p.id===penTaker.id) ? `
+              <div style="margin-top:6px;padding:5px 8px;background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.2);border-radius:5px;font-size:0.7rem;">
+                🅿 <strong>Κόπτης πέναλτι:</strong> ${esc(penTaker.name)} (${penTaker.goals||0}G)
+              </div>` : ''}
+              ${absent.length ? `
+              <div style="margin-top:8px;padding:6px 8px;background:rgba(244,63,94,0.07);border:1px solid rgba(244,63,94,0.2);border-radius:5px;">
+                <div style="font-size:0.62rem;font-weight:700;color:var(--accent-red);margin-bottom:4px;">🏥 ΑΠΟΥΣΙΑ (${absent.map(p=>p.injured?'Τραυμ.':'Εκτός ΕΝ').join('/')})</div>
+                ${absent.map(p=>`<div style="font-size:0.72rem;color:var(--text-muted);display:flex;justify-content:space-between;"><span>${esc(p.name)} <span style="color:var(--accent-red);">(${p.goals||0}G)</span></span><span style="font-size:0.62rem;">${p.injured?'🏥 Τραυμ.':'📋 Πάγκος'}</span></div>`).join('')}
+              </div>` : ''}
+            </div>`;
+          }).join('')}
         </div>
 
         <div class="accordion-card">
@@ -2836,22 +2880,55 @@ function buildAccordionHTML(x) {
         </div>
 
         <div class="accordion-card">
-          <h4>🎯 Exact Score Duo (${acr('D-C')})</h4>
-            <div style="flex:1; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.3); border-radius:8px; padding:14px; text-align:center;">
-              <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px; font-weight:700;">🥇 Top Pick</div>
-              <div style="font-family:var(--font-mono); font-size:1.8rem; font-weight:900; color:var(--accent-blue);">${x.exact||'?-?'}</div>
-              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:6px;">${x.pp?pct(x.pp.bestScore.prob):'—'} Prob (D-C)</div>
+          <h4>🎯 Σίγουρη Πεντάδα Ακριβούς Σκορ <span style="font-size:0.6rem;color:var(--text-dim);font-weight:500;">(Poisson D-C · φθίνουσα πιθανότητα)</span></h4>
+          ${(()=>{
+            if(!x.pp?.scoreMatrix) return `<div style="color:var(--text-muted);font-size:0.8rem;">Δεν υπάρχουν δεδομένα Poisson.</div>`;
+            // Collect all scores with their probabilities from the matrix
+            const scores = [];
+            const mat = x.pp.scoreMatrix;
+            if(Array.isArray(mat)) {
+              mat.forEach((row,h) => row.forEach((prob,a) => {
+                if(prob > 0.005) scores.push({h,a,prob});
+              }));
+            } else {
+              // Fallback: generate from lambdas
+              for(let h=0;h<=5;h++) for(let a=0;a<=5;a++) {
+                const prob = poissonProb(x.hExp||1.2,h) * poissonProb(x.aExp||1.0,a);
+                if(prob > 0.005) scores.push({h,a,prob});
+              }
+            }
+            const top5 = scores.sort((a,b)=>b.prob-a.prob).slice(0,5);
+            const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+            const bgColors = [
+              'rgba(56,189,248,0.10)','rgba(168,85,247,0.08)',
+              'rgba(16,185,129,0.06)','rgba(255,255,255,0.03)','rgba(255,255,255,0.02)'
+            ];
+            const bdColors = [
+              'rgba(56,189,248,0.35)','rgba(168,85,247,0.3)',
+              'rgba(16,185,129,0.25)','var(--border-light)','var(--border-light)'
+            ];
+            const txColors = ['var(--accent-blue)','var(--accent-purple)','var(--accent-green)','var(--text-main)','var(--text-muted)'];
+            return `<div style="display:flex;flex-direction:column;gap:8px;">
+              ${top5.map((s,i)=>`
+              <div style="display:flex;align-items:center;gap:10px;background:${bgColors[i]};border:1px solid ${bdColors[i]};border-radius:8px;padding:10px 14px;">
+                <span style="font-size:1.1rem;flex-shrink:0;">${medals[i]}</span>
+                <div style="font-family:var(--font-mono);font-size:1.5rem;font-weight:900;color:${txColors[i]};min-width:52px;">${s.h}-${s.a}</div>
+                <div style="flex:1;">
+                  <div style="background:var(--border-light);border-radius:3px;height:6px;overflow:hidden;">
+                    <div style="height:6px;width:${Math.round(s.prob*100*4)}%;background:${txColors[i]};border-radius:3px;max-width:100%;"></div>
+                  </div>
+                </div>
+                <div style="text-align:right;min-width:44px;">
+                  <div style="font-family:var(--font-mono);font-weight:800;font-size:0.95rem;color:${txColors[i]};">${(s.prob*100).toFixed(1)}%</div>
+                </div>
+              </div>`).join('')}
             </div>
-            <div style="flex:1; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.3); border-radius:8px; padding:14px; text-align:center;">
-              <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px; font-weight:700;">🥈 Alt Pick</div>
-              <div style="font-family:var(--font-mono); font-size:1.8rem; font-weight:900; color:var(--accent-purple);">${x.exact2||'?-?'}</div>
-              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:6px;">${x.pp?pct(x.pp.secondScore.prob):'—'} Prob (D-C)</div>
-            </div>
-          </div>
-          <div style="background:var(--bg-dark); border-radius:6px; padding:10px; text-align:center;">
-            <span style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Combined Conf</span>
-            <span style="font-family:var(--font-mono); font-size:1.2rem; font-weight:800; color:${(x.exactConf||0)>=50?'var(--accent-green)':(x.exactConf||0)>=30?'var(--accent-gold)':'var(--text-muted)'}; margin-left:10px;">${x.exactConf||0}%</span>
-          </div>
+            <div style="margin-top:10px;text-align:center;background:var(--bg-dark);border-radius:6px;padding:8px;">
+              <span style="font-size:0.72rem;color:var(--text-muted);">Συνδυαστική πιθ. top-5:</span>
+              <span style="font-family:var(--font-mono);font-weight:800;color:var(--accent-blue);margin-left:6px;">${(top5.reduce((s,v)=>s+v.prob,0)*100).toFixed(1)}%</span>
+              <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;">· Combined Conf: <span style="color:${(x.exactConf||0)>=50?'var(--accent-green)':(x.exactConf||0)>=30?'var(--accent-gold)':'var(--text-muted)'};">${x.exactConf||0}%</span></span>
+            </div>`;
+          })()}
         </div>
 
         <div class="accordion-card" style="min-width:280px;">
@@ -2900,62 +2977,106 @@ function buildAccordionHTML(x) {
 }
 
 // ── Volatility Analysis Panel ─────────────────────────────────────────────────
-function volatilityLabel(sd,baseline){
-  if(sd===null||sd===undefined)return{lbl:'N/A',col:'var(--text-muted)'};
-  const r=sd/baseline;
-  if(r<0.75)return{lbl:'STABLE ▼',col:'var(--accent-teal)'};
-  if(r<1.10)return{lbl:'NORMAL',col:'var(--accent-blue)'};
-  if(r<1.40)return{lbl:'VOLATILE ↑',col:'var(--accent-gold)'};
-  return{lbl:'HIGH VOL ⚡',col:'var(--accent-red)'};
-}
-
-function miniSparkline(arr,color='var(--accent-blue)'){
-  if(!arr||!arr.length)return'<span style="color:var(--text-muted);font-size:0.65rem;">No data</span>';
-  const max=Math.max(...arr,1);
-  return`<div style="display:flex;align-items:flex-end;gap:2px;height:28px;">`+arr.map((v,i)=>{const h=Math.max(Math.round((v/max)*28),2);return`<div title="${v}" style="flex:1;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${0.5+(i/arr.length)*0.5};min-width:6px;"></div>`;}).join('')+`</div>`;
+// ── CI95 helper: Normal approximation ────────────────────────────────────────
+// Επιστρέφει [lower, upper] για 95% CI από δείγμα με mean/sd/n
+function ci95(mean, sd, n) {
+  if(!sd || !n || n < 2) return null;
+  // t-critical για 95% CI (approx: z=1.96 για n≥30, t-table για μικρά n)
+  const tCrit = n >= 30 ? 1.96 : n >= 20 ? 2.09 : n >= 15 ? 2.13 : n >= 10 ? 2.23 : n >= 6 ? 2.57 : 2.57;
+  const se = sd / Math.sqrt(n);
+  return [Math.max(0, mean - tCrit * se), mean + tCrit * se];
 }
 
 function renderVolatilityPanel(hS,aS,ht,at){
   if(!hS||!aS)return'<div style="color:var(--text-muted);font-size:0.75rem;">Δεν υπάρχουν δεδομένα διακύμανσης.</div>';
   const hr6=hS.r6||{},ar6=aS.r6||{},hSea=hS.sea||{},aSea=aS.sea||{};
-  const BASE_GOALS=1.10,BASE_CORNERS=2.26,BASE_CARDS=1.48;
-  const fmt=v=>v!==null&&v!==undefined?Number(v).toFixed(2):'—';
-  const teamBlock=(label,r6,sea,isHome)=>{
-    const col=isHome?'var(--accent-gold)':'var(--accent-blue)';
-    const gV=volatilityLabel(r6.sdGoals,BASE_GOALS),gaV=volatilityLabel(r6.sdGoalsAgainst,BASE_GOALS);
-    const cV=volatilityLabel(r6.sdCorners,BASE_CORNERS),cdV=volatilityLabel(r6.sdCards,BASE_CARDS);
-    return`<div style="flex:1;min-width:220px;">
-      <div style="font-size:0.68rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">${esc(label)}</div>
-      <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Γκολ Σκοραρίσματος</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${gV.col};">${fmt(r6.sdGoals)}</div><div style="font-size:0.58rem;font-weight:700;color:${gV.col};">${gV.lbl}</div></div>
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Season · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdGoals)}</div><div style="font-size:0.58rem;color:var(--text-muted);">n=${sea.n||'?'}</div></div>
+  const BASE_GOALS=1.10,BASE_CORNERS=2.26,BASE_CARDS=2.03;
+  const fmt  = v => v !== null && v !== undefined ? Number(v).toFixed(2) : '—';
+  const fmt1 = v => v !== null && v !== undefined ? Number(v).toFixed(1) : '—';
+
+  // Υπολογισμός μέσου όρου από array
+  const mean = arr => arr?.length ? arr.reduce((s,v)=>s+v,0)/arr.length : null;
+
+  // Στατιστικό block: sparkline + αριθμοί + ΜΟ + CI95
+  const statBlock = (label, arr, sd_r6, mean_sea, sd_sea, n_sea, color, unit='', isCorners=false, seaSource='') => {
+    if(!arr?.length && mean_sea===null) return '';
+    const arrMean  = mean(arr);
+    const arrN     = arr?.length || 0;
+    const arrSD    = sd_r6;
+    const ci       = arrMean !== null && arrSD !== null ? ci95(arrMean, arrSD, arrN) : null;
+    const seaCI    = mean_sea !== null && sd_sea !== null && n_sea > 1 ? ci95(mean_sea, sd_sea, n_sea) : null;
+    const vLbl     = volatilityLabel(arrSD, isCorners ? BASE_CORNERS : label.includes('Κάρτ') ? BASE_CARDS : BASE_GOALS);
+
+    const sparkHtml = arr?.length
+      ? `<div style="display:flex;align-items:flex-end;gap:2px;height:32px;margin-bottom:4px;">`
+          + arr.map((v,i)=>{const max=Math.max(...arr,1);const h=Math.max(Math.round((v/max)*32),2);return`<div title="${v}${unit}" style="flex:1;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${0.45+(i/arr.length)*0.55};min-width:5px;"></div>`;}).join('')
+          + `</div>`
+          + `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">`
+          + arr.map(v=>`<span style="font-size:0.6rem;font-family:var(--font-mono);color:${color};background:${color}18;border-radius:3px;padding:1px 5px;">${Number(v).toFixed(0)}${unit}</span>`).join('')
+          + `</div>`
+      : `<div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:6px;">Δεν υπάρχουν δεδομένα</div>`;
+
+    return `<div style="margin-bottom:14px;">
+      <div style="font-size:0.62rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">${label}</div>
+      ${sparkHtml}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:0.7rem;">
+        ${arrMean !== null ? `
+        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
+          <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Last ${arrN} · ΜΟ</div>
+          <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:${color};">${fmt1(arrMean)}${unit}</div>
+          <div style="font-size:0.55rem;font-weight:700;color:${vLbl.col};">${vLbl.lbl}</div>
+          ${ci ? `<div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px;">95% CI: [${fmt1(ci[0])}, ${fmt1(ci[1])}]${unit}</div>` : ''}
+        </div>` : '<div></div>'}
+        ${mean_sea !== null ? `
+        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
+          <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Σεζόν · ΜΟ <span style="color:${seaSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${seaSource==='empirical'?'emp':'th'}</span></div>
+          <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:var(--text-main);">${fmt1(mean_sea)}${unit}</div>
+          <div style="font-size:0.55rem;color:var(--text-muted);">σ=${fmt(sd_sea)} · n=${n_sea||'?'}</div>
+          ${seaCI ? `<div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px;">95% CI: [${fmt1(seaCI[0])}, ${fmt1(seaCI[1])}]${unit}</div>` : ''}
+        </div>` : '<div></div>'}
       </div>
-      <div style="margin-bottom:10px;">${miniSparkline(r6.goalsArr,col)}<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;"><span style="font-size:0.58rem;color:var(--text-muted);">Γκολ ανά αγώνα (last ${r6.goalsArr?.length||0})</span><span style="font-size:0.62rem;font-family:var(--font-mono);color:${col};">${r6.goalsArr?.length?r6.goalsArr.join(' · '):''}</span></div></div>
-      <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Γκολ Δεχόμενα</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${gaV.col};">${fmt(r6.sdGoalsAgainst)}</div><div style="font-size:0.58rem;font-weight:700;color:${gaV.col};">${gaV.lbl}</div></div>
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Season · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdGoalsAgainst)}</div></div>
-      </div>
-      <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Κόρνερ</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${cV.col};">${fmt(r6.sdCorners)}</div><div style="font-size:0.58rem;font-weight:700;color:${cV.col};">${cV.lbl}</div></div>
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Σεζόν · σ <span style="color:${sea.sdCornersSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};font-size:0.5rem;">${sea.sdCornersSource==='empirical'?'●emp':'●th'}</span></div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCorners)}</div><div style="font-size:0.55rem;color:var(--text-dim);">μ=${fmt(sea.avgCorners)}</div></div>
-      </div>
-      <div style="margin-bottom:10px;">${miniSparkline(r6.cornersArr,'var(--accent-teal)')}<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;"><span style="font-size:0.58rem;color:var(--text-muted);">Κόρνερ ανά αγώνα (last ${r6.cornersArr?.length||0})</span><span style="font-size:0.62rem;font-family:var(--font-mono);color:var(--accent-teal);">${r6.cornersArr?.length?r6.cornersArr.map(v=>Number(v).toFixed(0)).join(' · '):''}</span></div></div>
-      <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Κάρτες</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${cdV.col};">${fmt(r6.sdCards)}</div><div style="font-size:0.58rem;font-weight:700;color:${cdV.col};">${cdV.lbl}</div></div>
-        <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Σεζόν · σ <span style="color:${sea.sdCardsSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};font-size:0.5rem;">${sea.sdCardsSource==='empirical'?'●emp':'●th'}</span></div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCards)}</div><div style="font-size:0.55rem;color:var(--text-dim);">μ=${fmt(sea.avgCards)}</div></div>
-      </div>
-      <div>${miniSparkline(r6.cardsArr,'var(--accent-gold)')}<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;"><span style="font-size:0.58rem;color:var(--text-muted);">Κάρτες ανά αγώνα (last ${r6.cardsArr?.length||0})</span><span style="font-size:0.62rem;font-family:var(--font-mono);color:var(--accent-gold);">${r6.cardsArr?.length?r6.cardsArr.map(v=>Number(v).toFixed(0)).join(' · '):''}</span></div></div>
     </div>`;
   };
+
+  const teamBlock = (label, r6, sea, isHome) => {
+    const col = isHome ? 'var(--accent-gold)' : 'var(--accent-blue)';
+    const gaSDV = volatilityLabel(r6.sdGoalsAgainst, BASE_GOALS);
+    return `<div style="flex:1;min-width:240px;">
+      <div style="font-size:0.7rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">${esc(label)}</div>
+
+      ${statBlock('Γκολ Σκοραρίσματος', r6.goalsArr, r6.sdGoals, sea.avgGoals, sea.sdGoals, sea.n, col, '')}
+
+      <div style="margin-bottom:14px;">
+        <div style="font-size:0.62rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Γκολ Δεχόμενα</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:0.7rem;">
+          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
+            <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Last ${r6.goalsAgainstArr?.length||0} · ΜΟ</div>
+            <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:${gaSDV.col};">${fmt1(mean(r6.goalsAgainstArr))}</div>
+            <div style="font-size:0.55rem;font-weight:700;color:${gaSDV.col};">${gaSDV.lbl}</div>
+            ${(()=>{const ci2=r6.sdGoalsAgainst&&r6.goalsAgainstArr?.length?ci95(mean(r6.goalsAgainstArr),r6.sdGoalsAgainst,r6.goalsAgainstArr.length):null;return ci2?`<div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px;">95% CI: [${fmt1(ci2[0])}, ${fmt1(ci2[1])}]</div>`:'';})()}
+          </div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;">
+            <div style="font-size:0.55rem;color:var(--text-muted);margin-bottom:1px;">Σεζόν</div>
+            <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:var(--text-main);">${fmt1(sea.avgGoalsAgainst)}</div>
+            <div style="font-size:0.55rem;color:var(--text-muted);">σ=${fmt(sea.sdGoalsAgainst)}</div>
+          </div>
+        </div>
+      </div>
+
+      ${statBlock('Κόρνερ', r6.cornersArr, r6.sdCorners, sea.avgCorners, sea.sdCorners, sea.n, 'var(--accent-teal)', '', true, sea.sdCornersSource||'th')}
+      ${statBlock('Κάρτες', r6.cardsArr, r6.sdCards, sea.avgCards, sea.sdCards, sea.n, 'var(--accent-gold)', '', false, sea.sdCardsSource||'th')}
+    </div>`;
+  };
+
   const hSdG=hr6.sdGoals,aSdG=ar6.sdGoals;
   const bothVolatile=hSdG>BASE_GOALS*1.4&&aSdG>BASE_GOALS*1.4;
   const bothStable=hSdG!==null&&aSdG!==null&&hSdG<BASE_GOALS*0.75&&aSdG<BASE_GOALS*0.75;
-  const alertBox=bothVolatile?`<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);border-radius:6px;padding:8px 12px;font-size:0.7rem;margin-bottom:14px;">⚠️ <strong>Υψηλή αμοιβαία διακύμανση</strong> — Μεγαλύτερο εύρος αβεβαιότητας.</div>`:bothStable?`<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:8px 12px;font-size:0.7rem;margin-bottom:14px;">✅ <strong>Σταθερές αποδόσεις</strong> — Υψηλότερη αξιοπιστία πρόβλεψης.</div>`:'';
-  return alertBox+`<div style="display:flex;gap:20px;flex-wrap:wrap;">${teamBlock(ht,hr6,hSea,true)}${teamBlock(at,ar6,aSea,false)}</div>`;
+  const alertBox=bothVolatile
+    ? `<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);border-radius:6px;padding:8px 12px;font-size:0.7rem;margin-bottom:14px;">⚠️ <strong>Υψηλή αμοιβαία διακύμανση</strong> — Μεγαλύτερο εύρος αβεβαιότητας.</div>`
+    : bothStable
+    ? `<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:8px 12px;font-size:0.7rem;margin-bottom:14px;">✅ <strong>Σταθερές αποδόσεις</strong> — Υψηλότερη αξιοπιστία πρόβλεψης.</div>`
+    : '';
+  return alertBox + `<div style="display:flex;gap:20px;flex-wrap:wrap;">${teamBlock(ht,hr6,hSea,true)}${teamBlock(at,ar6,aSea,false)}</div>`;
 }
 
 function renderSummaryTable() {
