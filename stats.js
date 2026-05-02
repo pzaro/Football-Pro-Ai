@@ -1764,8 +1764,9 @@ function parseOddsResponse(response) {
 
   bk.bets?.forEach(bet => {
     const name = bet.name?.toLowerCase() || '';
-    // 1X2
-    if(name.includes('match winner') || name.includes('match result')) {
+
+    // Αυστηρός έλεγχος (Exact Match) για να αποφύγουμε αγορές ημιχρόνου
+    if(name === 'match winner') {
       bet.values?.forEach(v => {
         const val = v.value?.toLowerCase();
         const odd = parseFloat(v.odd);
@@ -1775,20 +1776,22 @@ function parseOddsResponse(response) {
         else if(val === 'away') out.away = odd;
       });
     }
-    // Over/Under Goals
-    if(name.includes('goals over/under') || name.includes('over/under')) {
+
+    // Αυστηρός έλεγχος (Exact Match) για το συνολικό Over/Under του αγώνα
+    if(name === 'goals over/under') {
       bet.values?.forEach(v => {
         const val  = v.value?.toLowerCase() || '';
         const odd  = parseFloat(v.odd);
         if(isNaN(odd)) return;
-        if(val.includes('over 2.5'))       out.over25  = odd;
-        else if(val.includes('under 2.5')) out.under25 = odd;
-        else if(val.includes('over 3.5'))  out.over35  = odd;
-        else if(val.includes('under 3.5')) out.under35 = odd;
+        if(val === 'over 2.5')       out.over25  = odd;
+        else if(val === 'under 2.5') out.under25 = odd;
+        else if(val === 'over 3.5')  out.over35  = odd;
+        else if(val === 'under 3.5') out.under35 = odd;
       });
     }
-    // BTTS
-    if(name.includes('both teams to score') || name.includes('btts')) {
+
+    // Αυστηρός έλεγχος (Exact Match) για το BTTS
+    if(name === 'both teams score') {
       bet.values?.forEach(v => {
         const val = v.value?.toLowerCase();
         const odd = parseFloat(v.odd);
