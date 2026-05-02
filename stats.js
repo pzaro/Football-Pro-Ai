@@ -88,6 +88,23 @@ let liveMatchesState     = {};
 let liveAlerts           = [];
 const LIVE_POLL_MS       = 60000;
 const LS_LIVE_ALERTS     = 'omega_live_alerts_v5.0';
+const LS_MY_LEAGUES      = 'omega_my_leagues_v5.0';
+
+// ── Dynamic My Leagues ────────────────────────────────────────────────────────
+// Επιστρέφει τα επιλεγμένα πρωταθλήματα του χρήστη.
+// Προτεραιότητα: localStorage > hardcoded default από leagues.js
+function getUserMyLeagues() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LS_MY_LEAGUES));
+    if(Array.isArray(saved) && saved.length > 0) return saved.map(Number);
+  } catch {}
+  return typeof MY_LEAGUES_IDS !== 'undefined' ? [...MY_LEAGUES_IDS] : [78,88,218,119,103,144,253,262,140,135,197];
+}
+function saveUserMyLeagues(ids) {
+  try { localStorage.setItem(LS_MY_LEAGUES, JSON.stringify(ids.map(Number))); } catch {}
+}
+// Override runtime: MY_LEAGUES_IDS → χρησιμοποιείται παντού για φιλτράρισμα
+function getActiveMyLeagues() { return getUserMyLeagues(); }
 
 // 🎯 CALIBRATED ENGINE DEFAULTS
 // HT_LAMBDA: global fallback (~43.5% των συνολικών γκολ στο 1ο ημίχρονο)
@@ -1106,7 +1123,7 @@ window.runScan=async function(){
     const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
       setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
-      const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return typeof MY_LEAGUES_IDS!=='undefined'&&MY_LEAGUES_IDS.includes(m.league.id);return m.league.id===parseInt(selLg);});
+      const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
       all.push(...dm);if(all.length>350)break;
     }
     if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
@@ -1364,7 +1381,7 @@ async function _liveTrackerTick(){
     const res=await apiReq('fixtures?live=all');
     const all=(res.response||[]).filter(m=>{
       if(liveTrackerLeagues==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);
-      if(liveTrackerLeagues==='MY_LEAGUES')return typeof MY_LEAGUES_IDS!=='undefined'&&MY_LEAGUES_IDS.includes(m.league.id);
+      if(liveTrackerLeagues==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);
       return m.league.id===parseInt(liveTrackerLeagues);
     });
     if(countEl)countEl.textContent=all.length;
@@ -2974,6 +2991,171 @@ function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(L
 // ================================================================
 //  LEAGUE MODS MANAGER
 // ================================================================
+// ================================================================
+//  MY LEAGUES MANAGER — Dynamic league selection with localStorage
+// ================================================================
+
+// Ομαδοποίηση πρωταθλημάτων ανά περιοχή για εύκολη επιλογή
+const LEAGUE_GROUPS = [
+  { label: '🏆 UEFA', ids: [2, 3, 848] },
+  { label: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 Αγγλία', ids: [39, 40, 41] },
+  { label: '🇩🇪 Γερμανία', ids: [78, 79] },
+  { label: '🇪🇸 Ισπανία', ids: [140, 141] },
+  { label: '🇮🇹 Ιταλία', ids: [135, 136] },
+  { label: '🇫🇷 Γαλλία', ids: [61, 62] },
+  { label: '🇳🇱 Ολλανδία', ids: [88] },
+  { label: '🇧🇪 Βέλγιο', ids: [144] },
+  { label: '🇵🇹 Πορτογαλία', ids: [94] },
+  { label: '🇦🇹 Αυστρία', ids: [218] },
+  { label: '🇨🇭 Ελβετία', ids: [207] },
+  { label: '🏴󠁧󠁢󠁳󠁣󠁴󠁿 Σκωτία', ids: [179] },
+  { label: '🇹🇷 Τουρκία', ids: [203] },
+  { label: '🇬🇷 Ελλάδα', ids: [197] },
+  { label: '🇩🇰 Δανία', ids: [119] },
+  { label: '🇸🇪 Σουηδία', ids: [113] },
+  { label: '🇳🇴 Νορβηγία', ids: [103] },
+  { label: '🇫🇮 Φινλανδία', ids: [244] },
+  { label: '🇮🇸 Ισλανδία', ids: [164] },
+  { label: '🇮🇪 Ιρλανδία', ids: [357, 395] },
+  { label: '🇵🇱 Πολωνία', ids: [106] },
+  { label: '🇨🇿 Τσεχία', ids: [345] },
+  { label: '🇷🇴 Ρουμανία', ids: [283] },
+  { label: '🇭🇺 Ουγγαρία', ids: [271] },
+  { label: '🇺🇸 USA', ids: [253] },
+  { label: '🇲🇽 Μεξικό', ids: [262] },
+  { label: '🇧🇷 Βραζιλία', ids: [71] },
+  { label: '🇦🇷 Αργεντινή', ids: [128] },
+  { label: '🌎 Λατ. Αμερική', ids: [239, 265, 280, 268] },
+];
+
+window.renderMyLeaguesPanel = function() {
+  const container = document.getElementById('myLeaguesContainer');
+  if(!container || typeof LEAGUES_DATA === 'undefined') return;
+
+  const active = getUserMyLeagues();
+  const activeSet = new Set(active);
+  const leagueMap = new Map(LEAGUES_DATA.map(l => [l.id, l]));
+
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">`;
+
+  LEAGUE_GROUPS.forEach(group => {
+    // Only show groups that have at least one known league
+    const validIds = group.ids.filter(id => leagueMap.has(id));
+    if(!validIds.length) return;
+
+    const allChecked  = validIds.every(id => activeSet.has(id));
+    const someChecked = validIds.some(id => activeSet.has(id));
+
+    html += `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:10px 12px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">
+        <input type="checkbox" id="grp_${group.ids[0]}"
+          ${allChecked ? 'checked' : someChecked ? 'indeterminate_marker' : ''}
+          onchange="toggleLeagueGroup([${validIds.join(',')}], this.checked)"
+          style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent-blue);">
+        <label for="grp_${group.ids[0]}" style="font-size:0.78rem;font-weight:800;color:var(--text-main);cursor:pointer;">${esc(group.label)}</label>
+      </div>
+      ${validIds.map(id => {
+        const l = leagueMap.get(id);
+        if(!l) return '';
+        const checked = activeSet.has(id);
+        const isTrap  = typeof TRAP_LEAGUES  !== 'undefined' && TRAP_LEAGUES.has(id);
+        const isGold  = typeof GOLD_LEAGUES  !== 'undefined' && GOLD_LEAGUES.has(id);
+        const isTight = typeof TIGHT_LEAGUES !== 'undefined' && TIGHT_LEAGUES.has(id);
+        const typeBadge = isGold  ? `<span style="font-size:0.55rem;color:var(--accent-gold);font-weight:800;margin-left:4px;">GOLD</span>`
+                        : isTrap  ? `<span style="font-size:0.55rem;color:var(--accent-red);font-weight:800;margin-left:4px;">TRAP</span>`
+                        : isTight ? `<span style="font-size:0.55rem;color:var(--accent-teal);font-weight:800;margin-left:4px;">TIGHT</span>` : '';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;">
+          <input type="checkbox" id="lg_${id}" ${checked?'checked':''}
+            onchange="toggleLeague(${id}, this.checked)"
+            style="width:14px;height:14px;cursor:pointer;accent-color:var(--accent-blue);">
+          <label for="lg_${id}" style="font-size:0.75rem;color:var(--text-main);cursor:pointer;flex:1;display:flex;align-items:center;">
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.name)}</span>
+            ${typeBadge}
+          </label>
+        </div>`;
+      }).join('')}
+    </div>`;
+  });
+
+  html += `</div>`;
+  container.innerHTML = html;
+
+  // Set indeterminate state for partial group selections
+  LEAGUE_GROUPS.forEach(group => {
+    const validIds = group.ids.filter(id => leagueMap.has(id));
+    if(!validIds.length) return;
+    const el = document.getElementById(`grp_${group.ids[0]}`);
+    if(!el) return;
+    const allC = validIds.every(id => activeSet.has(id));
+    const someC = validIds.some(id => activeSet.has(id));
+    el.indeterminate = !allC && someC;
+  });
+
+  updateMyLeaguesBadge();
+};
+
+window.toggleLeague = function(id, checked) {
+  const current = getUserMyLeagues();
+  const newList = checked
+    ? [...new Set([...current, id])]
+    : current.filter(x => x !== id);
+  saveUserMyLeagues(newList);
+  updateMyLeaguesBadge();
+  updateLeagueFilterOption();
+};
+
+window.toggleLeagueGroup = function(ids, checked) {
+  const current = getUserMyLeagues();
+  let newList = [...current];
+  if(checked) {
+    ids.forEach(id => { if(!newList.includes(id)) newList.push(id); });
+  } else {
+    newList = newList.filter(id => !ids.includes(id));
+  }
+  saveUserMyLeagues(newList);
+  // Update individual checkboxes
+  ids.forEach(id => { const el = document.getElementById(`lg_${id}`); if(el) el.checked = checked; });
+  updateMyLeaguesBadge();
+  updateLeagueFilterOption();
+};
+
+function updateMyLeaguesBadge() {
+  const count = getUserMyLeagues().length;
+  const badge = document.getElementById('myLeaguesBadge');
+  if(badge) badge.textContent = `${count} πρωταθλήματα`;
+}
+
+function updateLeagueFilterOption() {
+  // Ενημερώνει την πρώτη option του leagueFilter με τον τρέχοντα αριθμό
+  const count = getUserMyLeagues().length;
+  const opt = document.querySelector('#leagueFilter option[value="MY_LEAGUES"]');
+  if(opt) opt.textContent = `⭐ My Leagues (${count})`;
+  const liveOpt = document.querySelector('#liveTrackerLeague option[value="MY_LEAGUES"]');
+  if(liveOpt) liveOpt.textContent = `⭐ My Leagues (${count})`;
+}
+
+window.resetMyLeagues = function() {
+  localStorage.removeItem(LS_MY_LEAGUES);
+  window.renderMyLeaguesPanel();
+  updateLeagueFilterOption();
+  showOk('My Leagues επαναφέρθηκαν στις default τιμές.');
+};
+
+window.selectAllLeagues = function() {
+  const allIds = (typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA : []).map(l => l.id);
+  saveUserMyLeagues(allIds);
+  window.renderMyLeaguesPanel();
+  updateLeagueFilterOption();
+  showOk(`Όλα τα πρωταθλήματα επιλέχθηκαν (${allIds.length}).`);
+};
+
+window.clearAllLeagues = function() {
+  saveUserMyLeagues([]);
+  window.renderMyLeaguesPanel();
+  updateLeagueFilterOption();
+  showOk('Όλες οι επιλογές αφαιρέθηκαν.');
+};
+
 window.renderLeagueMods = function() {
   const container = document.getElementById('leagueModsContainer');
   if(!container || typeof LEAGUES_DATA === 'undefined') return;
@@ -3804,6 +3986,9 @@ window.addEventListener('DOMContentLoaded',()=>{
       loadSettings();loadBankroll();initCredits();updateAuditLeagueFilter();
       renderLeagueMods();
       window.loadBetJournal();
+      // My Leagues panel
+      window.renderMyLeaguesPanel();
+      updateLeagueFilterOption();
       // Bet Journal + Sheets config section
       const advSec=document.getElementById('advisorSection');
       if(advSec){
