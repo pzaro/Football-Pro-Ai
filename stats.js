@@ -3804,34 +3804,72 @@ window.runCustomAudit=async function(){
     html+=`</tbody></table></div></div>`;
     document.getElementById('auditSection').innerHTML=html;
 
-    // ── Auto-Calibration: feed audit records into calibration engine ──
-    const calibRecs = filteredStore.map(p => ({
-      leagueId:  p.leagueId,
-      predicted: p.omegaPick || '',
-      actual:    p.actual || null,
-      isBomb:    !!(p.omegaPick && (p.omegaPick.includes('💣') || parseFloat(1/(p.tXG||3)) >= 3.8)),
-      correct:   p.actual ? (()=>{
-        const pick = p.omegaPick||'';
-        const ah = parseInt(p.actual.split('-')[0]), aa = parseInt(p.actual.split('-')[1]);
-        const aTot = ah+aa;
-        if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ ΓΗΠΕΔ')) return ah>aa;
-        if(pick.includes('ΔΙΠΛΟ')||pick.includes('ΝΙΚΗ ΦΙΛΟΞ'))  return aa>ah;
-        if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) return aTot>2.5;
-        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) return aTot>3.5;
-        if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')) return aTot<2.5;
-        if(pick.includes('ΓΚΟΛ/ΓΚΟΛ'))    return ah>0&&aa>0;
-        if(pick.includes('ΚΟΡΝΕΡ'))        return true; // no corner actual data
-        return false;
-      })() : null,
-    }));
+    // ── Auto-Calibration: τροφοδότηση engine με πραγματικά αποτελέσματα ──
+    // Χρησιμοποιούμε το `rows` array που έχει ΗΔΗ το πραγματικό σκορ από API
+    const calibRecs = rows.map(({ p, ah, aa, aTot, aOut, aBtts, isHit1X2 }) => {
+      const pick = p.omegaPick || '';
+      const actualStr = `${ah}-${aa}`;
+
+      // Υπολογισμός correct ανά market με τα πραγματικά δεδομένα
+      let correct = false;
+      if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ ΓΗΠΕΔ'))  correct = ah > aa;
+      else if(pick.includes('ΔΙΠΛΟ')||pick.includes('ΝΙΚΗ ΦΙΛΟΞ')) correct = aa > ah;
+      else if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) correct = aTot > 3.5;
+      else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) correct = aTot > 2.5;
+      else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')) correct = aTot < 2.5;
+      else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) correct = aBtts;
+      else if(pick.includes('ΚΟΡΝΕΡ'))        correct = isHit1X2; // proxy
+      else if(pick.includes('AH')) correct = isHit1X2;
+
+      return {
+        leagueId:  p.leagueId,
+        predicted: pick,
+        actual:    actualStr,
+        tXG:       p.tXG   || 2.5,
+        xgDiff:    p.xgDiff || 0,
+        isBomb:    !!(p.isBomb),
+        correct,
+      };
+    });
+
     window._lastAuditCalibRecs = calibRecs;
-    window.runAutoCalibration(calibRecs, false); // preview mode (no auto-apply)
+    window.runAutoCalibration(calibRecs);
 
     showOk('Audit & AI Analysis ολοκληρώθηκε.');
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:0.65rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:5px; margin-bottom:25px;">${bars}</div>`;}
-function saveToVault(data){try{let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");const map=new Map(store.map(x=>[String(x.fixtureId),x]));data.forEach(d=>{if(d.omegaPick==="NO BET")return;map.set(String(d.fixId),{fixtureId:d.fixId,date:d.m.fixture.date,leagueId:d.leagueId,league:d.lg,homeTeam:d.ht,awayTeam:d.at,outPick:d.outPick,exactScorePred:d.exact,exactScorePred2:d.exact2,predOver25:d.omegaPick.includes('OVER 2')||d.omegaPick.includes('OVER 3'),predOver35:d.omegaPick.includes('OVER 3'),predUnder25:d.omegaPick.includes('UNDER 2'),predBTTS:d.omegaPick.includes('GOAL'),omegaPick:d.omegaPick,tXG:d.tXG});});localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));}catch(e){}}
+function saveToVault(data){
+  try{
+    let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");
+    const map=new Map(store.map(x=>[String(x.fixtureId),x]));
+    data.forEach(d=>{
+      if(d.omegaPick==="NO BET"||d.omegaPick==="ΧΩΡΙΣ ΣΥΣΤΑΣΗ")return;
+      map.set(String(d.fixId),{
+        fixtureId:d.fixId,
+        date:d.m.fixture.date,
+        leagueId:d.leagueId,
+        league:d.lg,
+        homeTeam:d.ht,
+        awayTeam:d.at,
+        outPick:d.outPick,
+        exactScorePred:d.exact,
+        exactScorePred2:d.exact2,
+        predOver25:d.omegaPick.includes('ΠΑΝΩ ΑΠΟ 2')||d.omegaPick.includes('ΠΑΝΩ ΑΠΟ 3'),
+        predOver35:d.omegaPick.includes('ΠΑΝΩ ΑΠΟ 3'),
+        predUnder25:d.omegaPick.includes('ΚΑΤΩ ΑΠΟ 2'),
+        predBTTS:d.omegaPick.includes('ΓΚΟΛ/ΓΚΟΛ')||d.omegaPick.includes('GG'),
+        predCorner:d.omegaPick.includes('ΚΟΡΝΕΡ'),
+        omegaPick:d.omegaPick,
+        tXG:d.tXG,
+        xgDiff:d.xgDiff||0,           // ← νέο: για calibration
+        strength:d.strength||0,        // ← νέο: confidence
+        isBomb:!!(d.isBomb),           // ← νέο: bomb flag
+      });
+    });
+    localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));
+  }catch(e){}
+}
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter(){const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');const sel=document.getElementById('auditLeague');if(!sel)return;const known=new Set(store.map(x=>x.leagueId));sel.innerHTML='<option value="ALL">Global (All)</option>';(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).forEach(l=>{if(known.has(l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
 
@@ -4739,10 +4777,13 @@ function backtestParam(records, paramName, paramValue) {
         wouldHit    = wouldSignal && (ah > 0 && aa > 0);
       }
     } else if(paramName === 'mult') {
-      // mult affects all picks — use tXG as proxy
-      const adjustedXG = (r.tXG || 2.5) * (paramValue / (r.usedMult || 1.0));
-      if(pick.includes('ΚΟΡΝΕΡ') || pick.includes('💣') || r.isBomb) {
-        wouldSignal = adjustedXG >= 2.2; // generic threshold
+      // mult scales xG → simulate: adjusted tXG = tXG * (newMult / defaultMult)
+      // We compare against the stored tXG which was computed with some mult
+      // Without knowing the original mult, we use the ratio relative to 1.0 baseline
+      const curLPMult = getLeagueParams(records[0]?.leagueId || 0).mult || 1.0;
+      const adjustedXG = (r.tXG || 2.5) * (paramValue / curLPMult);
+      if(pick.includes('ΚΟΡΝΕΡ') || r.isBomb) {
+        wouldSignal = adjustedXG >= 2.2;
         wouldHit    = wouldSignal && r.correct;
       }
     }
