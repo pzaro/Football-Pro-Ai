@@ -4991,15 +4991,18 @@ function gridSearchLeague(records, leagueId) {
   const stats    = {};
   const logLines = [];
 
-  // Χρησιμοποιούμε ΟΛΟΥΣ τους αγώνες για κάθε market
-  // Το backtestParam κρίνει ποιοι θα λάμβαναν σήμα με κάθε threshold
+  // 1. Κρατάμε ΜΟΝΟ τα ματς που έχουν τελικό αποτέλεσμα (settled)
+  const settledRecords = records.filter(r => r.actual);
+
+  // 2. Δοκιμάζουμε thresholds σε ΟΛΑ τα settled ματς — ακόμα και αυτά
+  // που ήταν "ΧΩΡΙΣ ΣΥΣΤΑΣΗ". Αν αλλάξει το όριο, μπορεί να πάρουν σήμα.
   const byMarket = {
-    outcomes: records,  // xgDiff → 1X2
-    over25:   records,  // tXG → Over 2.5
-    over35:   records,  // tXG → Over 3.5
-    btts:     records,  // bttsProxy → BTTS
-    corners:  records,  // mult/tXG → corners
-    bombs:    records,  // mult/tXG → bombs
+    outcomes: settledRecords,
+    over25:   settledRecords,
+    over35:   settledRecords,
+    btts:     settledRecords,
+    corners:  settledRecords,
+    bombs:    settledRecords,
   };
 
   const marketToParam = {
@@ -5014,7 +5017,7 @@ function gridSearchLeague(records, leagueId) {
   const optimized = {};
 
   Object.entries(CALIB_TARGETS).forEach(([market, target]) => {
-    const recs = byMarket[market].filter(r => r.actual); // μόνο settled
+    const recs = byMarket[market];
     if(!recs || recs.length < CALIB_MIN_N) return;
 
     const param  = marketToParam[market];
@@ -5042,17 +5045,15 @@ function gridSearchLeague(records, leagueId) {
       if(acc >= target && !reachedTarget) {
         bestVal = val; bestAcc = acc; bestDist = dist; reachedTarget = true;
       } else if(acc >= target && reachedTarget && dist < bestDist) {
-        // Από τις τιμές που πετυχαίνουν τον στόχο, επιλέγουμε
-        // εκείνη που θυσιάζει το λιγότερο volume (κοντύτερη στο target)
+        // Επιλέγουμε πιο "κοντά" στον στόχο για να διατηρήσουμε volume
         bestVal = val; bestAcc = acc; bestDist = dist;
       } else if(!reachedTarget && acc > bestAcc) {
         bestVal = val; bestAcc = acc; bestDist = dist;
       }
     });
 
-    // Εφαρμόζουμε αν: η βέλτιστη τιμή είναι διαφορετική ΚΑΙ βελτιώνει έστω 1%
     const changed  = Math.abs(bestVal - curVal) > 0.001;
-    const improved = bestAcc > baselineAcc + 0.01; // χαλαρότερο threshold: +1%
+    const improved = bestAcc > baselineAcc + 0.01;
 
     stats[market] = {
       n:            recs.length,
