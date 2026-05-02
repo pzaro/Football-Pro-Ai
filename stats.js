@@ -5046,14 +5046,7 @@ window.runAutoCalibration = function(auditRecords) {
 
   window._pendingAdjustments = allResults;
 
-  if(!totalLeaguesWithChanges) {
-    el.innerHTML = `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);">
-      ✅ <strong>Όλα τα πρωταθλήματα πετυχαίνουν ήδη τους στόχους!</strong> Δεν απαιτείται βαθμονόμηση.
-    </div>`;
-    return;
-  }
-
-  // Render results
+  // Render results (Πάντα τυπώνουμε τα αποτελέσματα, ακόμα και αν δεν υπάρχουν αλλαγές)
   const rows = Object.entries(allResults).map(([lid, data]) => {
     if(!Object.keys(data.stats).length) return '';
     const lgName = (typeof LEAGUES_DATA!=='undefined' ? LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
@@ -5102,13 +5095,20 @@ window.runAutoCalibration = function(auditRecords) {
     </div>`;
   }).filter(Boolean).join('');
 
+  // Header: κουμπί εφαρμογής μόνο αν υπάρχουν αλλαγές, αλλιώς πράσινο μήνυμα
+  const headerHtml = totalLeaguesWithChanges > 0
+    ? `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding:10px 14px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;">
+        <div style="font-size:0.78rem;color:var(--text-sub);">
+          Grid Search ολοκληρώθηκε. <strong style="color:var(--accent-gold);">${totalLeaguesWithChanges} πρωταθλήματα</strong> χρειάζονται βαθμονόμηση.
+        </div>
+        <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:34px;font-size:0.8rem;">✅ Εφαρμογή & Re-Simulate</button>
+      </div>`
+    : `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);margin-bottom:14px;">
+        ✅ <strong>Το μοντέλο είναι άριστα βαθμονομημένο!</strong> Όλα τα πρωταθλήματα πετυχαίνουν τους στόχους ή δεν επιδέχονται περαιτέρω βελτίωση.
+      </div>`;
+
   el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding:10px 14px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;">
-      <div style="font-size:0.78rem;color:var(--text-sub);">
-        Grid Search ολοκληρώθηκε. <strong style="color:var(--accent-gold);">${totalLeaguesWithChanges} πρωταθλήματα</strong> χρειάζονται βαθμονόμηση.
-      </div>
-      <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:34px;font-size:0.8rem;">✅ Εφαρμογή & Re-Simulate</button>
-    </div>
+    ${headerHtml}
     ${rows}
     <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Grid: ${CALIB_GRID_N} τιμές/παράμετρο · Min samples: ${CALIB_MIN_N} · Pure backtest χωρίς API calls</div>`;
 };
