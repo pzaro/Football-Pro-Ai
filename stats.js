@@ -1185,8 +1185,9 @@ window.runScan=async function(){
     // Push to Google Sheets (non-blocking)
     pushToSheets(window.scannedMatchesData).catch(()=>{});
     showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες. Φόρτωση αποδόσεων…`);
-    // Auto-fetch odds μετά το scan (non-blocking)
     window.fetchAllOdds().catch(()=>{});
+    // Auto-audit σε background: αξιολογεί ιστορικά και βελτιστοποιεί παραμέτρους
+    setTimeout(() => window.runCustomAudit(true).catch(()=>{}), 2000);
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
@@ -3672,171 +3673,233 @@ function renderSummaryTable() {
 // ================================================================
 //  AUDIT, VAULT & AI ADVISOR (Auto-Optimization Logic)
 // ================================================================
-window.runCustomAudit=async function(){
-  const s=document.getElementById('auditStart').value,e=document.getElementById('auditEnd').value;
-  if(!s||!e){showErr('Επιλέξτε ημερομηνίες.');return;}
-  if(isRunning)return;isRunning=true;setBtnsDisabled(true);setLoader(true,'Running AI Audit...');
-  document.getElementById('auditSection').innerHTML='';
-  
-  try{
-    const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');
-    const endD=new Date(e);endD.setDate(endD.getDate()+1);
-    const lgFilter=document.getElementById('auditLeague')?.value||'ALL';
-    
-    let cands=store.filter(x=>{const d=new Date(x.date);return d>=new Date(s)&&d<endD;});
-    if(lgFilter!=='ALL') cands=cands.filter(x=>String(x.leagueId)===lgFilter);
-    
-    if(!cands.length){
-      document.getElementById('auditSection').innerHTML=`<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;font-size:1.1rem;">Δεν υπάρχουν δεδομένα για Audit.</div>`;
+// ================================================================
+//  AUDIT ENGINE v3 — Auto-detect + Immediate Calibration
+// ================================================================
+
+/**
+ * Κύρια audit function.
+ * Αν καλείται χωρίς ορίσματα → τρέχει manual με UI dates.
+ * Αν καλείται μετά από scan (autoMode=true) → βρίσκει αυτόματα
+ * το date range από το vault και τρέχει αμέσως.
+ */
+window.runCustomAudit = async function(autoMode = false) {
+  const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
+
+  if(!store.length) {
+    if(!autoMode) showErr('Δεν υπάρχουν δεδομένα στο vault. Τρέξτε scan πρώτα.');
+    return;
+  }
+
+  // ── Αυτόματο date range: όλες οι ημερομηνίες στο vault ──────
+  let s, e;
+  if(autoMode) {
+    const dates = store.map(x => x.date?.split('T')[0]).filter(Boolean).sort();
+    s = dates[0];
+    e = dates[dates.length - 1];
+    // Ενημέρωση UI
+    const asEl = document.getElementById('auditStart');
+    const aeEl = document.getElementById('auditEnd');
+    if(asEl) asEl.value = s;
+    if(aeEl) aeEl.value = e;
+  } else {
+    s = document.getElementById('auditStart')?.value;
+    e = document.getElementById('auditEnd')?.value;
+    if(!s || !e) { showErr('Επιλέξτε ημερομηνίες.'); return; }
+  }
+
+  if(isRunning) return;
+  isRunning = true; setBtnsDisabled(true); setLoader(true, 'Audit σε εξέλιξη…');
+  document.getElementById('auditSection').innerHTML = '';
+
+  try {
+    const endD = new Date(e); endD.setDate(endD.getDate() + 1);
+    const lgFilter = document.getElementById('auditLeague')?.value || 'ALL';
+
+    let cands = store.filter(x => {
+      const d = new Date(x.date?.split('T')[0] || x.date);
+      return d >= new Date(s) && d < endD;
+    });
+    if(lgFilter !== 'ALL') cands = cands.filter(x => String(x.leagueId) === lgFilter);
+
+    if(!cands.length) {
+      document.getElementById('auditSection').innerHTML =
+        `<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;">Δεν βρέθηκαν δεδομένα για τη χρονική περίοδο που επιλέξατε.</div>`;
+      isRunning = false; setBtnsDisabled(false); setLoader(false);
       return;
     }
-    
-    let stats={games:0,outHit:0,validOut:0,o25T:0,o25H:0,o35T:0,o35H:0,u25T:0,u25H:0,bttsT:0,bttsH:0,exHit:0};
-    const rows=[],curveData=[];
-    
-    for(let i=0;i<cands.length;i++){
-      const p=cands[i];
-      setProgress(Math.round(((i+1)/cands.length)*100),`Auditing: ${p.homeTeam}`);
-      const fr=await apiReq(`fixtures?id=${p.fixtureId}`);
-      const fix=fr?.response?.[0];
-      if(!fix||!isFinished(fix?.fixture?.status?.short))continue;
-      
-      const ah=safeNum(fix.goals.home),aa=safeNum(fix.goals.away);
-      const aTot=ah+aa,aExact=`${ah}-${aa}`,aOut=ah>aa?'1':ah<aa?'2':'X',aBtts=ah>0&&aa>0;
+
+    // ── Φέρνουμε αποτελέσματα για κάθε fixture ────────────────
+    const stats = { games:0, outHit:0, validOut:0, o25T:0, o25H:0, o35T:0, o35H:0, u25T:0, u25H:0, bttsT:0, bttsH:0, exHit:0, corT:0, corH:0 };
+    const rows = [], curveData = [], calibRecs = [];
+    let settled = 0;
+
+    for(let i = 0; i < cands.length; i++) {
+      const p = cands[i];
+      setProgress(Math.round(((i+1)/cands.length)*100), `Έλεγχος: ${p.homeTeam} vs ${p.awayTeam}`);
+
+      const fr  = await apiReq(`fixtures?id=${p.fixtureId}`);
+      const fix = fr?.response?.[0];
+      if(!fix || !isFinished(fix?.fixture?.status?.short)) continue;
+
+      settled++;
+      const ah = safeNum(fix.goals.home), aa = safeNum(fix.goals.away);
+      const aTot = ah + aa, aExact = `${ah}-${aa}`, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
       stats.games++;
-      
+
+      // 1X2 / AH
       let isHit1X2 = false;
-      if (p.outPick && p.outPick !== '-') {
-          isHit1X2 = p.outPick === aOut;
-          if(p.omegaPick && p.omegaPick.includes('AH')) {
-              if(p.omegaPick.includes('ΑΣΟΣ')) isHit1X2 = (ah - aa) >= 2;
-              if(p.omegaPick.includes('ΔΙΠΛΟ')) isHit1X2 = (aa - ah) >= 2;
-          }
-          if(!p.omegaPick?.includes('ΗΜΙΧΡΟΝΟ')) {
-              stats.validOut++;
-              if(isHit1X2) stats.outHit++;
-          }
+      if(p.outPick && p.outPick !== '-') {
+        isHit1X2 = p.outPick === aOut;
+        if(p.omegaPick?.includes('AH')) {
+          if(p.omegaPick.includes('ΑΣΟΣ'))  isHit1X2 = (ah - aa) >= 2;
+          if(p.omegaPick.includes('ΔΙΠΛΟ')) isHit1X2 = (aa - ah) >= 2;
+        }
+        if(!p.omegaPick?.includes('ΗΜΙΧΡΟΝΟ')) { stats.validOut++; if(isHit1X2) stats.outHit++; }
       }
 
-      if(p.predOver25){stats.o25T++;if(aTot>2.5)stats.o25H++;}
-      if(p.predOver35){stats.o35T++;if(aTot>3.5)stats.o35H++;}
-      if(p.predUnder25){stats.u25T++;if(aTot<2.5)stats.u25H++;}
-      if(p.predBTTS){stats.bttsT++;if(aBtts)stats.bttsH++;}
-      if(p.exactScorePred===aExact)stats.exHit++;
-      curveData.push({tXG:p.tXG||2.5,hitO25:aTot>2.5?1:0});
-      rows.push({p,ah,aa,aTot,aExact,aOut,aBtts,isHit1X2});
-    }
-    
-    const rv=(h,t)=>t>0?h/t*100:0;
-    const col=v=>v>=80?'var(--accent-green)':v>=60?'var(--accent-gold)':'var(--accent-red)';
-    
-    // --- 🤖 AI ADVISOR LOGIC ---
-    let advisorHTML = '';
-    const recs = [];
-    const rO25 = rv(stats.o25H, stats.o25T);
-    const rO35 = rv(stats.o35H, stats.o35T);
-    const r1X2 = rv(stats.outHit, stats.validOut);
+      if(p.predOver25)  { stats.o25T++; if(aTot > 2.5) stats.o25H++; }
+      if(p.predOver35)  { stats.o35T++; if(aTot > 3.5) stats.o35H++; }
+      if(p.predUnder25) { stats.u25T++; if(aTot < 2.5) stats.u25H++; }
+      if(p.predBTTS)    { stats.bttsT++; if(aBtts)     stats.bttsH++; }
+      if(p.predCorner)  { stats.corT++;  stats.corH += isHit1X2 ? 1 : 0; } // proxy
+      if(p.exactScorePred === aExact) stats.exHit++;
 
-    if(stats.o25T >= 10 && rO25 < 55) {
-      recs.push(`⚠️ Το <b>Πάνω 2.5</b> χάνει (Ποσοστό: ${rO25.toFixed(1)}%). Προτείνεται αύξηση του <i>Ελάχ. xG (Πάνω 2.5)</i> κατά <b>+0.10</b> στα Καθολικές Ρυθμίσεις.`);
-    } else if(stats.o25T >= 10 && rO25 > 70) {
-      recs.push(`💡 Το <b>Πάνω 2.5</b> αποδίδει εξαιρετικά (${rO25.toFixed(1)}%). Προτείνεται μείωση του <i>Ελάχ. xG (Πάνω 2.5)</i> κατά <b>-0.05</b> για περισσότερα σήματα.`);
-    }
+      curveData.push({ tXG: p.tXG||2.5, hitO25: aTot>2.5 ? 1 : 0 });
+      rows.push({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2 });
 
-    if(stats.o35T >= 8 && rO35 < 50) {
-      recs.push(`⚠️ Το <b>Πάνω 3.5</b> υστερεί (${rO35.toFixed(1)}%). Προτείνεται αυστηροποίηση του <i>Ελάχ. xG (Πάνω 3.5)</i> κατά <b>+0.15</b>.`);
-    }
-
-    if(stats.validOut >= 8 && r1X2 < 50) {
-      recs.push(`⚠️ Χαμηλό ποσοστό στα <b>Αποτελέσματα (1Χ2/ΑΧ)</b> (${r1X2.toFixed(1)}%). Προτείνεται αύξηση του απαιτούμενου <i>Διαφορά xG</i> κατά <b>+0.05</b> (π.χ. από 0.48 σε 0.53).`);
-    }
-
-    if(recs.length > 0) {
-      advisorHTML = `<div style="background:rgba(251,191,36,0.1); border:1px solid var(--accent-gold); border-radius:var(--radius-sm); padding:15px; margin-bottom:20px;">
-        <h4 style="color:var(--accent-gold); margin-bottom:10px; font-size:0.9rem; text-transform:uppercase; display:flex; align-items:center; gap:8px;">🤖 Προτάσεις AI Σύμβουλου</h4>
-        <ul style="color:var(--text-main); font-size:0.85rem; padding-left:20px; line-height:1.6;">
-          ${recs.map(r => `<li style="margin-bottom:5px;">${r}</li>`).join('')}
-        </ul>
-      </div>`;
-    } else if (stats.games > 0) {
-       advisorHTML = `<div style="background:rgba(16,185,129,0.1); border:1px solid var(--accent-green); border-radius:var(--radius-sm); padding:15px; margin-bottom:20px; text-align:center;">
-        <span style="color:var(--accent-green); font-weight:700;">✅ Το σύστημα είναι άριστα βαθμονομημένο. Δεν προτείνονται αλλαγές!</span>
-      </div>`;
-    }
-
-    const statsCards=[{lbl:acr('1X2')+' / '+acr('AH'),h:stats.outHit,t:stats.validOut},{lbl:acr('O2.5'),h:stats.o25H,t:stats.o25T},{lbl:acr('O3.5'),h:stats.o35H,t:stats.o35T},{lbl:acr('U2.5'),h:stats.u25H,t:stats.u25T},{lbl:acr('BTTS'),h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];
-    
-    let html=`<div class="quant-panel">
-      <div class="panel-title">📊 Αποτελέσματα Αξιολόγησης — ${cands.length} προβλέψεις</div>
-      ${advisorHTML}
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:15px;margin-bottom:20px;">
-        ${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:20px;text-align:center;"><div style="font-size:0.85rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">${m.lbl}</div><div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.75rem;color:var(--text-muted);margin-top:5px;">${m.h}/${m.t}</div></div>`;}).join('')}
-      </div>
-      <div style="font-size:0.85rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">xG Threshold Optimization Curve (Over 2.5)</div>
-      ${buildMiniCurve(engineConfig.tXG_O25,curveData)}
-      <div class="data-table-wrapper"><table class="summary-table" style="font-size:0.9rem;"><thead><tr><th class="left-align">Fixture</th><th>Score</th><th>${acr('1X2')} / ${acr('AH')}</th><th>${acr('O2.5')}</th><th>${acr('O3.5')}</th><th>${acr('U2.5')}</th><th>${acr('BTTS')}</th><th>Exact</th></tr></thead><tbody>`;
-      
-    rows.forEach(({p,ah,aa,aTot,aExact,aOut,aBtts,isHit1X2})=>{
-      const cell=(pred,hit)=>pred?`<span class="${hit?'audit-omega-hit':'audit-omega-miss'}">${hit?'✅':'❌'}</span>`:'<span style="color:var(--text-dim)">—</span>';
-      
-      let outHitHtml = '—';
-      if (p.outPick && p.outPick !== '-') {
-         if(p.omegaPick && p.omegaPick.includes('ΗΜΙΧΡΟΝΟ')) {
-             outHitHtml = `<span style="color:var(--text-dim)">HT (Skipped)</span>`;
-         } else {
-             outHitHtml = `<span class="${isHit1X2?'audit-omega-hit':'audit-omega-miss'}">${isHit1X2?'✅':'❌'}</span>`;
-         }
-      }
-
-      // Exact: hit αν πετύχει το Top-1 ή το Top-2 σκορ
-      const exactHit1 = p.exactScorePred === aExact;
-      const exactHit2 = p.exactScorePred2 === aExact;
-      const exactHit = exactHit1 || exactHit2;
-      const exactCell = p.exactScorePred
-        ? `<span class="${exactHit1?'audit-omega-hit':'audit-omega-miss'}">${p.exactScorePred}</span>`
-          + (p.exactScorePred2 && p.exactScorePred2 !== p.exactScorePred
-            ? `<br><span class="${exactHit2?'audit-omega-hit':'audit-omega-miss'}" style="font-size:0.85rem;">${p.exactScorePred2}</span>` : '')
-        : '—';
-      
-      html+=`<tr><td class="left-align" style="font-weight:700;font-size:1rem;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}<div style="font-size:0.75rem;color:var(--text-muted)">${p.league}</div></td><td class="data-num" style="font-size:1.1rem;">${ah}-${aa}</td><td style="font-size:1.1rem;">${outHitHtml}</td><td>${cell(p.predOver25,aTot>2.5)}</td><td>${cell(p.predOver35,aTot>3.5)}</td><td>${cell(p.predUnder25,aTot<2.5)}</td><td>${cell(p.predBTTS,aBtts)}</td><td style="font-size:1.1rem;">${exactCell}</td></tr>`;
-    });
-    
-    html+=`</tbody></table></div></div>`;
-    document.getElementById('auditSection').innerHTML=html;
-
-    // ── Auto-Calibration: τροφοδότηση engine με πραγματικά αποτελέσματα ──
-    // Χρησιμοποιούμε το `rows` array που έχει ΗΔΗ το πραγματικό σκορ από API
-    const calibRecs = rows.map(({ p, ah, aa, aTot, aOut, aBtts, isHit1X2 }) => {
-      const pick = p.omegaPick || '';
-      const actualStr = `${ah}-${aa}`;
-
-      // Υπολογισμός correct ανά market με τα πραγματικά δεδομένα
+      // Calibration record — ΠΛΗΡΕΣ με όλα τα fields
       let correct = false;
-      if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ ΓΗΠΕΔ'))  correct = ah > aa;
-      else if(pick.includes('ΔΙΠΛΟ')||pick.includes('ΝΙΚΗ ΦΙΛΟΞ')) correct = aa > ah;
-      else if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) correct = aTot > 3.5;
-      else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) correct = aTot > 2.5;
-      else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')) correct = aTot < 2.5;
-      else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) correct = aBtts;
-      else if(pick.includes('ΚΟΡΝΕΡ'))        correct = isHit1X2; // proxy
-      else if(pick.includes('AH')) correct = isHit1X2;
+      const pick = p.omegaPick || '';
+      if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ ΓΗΠΕΔ'))        correct = ah > aa;
+      else if(pick.includes('ΔΙΠΛΟ')||pick.includes('ΝΙΚΗ ΦΙΛΟΞ'))  correct = aa > ah;
+      else if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5'))                        correct = aTot > 3.5;
+      else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5'))                        correct = aTot > 2.5;
+      else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5'))                        correct = aTot < 2.5;
+      else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG'))      correct = aBtts;
+      else if(pick.includes('AH'))                                    correct = isHit1X2;
 
-      return {
+      calibRecs.push({
         leagueId:  p.leagueId,
         predicted: pick,
-        actual:    actualStr,
+        actual:    aExact,
         tXG:       p.tXG   || 2.5,
         xgDiff:    p.xgDiff || 0,
         isBomb:    !!(p.isBomb),
         correct,
-      };
+      });
+    }
+
+    if(!settled) {
+      document.getElementById('auditSection').innerHTML =
+        `<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;">Οι αγώνες δεν έχουν ολοκληρωθεί ακόμα.</div>`;
+      isRunning = false; setBtnsDisabled(false); setLoader(false);
+      return;
+    }
+
+    // ── Render audit results ──────────────────────────────────
+    const rv  = (h,t) => t > 0 ? (h/t*100) : 0;
+    const col = v => v >= 75 ? 'var(--accent-green)' : v >= 55 ? 'var(--accent-gold)' : 'var(--accent-red)';
+
+    const statsCards = [
+      { lbl:'1X2/ΑΧ',      h:stats.outHit,  t:stats.validOut, target:75 },
+      { lbl:'Πάνω 2.5',    h:stats.o25H,    t:stats.o25T,     target:75 },
+      { lbl:'Πάνω 3.5',    h:stats.o35H,    t:stats.o35T,     target:75 },
+      { lbl:'Κάτω 2.5',    h:stats.u25H,    t:stats.u25T,     target:65 },
+      { lbl:'BTTS',         h:stats.bttsH,   t:stats.bttsT,    target:80 },
+      { lbl:'Ακριβές',      h:stats.exHit,   t:stats.games,    target:15 },
+    ];
+
+    const cardsHtml = statsCards.map(m => {
+      const v = rv(m.h, m.t);
+      const hitTarget = v >= m.target;
+      const barW = m.t > 0 ? Math.min(Math.round(v), 100) : 0;
+      const barColor = v >= m.target ? 'var(--accent-green)' : v >= m.target*0.75 ? 'var(--accent-gold)' : 'var(--accent-red)';
+      return `<div style="background:var(--bg-base);border:1px solid ${hitTarget?'rgba(74,222,128,0.25)':'var(--border-light)'};border-radius:var(--radius-sm);padding:14px 16px;">
+        <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;font-family:var(--font-cond);letter-spacing:0.08em;margin-bottom:6px;">${m.lbl}</div>
+        <div style="font-family:var(--font-mono);font-size:1.8rem;font-weight:900;color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div>
+        <div style="margin:6px 0 4px;background:var(--border-light);border-radius:2px;height:4px;">
+          <div style="height:4px;width:${barW}%;background:${barColor};border-radius:2px;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.62rem;color:var(--text-muted);">
+          <span>${m.h}/${m.t}</span><span>στόχος ${m.target}%</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    // Rows table
+    let tableRows = '';
+    rows.forEach(({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2 }) => {
+      const cell = (pred, hit) => pred
+        ? `<span style="color:${hit?'var(--accent-green)':'var(--accent-red)'};">${hit?'✅':'❌'}</span>`
+        : `<span style="color:var(--text-dim);">—</span>`;
+      const exactHit1 = p.exactScorePred === aExact;
+      const exactHit2 = p.exactScorePred2 === aExact;
+      tableRows += `<tr>
+        <td class="left-align" style="font-weight:700;">${esc(p.homeTeam)} vs ${esc(p.awayTeam)}
+          <div style="font-size:0.68rem;color:var(--text-muted);">${esc(p.league||'')} · ${p.date?.split('T')[0]||''}</div>
+          <div style="font-size:0.72rem;color:var(--accent-blue);margin-top:2px;">${esc(p.omegaPick||'')}</div>
+        </td>
+        <td class="data-num" style="font-size:1.1rem;font-weight:900;">${ah}-${aa}</td>
+        <td>${p.outPick&&p.outPick!=='-'?`<span style="color:${isHit1X2?'var(--accent-green)':'var(--accent-red)'};">${isHit1X2?'✅':'❌'}</span>`:'—'}</td>
+        <td>${cell(p.predOver25, aTot>2.5)}</td>
+        <td>${cell(p.predOver35, aTot>3.5)}</td>
+        <td>${cell(p.predUnder25, aTot<2.5)}</td>
+        <td>${cell(p.predBTTS, aBtts)}</td>
+        <td style="font-family:var(--font-mono);font-size:0.9rem;">
+          <span style="color:${exactHit1?'var(--accent-green)':'var(--text-muted)'};">${p.exactScorePred||'—'}</span>
+          ${p.exactScorePred2&&p.exactScorePred2!==p.exactScorePred?`<br><span style="color:${exactHit2?'var(--accent-green)':'var(--text-dim)'};">${p.exactScorePred2}</span>`:''}
+        </td>
+      </tr>`;
     });
 
-    window._lastAuditCalibRecs = calibRecs;
-    window.runAutoCalibration(calibRecs);
+    const html = `<div class="quant-panel">
+      <div class="panel-title">📊 Αποτελέσματα Audit — ${settled} αγώνες · ${s} → ${e}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px;">${cardsHtml}</div>
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;font-family:var(--font-cond);font-weight:700;">Καμπύλη xG → Over 2.5</div>
+      ${buildMiniCurve(engineConfig.tXG_O25, curveData)}
+      <div class="data-table-wrapper">
+        <table class="summary-table">
+          <thead><tr>
+            <th class="left-align">Αγώνας</th><th>Σκορ</th>
+            <th>1Χ2</th><th>Π2.5</th><th>Π3.5</th><th>Κ2.5</th><th>BTTS</th><th>Ακριβές</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>`;
 
-    showOk('Audit & AI Analysis ολοκληρώθηκε.');
-  }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
+    document.getElementById('auditSection').innerHTML = html;
+
+    // ── Auto-Calibration: τρέχει αμέσως ──────────────────────
+    if(calibRecs.length >= CALIB_MIN_N) {
+      setProgress(95, 'Grid Search calibration…');
+      window._lastAuditCalibRecs = calibRecs;
+      window.runAutoCalibration(calibRecs);
+
+      // Αν autoMode: εφαρμόζουμε αμέσως αν βρεθεί βελτίωση
+      if(autoMode && window._pendingAdjustments) {
+        const hasImprovements = Object.values(window._pendingAdjustments)
+          .some(d => Object.keys(d.optimized||{}).length > 0);
+        if(hasImprovements) {
+          window.applyCalibAdjustments(window._pendingAdjustments);
+        }
+      }
+
+      // Scroll στο calibration panel
+      setTimeout(() => {
+        const cp = document.getElementById('autoCalibContainer');
+        if(cp) { cp.scrollIntoView({ behavior:'smooth', block:'start' }); }
+      }, 400);
+    }
+
+    showOk(`✅ Audit ολοκληρώθηκε — ${settled} αγώνες αξιολογήθηκαν.`);
+
+  } catch(e) {
+    showErr(e.message);
+  } finally {
+    isRunning = false; setBtnsDisabled(false); setLoader(false);
+  }
 };
 function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:0.65rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:5px; margin-bottom:25px;">${bars}</div>`;}
 function saveToVault(data){
