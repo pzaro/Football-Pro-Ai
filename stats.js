@@ -4635,46 +4635,46 @@ function renderStabilitySignals(rec) {
 }
 
 // ================================================================
-//  AUTO-CALIBRATION ENGINE
-//  Μαθαίνει από τα αποτελέσματα του audit και ρυθμίζει αυτόματα
-//  τα per-league parameters για να πλησιάσει τους στόχους.
+//  AUTO-CALIBRATION ENGINE v2 — Grid Search + Backtest
+//
+//  Αντί για gradient descent (αργό, δεν εγγυάται σύγκλιση),
+//  χρησιμοποιεί Grid Search πάνω στα ιστορικά audit records:
+//
+//  Για κάθε παράμετρο → δοκιμάζει N τιμές στο εύρος
+//  → υπολογίζει accuracy με κάθε τιμή (pure function, χωρίς API)
+//  → κρατάει ακριβώς εκείνη που πλησιάζει περισσότερο τον στόχο
 //
 //  ΣΤΟΧΟΙ:
-//    - Σημεία (1X2/AH)  ≥ 75%
-//    - BTTS              ≥ 80%
-//    - Over 2.5          ≥ 75%
-//    - Over 3.5          ≥ 75%
-//    - Κόρνερ            ≥ 70%
-//    - Bombs             ≥ 60%
+//    1X2/AH   ≥ 75% → βελτιστοποίηση xgDiff
+//    BTTS     ≥ 80% → βελτιστοποίηση minBTTS
+//    Πάνω 2.5 ≥ 75% → βελτιστοποίηση minXGO25
+//    Πάνω 3.5 ≥ 75% → βελτιστοποίηση minXGO35
+//    Κόρνερ   ≥ 70% → βελτιστοποίηση mult (secondary)
+//    Bombs    ≥ 60% → βελτιστοποίηση mult
 //
-//  ΜΗΧΑΝΙΣΜΟΣ:
-//    - Αν accuracy < target → αυστηροποίηση threshold (mult/minXG/xgDiff ↑)
-//    - Αν accuracy > target + 10% → χαλάρωση threshold (περισσότερα signals)
-//    - Learning rate 0.04 per iteration (gentle gradient)
-//    - Bounds: mult [0.75, 1.40], minXGO25 [2.00, 3.20], xgDiff [0.30, 0.90]
-//    - Min sample size: 8 per market για αξιόπιστη βαθμονόμηση
+//  GRID: 15 τιμές ανά παράμετρο = πολύ γρήγορο (pure JS, < 50ms)
+//  FALLBACK: αν δεν βρεθεί τιμή που χτυπάει τον στόχο,
+//            κρατάει εκείνη με την υψηλότερη accuracy.
 // ================================================================
 
 const CALIB_TARGETS = {
-  outcomes:  0.75,   // 1X2 / AH picks
-  btts:      0.80,   // BTTS
-  over25:    0.75,   // Πάνω 2.5
-  over35:    0.75,   // Πάνω 3.5
-  corners:   0.70,   // Κόρνερ
-  bombs:     0.60,   // Bombs (υψηλή απόδοση)
+  outcomes: 0.75,
+  btts:     0.80,
+  over25:   0.75,
+  over35:   0.75,
+  corners:  0.70,
+  bombs:    0.60,
 };
-
-const CALIB_LR    = 0.04;   // Learning rate (ήπιο)
-const CALIB_BAND  = 0.08;   // Dead-band: ±8% γύρω από target → δεν αλλάζουμε
-const CALIB_MIN_N = 8;      // Ελάχιστα δεδομένα για βαθμονόμηση
+const CALIB_MIN_N  = 8;    // ελάχιστα records ανά market
+const CALIB_GRID_N = 20;   // σημεία grid ανά παράμετρο
 
 const PARAM_BOUNDS = {
-  mult:      [0.75, 1.40],
-  minXGO25:  [2.00, 3.20],
-  minXGO35:  [2.70, 4.00],
-  xgDiff:    [0.30, 0.90],
-  minBTTS:   [0.60, 1.30],
-  maxU25:    [1.80, 2.80],
+  mult:     [0.75, 1.40],
+  minXGO25: [2.00, 3.20],
+  minXGO35: [2.70, 4.00],
+  xgDiff:   [0.28, 0.95],
+  minBTTS:  [0.55, 1.35],
+  maxU25:   [1.80, 2.80],
 };
 
 const LS_CALIB_LOG = 'omega_calib_log_v5.0';
@@ -4687,230 +4687,331 @@ function saveCalibLog() {
   try { localStorage.setItem(LS_CALIB_LOG, JSON.stringify(calibLog.slice(0,100))); } catch {}
 }
 
-/**
- * Κύρια συνάρτηση: αναλύει audit records και επιστρέφει
- * προτεινόμενα adjustments ανά league.
- */
-function computeCalibAdjustments(auditRecords) {
-  // Group records by leagueId
-  const byLeague = {};
-  auditRecords.forEach(r => {
-    const id = r.leagueId || r.lgId || 0;
-    if(!byLeague[id]) byLeague[id] = [];
-    byLeague[id].push(r);
-  });
+// Δημιουργεί grid τιμών για ένα parameter
+function makeGrid(param) {
+  const [lo, hi] = PARAM_BOUNDS[param];
+  const step = (hi - lo) / (CALIB_GRID_N - 1);
+  return Array.from({length: CALIB_GRID_N}, (_, i) =>
+    parseFloat((lo + i * step).toFixed(4))
+  );
+}
 
-  const adjustments = {};
+// Εφαρμόζει μια παράμετρο και μετρά accuracy σε audit records
+// PURE FUNCTION — δεν αλλάζει τίποτα, δεν καλεί API
+function backtestParam(records, paramName, paramValue) {
+  let hits = 0, n = 0;
 
-  Object.entries(byLeague).forEach(([leagueId, recs]) => {
-    const lid = parseInt(leagueId);
-    const cur = { ...getLeagueParams(lid) };
-    const mods = { ...(leagueMods[lid] || {}) };
-    const adj = {};
-    const stats = {};
-    const log = [];
+  records.forEach(r => {
+    if(!r.actual) return;
+    const pick = r.predicted || '';
+    const parts = r.actual.split('-');
+    if(parts.length < 2) return;
+    const ah = parseInt(parts[0]), aa = parseInt(parts[1]);
+    if(isNaN(ah) || isNaN(aa)) return;
+    const aTot = ah + aa;
 
-    // ── Compute accuracy per market ─────────────────────────────
-    const marketHits = { outcomes:0, btts:0, over25:0, over35:0, corners:0, bombs:0 };
-    const marketN    = { outcomes:0, btts:0, over25:0, over35:0, corners:0, bombs:0 };
+    // Simulate what the model WOULD pick with this parameter value
+    let wouldSignal = false;
+    let wouldHit    = false;
 
-    recs.forEach(r => {
-      // r.predicted / r.actual — set by audit engine
-      if(!r.actual) return; // not yet settled
-      const pick = r.predicted || '';
-      const act  = r.actual;
-
-      if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ')||pick.includes('ΔΙΠΛΟ')||pick.includes('AH')) {
-        marketN.outcomes++;
-        if(r.correct) marketHits.outcomes++;
+    if(paramName === 'xgDiff') {
+      if(pick.includes('ΑΣΟΣ') || pick.includes('ΝΙΚΗ') || pick.includes('ΔΙΠΛΟ')) {
+        // Signal only if stored xgDiff >= threshold
+        wouldSignal = (r.xgDiff || 0) >= paramValue;
+        wouldHit    = wouldSignal && r.correct;
       }
-      if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) {
-        marketN.btts++;
-        if(r.correct) marketHits.btts++;
-      }
+    } else if(paramName === 'minXGO25') {
       if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) {
-        marketN.over25++;
-        if(r.correct) marketHits.over25++;
+        wouldSignal = (r.tXG || 0) >= paramValue;
+        wouldHit    = wouldSignal && (aTot > 2.5);
       }
+    } else if(paramName === 'minXGO35') {
       if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) {
-        marketN.over35++;
-        if(r.correct) marketHits.over35++;
+        wouldSignal = (r.tXG || 0) >= paramValue;
+        wouldHit    = wouldSignal && (aTot > 3.5);
       }
-      if(pick.includes('ΚΟΡΝΕΡ')||pick.includes('ΚΟΡΝ')) {
-        marketN.corners++;
-        if(r.correct) marketHits.corners++;
+    } else if(paramName === 'minBTTS') {
+      if(pick.includes('ΓΚΟΛ/ΓΚΟΛ') || pick.includes('GG')) {
+        // bttsScore proxy = min(tXG * 0.5, 1.5)
+        const bttsProxy = Math.min((r.tXG || 2.5) * 0.45, 1.5);
+        wouldSignal = bttsProxy >= paramValue;
+        wouldHit    = wouldSignal && (ah > 0 && aa > 0);
       }
-      if(r.isBomb) {
-        marketN.bombs++;
-        if(r.correct) marketHits.bombs++;
+    } else if(paramName === 'mult') {
+      // mult affects all picks — use tXG as proxy
+      const adjustedXG = (r.tXG || 2.5) * (paramValue / (r.usedMult || 1.0));
+      if(pick.includes('ΚΟΡΝΕΡ') || pick.includes('💣') || r.isBomb) {
+        wouldSignal = adjustedXG >= 2.2; // generic threshold
+        wouldHit    = wouldSignal && r.correct;
       }
-    });
-
-    // ── Apply gradient adjustments ───────────────────────────────
-    Object.entries(CALIB_TARGETS).forEach(([market, target]) => {
-      const n = marketN[market];
-      if(n < CALIB_MIN_N) return; // not enough data
-
-      const acc = marketHits[market] / n;
-      const err = acc - target; // negative = underperforming
-      stats[market] = { acc: parseFloat((acc*100).toFixed(1)), n, target: target*100, err: parseFloat((err*100).toFixed(1)) };
-
-      if(Math.abs(err) < CALIB_BAND) return; // within acceptable band
-
-      const direction = err < 0 ? 1 : -1; // if below target → tighten (raise thresholds)
-      const delta = CALIB_LR * Math.abs(err) * direction;
-
-      if(market === 'outcomes') {
-        // xgDiff: higher = more selective (fewer but better 1X2 picks)
-        const newDiff = clamp((mods.xgDiff ?? cur.xgDiff) + delta * 0.4, ...PARAM_BOUNDS.xgDiff);
-        adj.xgDiff = parseFloat(newDiff.toFixed(3));
-        log.push(`Σημεία: acc=${(acc*100).toFixed(0)}% vs target ${target*100}% → xgDiff ${(mods.xgDiff??cur.xgDiff).toFixed(3)} → ${adj.xgDiff}`);
-      }
-      if(market === 'over25') {
-        // minXGO25: higher = more selective
-        const newMin = clamp((mods.minXGO25 ?? cur.minXGO25) + delta * 0.5, ...PARAM_BOUNDS.minXGO25);
-        adj.minXGO25 = parseFloat(newMin.toFixed(3));
-        log.push(`Πάνω 2.5: acc=${(acc*100).toFixed(0)}% → minXGO25 ${(mods.minXGO25??cur.minXGO25).toFixed(3)} → ${adj.minXGO25}`);
-      }
-      if(market === 'over35') {
-        const newMin = clamp((mods.minXGO35 ?? cur.minXGO35) + delta * 0.5, ...PARAM_BOUNDS.minXGO35);
-        adj.minXGO35 = parseFloat(newMin.toFixed(3));
-        log.push(`Πάνω 3.5: acc=${(acc*100).toFixed(0)}% → minXGO35 ${(mods.minXGO35??cur.minXGO35).toFixed(3)} → ${adj.minXGO35}`);
-      }
-      if(market === 'btts') {
-        const newBTTS = clamp((mods.minBTTS ?? cur.minBTTS) + delta * 0.3, ...PARAM_BOUNDS.minBTTS);
-        adj.minBTTS = parseFloat(newBTTS.toFixed(3));
-        log.push(`BTTS: acc=${(acc*100).toFixed(0)}% → minBTTS ${(mods.minBTTS??cur.minBTTS).toFixed(3)} → ${adj.minBTTS}`);
-      }
-      if(market === 'corners') {
-        // mult επηρεάζει και τα corners indirectly μέσω xG
-        const newMult = clamp((mods.mult ?? cur.mult) + delta * 0.15, ...PARAM_BOUNDS.mult);
-        adj.mult = parseFloat(newMult.toFixed(3));
-        log.push(`Κόρνερ: acc=${(acc*100).toFixed(0)}% → mult ${(mods.mult??cur.mult).toFixed(3)} → ${adj.mult}`);
-      }
-      if(market === 'bombs') {
-        // Bombs depend on overall xG → adjust mult slightly
-        const newMult = clamp((mods.mult ?? cur.mult) + delta * 0.10, ...PARAM_BOUNDS.mult);
-        if(!adj.mult) adj.mult = parseFloat(newMult.toFixed(3));
-        log.push(`Bombs: acc=${(acc*100).toFixed(0)}% → mult ${(mods.mult??cur.mult).toFixed(3)} → ${adj.mult}`);
-      }
-    });
-
-    if(Object.keys(adj).length > 0) {
-      adjustments[lid] = { adj, stats, log, n: recs.length };
     }
+
+    if(wouldSignal) { n++; if(wouldHit) hits++; }
   });
 
-  return adjustments;
+  return n >= CALIB_MIN_N ? hits / n : null;
 }
 
 /**
- * Εφαρμόζει τα adjustments στο leagueMods και αποθηκεύει.
+ * Grid search για ένα πρωτάθλημα — βρίσκει το ΒΕΛΤΙΣΤΟ parameter set
+ * που επιτυγχάνει τους στόχους.
  */
-function applyCalibAdjustments(adjustments) {
-  const applied = [];
-  Object.entries(adjustments).forEach(([lid, data]) => {
-    const id = parseInt(lid);
-    if(!leagueMods[id]) leagueMods[id] = {};
-    Object.assign(leagueMods[id], data.adj);
-    applied.push({ leagueId: id, ...data });
+function gridSearchLeague(records, leagueId) {
+  const results  = {};
+  const stats    = {};
+  const logLines = [];
+
+  // Ομαδοποίηση ανά market
+  const byMarket = {
+    outcomes: records.filter(r => (r.predicted||'').match(/ΑΣΟΣ|ΝΙΚΗ|ΔΙΠΛΟ|AH/)),
+    over25:   records.filter(r => (r.predicted||'').includes('ΠΑΝΩ ΑΠΟ 2.5')),
+    over35:   records.filter(r => (r.predicted||'').includes('ΠΑΝΩ ΑΠΟ 3.5')),
+    btts:     records.filter(r => (r.predicted||'').match(/ΓΚΟΛ.ΓΚΟΛ|GG/)),
+    corners:  records.filter(r => (r.predicted||'').includes('ΚΟΡΝΕΡ')),
+    bombs:    records.filter(r => r.isBomb),
+  };
+
+  // Map market → param
+  const marketToParam = {
+    outcomes: 'xgDiff',
+    over25:   'minXGO25',
+    over35:   'minXGO35',
+    btts:     'minBTTS',
+    corners:  'mult',
+    bombs:    'mult',
+  };
+
+  const optimized = {};
+
+  Object.entries(CALIB_TARGETS).forEach(([market, target]) => {
+    const recs = byMarket[market];
+    if(!recs || recs.length < CALIB_MIN_N) return;
+
+    const param   = marketToParam[market];
+    const grid    = makeGrid(param);
+    const curMod  = leagueMods[leagueId] || {};
+    const curLP   = getLeagueParams(leagueId);
+    const curVal  = curMod[param] ?? curLP[param] ?? grid[Math.floor(grid.length/2)];
+
+    // Measure current accuracy (baseline)
+    const baselineAcc = recs.filter(r => r.actual && r.correct).length / recs.filter(r=>r.actual).length;
+
+    // Grid search: find best value
+    let bestVal      = curVal;
+    let bestAcc      = 0;
+    let bestDist     = Infinity;
+    let reachedTarget = false;
+    const curve      = [];
+
+    grid.forEach(val => {
+      const acc = backtestParam(recs, param, val);
+      if(acc === null) return;
+
+      curve.push({ val, acc });
+      const dist = Math.abs(acc - target);
+
+      // Prefer: first value that meets/exceeds target
+      if(acc >= target && !reachedTarget) {
+        bestVal = val;
+        bestAcc = acc;
+        bestDist = dist;
+        reachedTarget = true;
+      }
+      // Among target-meeting values, prefer closest (fewest signals sacrificed)
+      else if(acc >= target && reachedTarget && dist < bestDist) {
+        bestVal = val;
+        bestAcc = acc;
+        bestDist = dist;
+      }
+      // If target not yet met, track highest accuracy
+      else if(!reachedTarget && acc > bestAcc) {
+        bestVal = val;
+        bestAcc = acc;
+        bestDist = dist;
+      }
+    });
+
+    // Only update if significantly different from current
+    const changed = Math.abs(bestVal - curVal) > 0.001;
+    const improved = bestAcc > baselineAcc + 0.02;
+
+    stats[market] = {
+      n: recs.filter(r=>r.actual).length,
+      baselineAcc: parseFloat((baselineAcc*100).toFixed(1)),
+      bestAcc:     parseFloat((bestAcc*100).toFixed(1)),
+      target:      target*100,
+      reachedTarget,
+      curVal,
+      bestVal,
+      changed,
+      improved,
+      curve,
+    };
+
+    if(changed && improved) {
+      // Merge: if mult is touched by multiple markets, use best
+      if(param === 'mult' && optimized[param] !== undefined) {
+        // Average the two suggestions (corners + bombs)
+        optimized[param] = parseFloat(((optimized[param] + bestVal) / 2).toFixed(4));
+      } else {
+        optimized[param] = bestVal;
+      }
+      logLines.push(`${market}: baseline ${(baselineAcc*100).toFixed(0)}% → best ${(bestAcc*100).toFixed(0)}% (target ${target*100}%) | ${param}: ${curVal.toFixed(3)} → ${bestVal.toFixed(3)}`);
+    }
   });
+
+  return { optimized, stats, logLines };
+}
+
+/**
+ * Εφαρμόζει τα βέλτιστα parameters και αποθηκεύει.
+ */
+window.applyCalibAdjustments = function(adjustmentsByLeague) {
+  const applied = [];
+  Object.entries(adjustmentsByLeague).forEach(([lid, data]) => {
+    const id = parseInt(lid);
+    if(!data.optimized || !Object.keys(data.optimized).length) return;
+    if(!leagueMods[id]) leagueMods[id] = {};
+    Object.assign(leagueMods[id], data.optimized);
+    applied.push({ leagueId: id, params: data.optimized, stats: data.stats });
+  });
+
+  if(!applied.length) { showErr('Δεν υπάρχουν αλλαγές για εφαρμογή.'); return; }
 
   try { localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); } catch {}
 
-  // Log entry
   calibLog.unshift({
     date: new Date().toLocaleString('el-GR'),
     applied: applied.map(a => ({
       leagueId: a.leagueId,
-      adj: a.adj,
-      stats: a.stats,
-      n: a.n,
+      params: a.params,
+      markets: Object.entries(a.stats)
+        .filter(([,s])=>s.changed && s.improved)
+        .map(([m,s])=>`${m}: ${s.baselineAcc}%→${s.bestAcc}%`)
+        .join(', ')
     }))
   });
   saveCalibLog();
-
-  // Re-simulate with new params
+  renderCalibLog();
   window.resimulateMatches();
   renderLeagueMods();
-  return applied;
-}
+  showOk(`✅ Βαθμονόμηση εφαρμόστηκε για ${applied.length} πρωτάθλημα.`);
+};
 
 /**
- * UI renderer: εμφανίζει το calibration panel με preview και apply
+ * Κύρια συνάρτηση: τρέχει grid search και εμφανίζει αποτελέσματα.
  */
-window.runAutoCalibration = function(auditRecords, autoApply = false) {
-  if(!auditRecords?.length) { showErr('Δεν υπάρχουν audit records.'); return; }
-
-  const adjustments = computeCalibAdjustments(auditRecords);
+window.runAutoCalibration = function(auditRecords) {
   const el = document.getElementById('autoCalibPanel');
   if(!el) return;
+  if(!auditRecords?.length) {
+    el.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:24px;font-size:0.8rem;">Εκτελέστε Audit για να εμφανιστεί η ανάλυση βαθμονόμησης.</div>`;
+    return;
+  }
 
-  if(!Object.keys(adjustments).length) {
+  // Group by league
+  const byLeague = {};
+  auditRecords.forEach(r => {
+    const id = r.leagueId || 0;
+    if(!byLeague[id]) byLeague[id] = [];
+    byLeague[id].push(r);
+  });
+
+  // Run grid search per league
+  const allResults = {};
+  let totalLeaguesWithChanges = 0;
+  Object.entries(byLeague).forEach(([lid, recs]) => {
+    const res = gridSearchLeague(recs, parseInt(lid));
+    allResults[lid] = res;
+    if(Object.keys(res.optimized).length > 0) totalLeaguesWithChanges++;
+  });
+
+  window._pendingAdjustments = allResults;
+
+  if(!totalLeaguesWithChanges) {
     el.innerHTML = `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);">
-      ✅ <strong>Όλα τα πρωταθλήματα εντός στόχου!</strong> Δεν απαιτείται βαθμονόμηση.
+      ✅ <strong>Όλα τα πρωταθλήματα πετυχαίνουν ήδη τους στόχους!</strong> Δεν απαιτείται βαθμονόμηση.
     </div>`;
     return;
   }
 
-  const rows = Object.entries(adjustments).map(([lid, data]) => {
-    const lgName = (typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
-    const statsHtml = Object.entries(data.stats).map(([m,s]) => {
-      const ok = s.acc >= s.target;
-      const bar = `<div style="background:var(--border-light);border-radius:2px;height:4px;width:60px;display:inline-block;vertical-align:middle;margin-left:4px;"><div style="height:4px;width:${Math.min(s.acc/s.target*100,100).toFixed(0)}%;background:${ok?'var(--accent-green)':'var(--accent-red)'};border-radius:2px;"></div></div>`;
-      const marketLabel = {outcomes:'1X2',btts:'BTTS',over25:'O2.5',over35:'O3.5',corners:'COR',bombs:'BOMB'}[m]||m;
-      return `<span style="font-size:0.65rem;margin-right:8px;white-space:nowrap;"><span style="color:${ok?'var(--accent-green)':'var(--accent-red)'};">${marketLabel}:${s.acc}%</span>${bar}<span style="color:var(--text-muted);">(στόχ:${s.target}%,n=${s.n})</span></span>`;
+  // Render results
+  const rows = Object.entries(allResults).map(([lid, data]) => {
+    if(!Object.keys(data.stats).length) return '';
+    const lgName = (typeof LEAGUES_DATA!=='undefined' ? LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
+    const hasChanges = Object.keys(data.optimized).length > 0;
+
+    const marketRows = Object.entries(data.stats).map(([m, s]) => {
+      const reached = s.reachedTarget;
+      const improved = s.improved;
+      const barW = Math.min(Math.round(s.bestAcc / s.target * 100), 100);
+      const barColor = reached ? 'var(--accent-green)' : improved ? 'var(--accent-gold)' : 'var(--accent-red)';
+      const mLabel = {outcomes:'🏆 1X2/AH', btts:'🎯 BTTS', over25:'🔥 O2.5', over35:'🚀 O3.5', corners:'🚩 Κόρνερ', bombs:'💣 Bombs'}[m] || m;
+      const statusIcon = reached ? '✅' : improved ? '📈' : '⚠️';
+      const paramChange = s.changed && s.improved
+        ? `<span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent-gold);margin-left:6px;">${m==='outcomes'?'xgDiff':m==='over25'?'minXGO25':m==='over35'?'minXGO35':m==='btts'?'minBTTS':'mult'}: ${s.curVal.toFixed(3)}→<strong>${s.bestVal.toFixed(3)}</strong></span>`
+        : `<span style="font-size:0.62rem;color:var(--text-muted);margin-left:6px;">— χωρίς αλλαγή</span>`;
+
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);flex-wrap:wrap;">
+        <span style="min-width:90px;font-size:0.7rem;font-weight:700;">${mLabel}</span>
+        <div style="flex:1;min-width:120px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:2px;font-size:0.62rem;font-family:var(--font-mono);">
+            <span style="color:var(--text-muted);">τώρα: <span style="color:var(--text-sub);">${s.baselineAcc}%</span></span>
+            <span style="color:${barColor};font-weight:700;">${statusIcon} ${s.bestAcc}% / στόχος ${s.target}%</span>
+          </div>
+          <div style="background:var(--border-light);border-radius:2px;height:5px;">
+            <div style="height:5px;width:${barW}%;background:${barColor};border-radius:2px;transition:width 0.4s;"></div>
+          </div>
+        </div>
+        ${paramChange}
+        <span style="font-size:0.6rem;color:var(--text-dim);">n=${s.n}</span>
+      </div>`;
     }).join('');
 
-    const adjHtml = Object.entries(data.adj).map(([k,v]) => {
-      const cur = getLeagueParams(parseInt(lid));
-      const curVal = leagueMods[lid]?.[k] ?? cur[k] ?? '?';
-      const arrow = v > curVal ? '▲' : '▼';
-      const col = v > curVal ? 'var(--accent-gold)' : 'var(--accent-teal)';
-      return `<span style="font-size:0.68rem;font-family:var(--font-mono);color:${col};margin-right:8px;">${k}: ${typeof curVal==='number'?curVal.toFixed(3):curVal} ${arrow} <strong>${v}</strong></span>`;
+    const paramSummary = Object.entries(data.optimized).map(([k,v]) => {
+      const cur = (leagueMods[parseInt(lid)]?.[k]) ?? getLeagueParams(parseInt(lid))[k];
+      const dir = v > cur ? '▲' : '▼';
+      const col = v > cur ? 'var(--accent-gold)' : 'var(--accent-teal)';
+      return `<span style="font-size:0.7rem;font-family:var(--font-mono);color:${col};background:${col}15;padding:2px 8px;border-radius:4px;border:1px solid ${col}30;">${k} ${dir} ${v}</span>`;
     }).join('');
 
-    return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:8px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-        <span style="font-weight:700;font-size:0.82rem;color:var(--text-main);">${esc(lgName)}</span>
-        <span style="font-size:0.65rem;color:var(--text-muted);">n=${data.n} αγώνες</span>
+    return `<div style="background:var(--bg-base);border:1px solid ${hasChanges?'rgba(252,211,77,0.2)':'var(--border-light)'};border-radius:8px;padding:12px 14px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
+        <span style="font-weight:800;font-size:0.85rem;">${esc(lgName)}</span>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">${paramSummary}</div>
       </div>
-      <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px;">${statsHtml}</div>
-      <div style="padding:6px 8px;background:rgba(252,211,77,0.06);border-radius:5px;border-left:2px solid rgba(252,211,77,0.3);">
-        <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-cond);text-transform:uppercase;font-weight:700;letter-spacing:0.08em;">Προτεινόμενες αλλαγές: </span>${adjHtml}
-      </div>
+      ${marketRows}
     </div>`;
-  }).join('');
+  }).filter(Boolean).join('');
 
   el.innerHTML = `
-  <div style="margin-bottom:12px;padding:10px 14px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;font-size:0.75rem;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-    <span style="font-size:1rem;">🎯</span>
-    <span style="flex:1;">Ανάλυση <strong style="color:var(--accent-gold);">${Object.keys(adjustments).length} πρωταθλήματος</strong> που χρειάζονται βαθμονόμηση.</span>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;">
-      <button onclick="applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:32px;font-size:0.78rem;">✅ Εφαρμογή Όλων</button>
-      <button onclick="resetCalibration()" class="btn btn-outline" style="height:32px;font-size:0.78rem;color:var(--accent-red);border-color:rgba(251,113,133,0.25);">↺ Reset</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding:10px 14px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;">
+      <div style="font-size:0.78rem;color:var(--text-sub);">
+        Grid Search ολοκληρώθηκε. <strong style="color:var(--accent-gold);">${totalLeaguesWithChanges} πρωταθλήματα</strong> χρειάζονται βαθμονόμηση.
+      </div>
+      <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:34px;font-size:0.8rem;">✅ Εφαρμογή & Re-Simulate</button>
     </div>
-  </div>
-  ${rows}
-  <div style="margin-top:10px;font-size:0.62rem;color:var(--text-muted);">Learning rate: ${CALIB_LR} · Band: ±${(CALIB_BAND*100).toFixed(0)}% · Min samples: ${CALIB_MIN_N}</div>`;
-
-  window._pendingAdjustments = adjustments;
-  if(autoApply) applyCalibAdjustments(adjustments);
+    ${rows}
+    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Grid: ${CALIB_GRID_N} τιμές/παράμετρο · Min samples: ${CALIB_MIN_N} · Pure backtest χωρίς API calls</div>`;
 };
 
-/**
- * Render calibration history log
- */
 function renderCalibLog() {
   const el = document.getElementById('calibLogSection');
-  if(!el || !calibLog.length) return;
-  el.innerHTML = calibLog.slice(0, 10).map(entry => `
-    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:0.72rem;">
-      <div style="color:var(--text-muted);margin-bottom:4px;font-family:var(--font-mono);">${entry.date}</div>
-      ${(entry.applied||[]).map(a => `
-        <div style="color:var(--text-sub);">${(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA.find(l=>l.id==a.leagueId)?.name:null)||`League ${a.leagueId}`}:
-          ${Object.entries(a.adj).map(([k,v])=>`<span style="color:var(--accent-gold);font-family:var(--font-mono);">${k}=${v}</span>`).join(' · ')}
-        </div>`).join('')}
+  if(!el) return;
+  if(!calibLog.length) { el.innerHTML = `<div style="font-size:0.75rem;color:var(--text-muted);padding:8px;">Δεν υπάρχει ιστορικό ακόμα.</div>`; return; }
+  el.innerHTML = calibLog.slice(0,10).map(entry => `
+    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:8px 12px;margin-bottom:6px;">
+      <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;">${entry.date}</div>
+      ${(entry.applied||[]).map(a => {
+        const lgName = (typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA.find(l=>l.id==a.leagueId)?.name:null)||`League ${a.leagueId}`;
+        return `<div style="font-size:0.72rem;margin-bottom:3px;">
+          <strong style="color:var(--text-sub);">${esc(lgName)}</strong>:
+          <span style="color:var(--accent-gold);font-family:var(--font-mono);">
+            ${Object.entries(a.params||{}).map(([k,v])=>`${k}=${v}`).join(' · ')}
+          </span>
+          ${a.markets ? `<div style="font-size:0.62rem;color:var(--text-muted);margin-top:1px;">${esc(a.markets)}</div>` : ''}
+        </div>`;
+      }).join('')}
     </div>`).join('');
 }
 
@@ -4921,9 +5022,10 @@ window.resetCalibration = function() {
   window.resimulateMatches();
   renderLeagueMods();
   const el = document.getElementById('autoCalibPanel');
-  if(el) el.innerHTML = '';
+  if(el) el.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:24px;font-size:0.8rem;">Επαναφορά ολοκληρώθηκε.</div>';
   showOk('Επαναφορά ολοκληρώθηκε.');
 };
+
 
 window.resimulateMatches=function(){
   if(!window.scannedMatchesData.length)return;
