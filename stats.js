@@ -3691,10 +3691,15 @@ window.runCustomAudit = async function(autoMode = false) {
     return;
   }
 
-  // ── Αυτόματο date range: παλιές ημερομηνίες στο vault ──────
+  // AUTO-DETECT: αν τα πεδία ημερομηνίας είναι κενά → παίρνει όλο το vault
+  const sInput = document.getElementById('auditStart')?.value;
+  const eInput = document.getElementById('auditEnd')?.value;
+  if(!autoMode && (!sInput || !eInput)) {
+    autoMode = true;
+  }
+
   let s, e, leagueIds = [];
   if(autoMode) {
-    // Παίρνουμε μόνο records από παλιότερες ημέρες (όχι σήμερα — δεν έχουν τελειώσει)
     const todayStr = new Date().toISOString().split('T')[0];
     const pastRecs = store.filter(x => {
       const d = (x.date || '').split('T')[0];
@@ -3702,7 +3707,7 @@ window.runCustomAudit = async function(autoMode = false) {
     });
 
     if(!pastRecs.length) {
-      // Δεν υπάρχουν παλιοί αγώνες — audit θα τρέξει άδειο, skip
+      if(!sInput) showErr('Δεν υπάρχουν ολοκληρωμένοι αγώνες στο Vault ακόμα.');
       isRunning = false; setBtnsDisabled(false); setLoader(false);
       return;
     }
@@ -3712,15 +3717,11 @@ window.runCustomAudit = async function(autoMode = false) {
     e = dates[dates.length - 1];
     leagueIds = [...new Set(pastRecs.map(x => x.leagueId).filter(Boolean))];
 
-    // Ενημέρωση UI
-    const asEl = document.getElementById('auditStart');
-    const aeEl = document.getElementById('auditEnd');
-    if(asEl) asEl.value = s;
-    if(aeEl) aeEl.value = e;
+    if(document.getElementById('auditStart')) document.getElementById('auditStart').value = s;
+    if(document.getElementById('auditEnd'))   document.getElementById('auditEnd').value   = e;
   } else {
-    s = document.getElementById('auditStart')?.value;
-    e = document.getElementById('auditEnd')?.value;
-    if(!s || !e) { showErr('Επιλέξτε ημερομηνίες.'); return; }
+    s = sInput;
+    e = eInput;
   }
 
   if(isRunning) return;
@@ -4827,50 +4828,40 @@ function backtestParam(records, paramName, paramValue) {
 
   records.forEach(r => {
     if(!r.actual) return;
-    const pick = r.predicted || '';
     const parts = r.actual.split('-');
     if(parts.length < 2) return;
     const ah = parseInt(parts[0]), aa = parseInt(parts[1]);
     if(isNaN(ah) || isNaN(aa)) return;
     const aTot = ah + aa;
+    const aBtts = ah > 0 && aa > 0;
 
-    // Simulate what the model WOULD pick with this parameter value
     let wouldSignal = false;
     let wouldHit    = false;
 
     if(paramName === 'xgDiff') {
-      if(pick.includes('ΑΣΟΣ') || pick.includes('ΝΙΚΗ') || pick.includes('ΔΙΠΛΟ')) {
-        // Signal only if stored xgDiff >= threshold
-        wouldSignal = (r.xgDiff || 0) >= paramValue;
-        wouldHit    = wouldSignal && r.correct;
+      // Προσομοίωση 1X2 από raw xgDiff — ΑΝΕΞΑΡΤΗΤΑ από το παλιό pick string
+      wouldSignal = Math.abs(r.xgDiff || 0) >= paramValue;
+      if(wouldSignal) {
+        const predictedOut = (r.xgDiff > 0) ? '1' : '2';
+        const actualOut    = ah > aa ? '1' : (ah < aa ? '2' : 'X');
+        wouldHit = (predictedOut === actualOut);
       }
     } else if(paramName === 'minXGO25') {
-      if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) {
-        wouldSignal = (r.tXG || 0) >= paramValue;
-        wouldHit    = wouldSignal && (aTot > 2.5);
-      }
+      // Προσομοίωση Over 2.5 από raw tXG
+      wouldSignal = (r.tXG || 0) >= paramValue;
+      wouldHit    = wouldSignal && (aTot > 2.5);
     } else if(paramName === 'minXGO35') {
-      if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) {
-        wouldSignal = (r.tXG || 0) >= paramValue;
-        wouldHit    = wouldSignal && (aTot > 3.5);
-      }
+      wouldSignal = (r.tXG || 0) >= paramValue;
+      wouldHit    = wouldSignal && (aTot > 3.5);
     } else if(paramName === 'minBTTS') {
-      if(pick.includes('ΓΚΟΛ/ΓΚΟΛ') || pick.includes('GG')) {
-        // bttsScore proxy = min(tXG * 0.5, 1.5)
-        const bttsProxy = Math.min((r.tXG || 2.5) * 0.45, 1.5);
-        wouldSignal = bttsProxy >= paramValue;
-        wouldHit    = wouldSignal && (ah > 0 && aa > 0);
-      }
+      const bttsProxy = Math.min((r.tXG || 2.5) * 0.45, 1.5);
+      wouldSignal = bttsProxy >= paramValue;
+      wouldHit    = wouldSignal && aBtts;
     } else if(paramName === 'mult') {
-      // mult scales xG → simulate: adjusted tXG = tXG * (newMult / defaultMult)
-      // We compare against the stored tXG which was computed with some mult
-      // Without knowing the original mult, we use the ratio relative to 1.0 baseline
-      const curLPMult = getLeagueParams(records[0]?.leagueId || 0).mult || 1.0;
+      const curLPMult = getLeagueParams(r.leagueId || 0).mult || 1.0;
       const adjustedXG = (r.tXG || 2.5) * (paramValue / curLPMult);
-      if(pick.includes('ΚΟΡΝΕΡ') || r.isBomb) {
-        wouldSignal = adjustedXG >= 2.2;
-        wouldHit    = wouldSignal && r.correct;
-      }
+      wouldSignal = adjustedXG >= 2.2;
+      wouldHit    = wouldSignal && r.correct;
     }
 
     if(wouldSignal) { n++; if(wouldHit) hits++; }
