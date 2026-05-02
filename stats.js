@@ -1813,17 +1813,49 @@ function extractValueBets(rec, odds) {
 
   const assess = (market, modelProb, decOdds, label) => {
     if(!decOdds || decOdds <= 1.01 || modelProb <= 0) return;
-    // Sanity check: αν η implied prob του bookmaker είναι < 5% (odds > 20),
-    // η αγορά είναι πολύ ακραία για αξιόπιστο EV — αγνοούμε
+
     const impliedProb = 1 / decOdds;
-    if(impliedProb < 0.05) return;
-    // Αν η διαφορά model vs implied > 40 percentage points,
-    // το μοντέλο πιθανώς υπερεκτιμά — cap στο implied + 25pp max
-    const cappedModelProb = Math.min(modelProb, impliedProb + 0.25);
+
+    // ── Φίλτρο 1: Απόδοση > 15 (implied < 6.7%) — πολύ ακραία, αγνοούμε
+    if(impliedProb < 0.067) return;
+
+    // ── Φίλτρο 2: Market-aware max edge cap
+    // Το Pinnacle έχει margin ~2%. Ένα αξιόπιστο μοντέλο μπορεί να έχει
+    // edge 3-8% πάνω από την αγορά. Πάνω από αυτό = λάθος μοντέλου, όχι edge.
+    //
+    // Max credible edge ανά odds range:
+    //   odds < 2.0  (implied > 50%): ±8pp — πολύ παρατηρούμενη αγορά
+    //   odds 2-3.5  (implied 29-50%): ±10pp — καλή ρευστότητα
+    //   odds 3.5-6  (implied 17-29%): ±8pp  — λιγότερα δεδομένα
+    //   odds 6-15   (implied 7-17%):  ±6pp  — ακραία αγορά, αναξιόπιστα signals
+    let maxEdgePP;
+    if(decOdds < 2.0)       maxEdgePP = 0.08;
+    else if(decOdds < 3.5)  maxEdgePP = 0.10;
+    else if(decOdds < 6.0)  maxEdgePP = 0.08;
+    else                     maxEdgePP = 0.06;   // odds 6-15
+
+    // Cap the model probability — δεν μπορεί να απέχει > maxEdge από implied
+    const cappedModelProb = Math.min(modelProb, impliedProb + maxEdgePP);
+
+    // ── Φίλτρο 3: Μετά το cap, υπολόγισε EV — αν ακόμα δεν είναι positive, drop
     const ev = cappedModelProb * decOdds - 1;
     if(ev < MIN_EV_THRESHOLD) return;
-    const edge = (cappedModelProb - impliedProb) * 100;
-    const kelly = bankroll > 0 ? clamp((cappedModelProb * (decOdds-1) - (1-cappedModelProb)) / (decOdds-1) * KELLY_FRACTION * bankroll, 0, bankroll*0.15) : 0;
+
+    // ── Φίλτρο 4: Consistency check — το omegaPick του μοντέλου πρέπει να
+    // συμφωνεί με τη συγκεκριμένη αγορά για να θεωρηθεί αξιόπιστο σήμα
+    const pickStr = omegaPick || '';
+    if(label.includes('ΠΑΝΩ ΑΠΟ 3.5') && !pickStr.includes('3.5') && !pickStr.includes('OVER 3')) return;
+    if(label.includes('ΠΑΝΩ ΑΠΟ 2.5') && !pickStr.includes('2.5') && !pickStr.includes('3.5')) return;
+    if(label.includes('ΚΑΤΩ ΑΠΟ')     && !pickStr.includes('ΚΑΤΩ')) return;
+    if(label.includes('ΓΚΟΛ/ΓΚΟΛ')    && !pickStr.includes('ΓΚΟΛ')) return;
+    if(label.includes('ΝΙΚΗ ΓΗΠΕΔ')   && !pickStr.includes('ΝΙΚΗ') && !pickStr.includes('ΑΣΟΣ') && !pickStr.includes('⚡') && !pickStr.includes('💣')) return;
+    if(label.includes('ΝΙΚΗ ΦΙΛΟΞ')   && !pickStr.includes('ΝΙΚΗ') && !pickStr.includes('ΔΙΠΛΟ') && !pickStr.includes('⚡') && !pickStr.includes('💣')) return;
+
+    const edge  = (cappedModelProb - impliedProb) * 100;
+    const kelly = bankroll > 0
+      ? clamp((cappedModelProb * (decOdds-1) - (1-cappedModelProb)) / (decOdds-1) * KELLY_FRACTION * bankroll, 0, bankroll * 0.10)
+      : 0;
+
     bets.push({
       fixId:    rec.fixId,
       match:    `${rec.ht} vs ${rec.at}`,
@@ -1832,15 +1864,15 @@ function extractValueBets(rec, odds) {
       time:     rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
       market,
       label,
-      modelProb: parseFloat((cappedModelProb*100).toFixed(1)),
+      modelProb:   parseFloat((cappedModelProb*100).toFixed(1)),
       impliedProb: parseFloat((impliedProb*100).toFixed(1)),
-      decOdds: parseFloat(decOdds.toFixed(2)),
-      ev:    parseFloat((ev*100).toFixed(2)),
-      edge:  parseFloat(edge.toFixed(1)),
-      kelly: parseFloat(kelly.toFixed(2)),
+      decOdds:     parseFloat(decOdds.toFixed(2)),
+      ev:          parseFloat((ev*100).toFixed(2)),
+      edge:        parseFloat(edge.toFixed(1)),
+      kelly:       parseFloat(kelly.toFixed(2)),
       omegaPick,
-      pickConf: strength || 0,
-      bookmaker: ODDS_BOOKMAKER_NAME,
+      pickConf:    strength || 0,
+      bookmaker:   ODDS_BOOKMAKER_NAME,
     });
   };
 
