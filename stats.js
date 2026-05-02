@@ -2579,6 +2579,7 @@ function renderTop3Certainty(bets) {
     const aStab = x.aS?.r6?.sdGoals != null ? (x.aS.r6.sdGoals < 0.83 ? '✅ STABLE' : x.aS.r6.sdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE') : '—';
     const hasLineup = x.lineupData?.available;
     const hasInj = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
+    const certScore = x._certaintyScore || 0;
     const evLine = x.valueBets?.length
       ? `<div style="font-size:0.72rem;color:var(--accent-green);font-weight:700;margin-top:4px;">💰 Value: +${Math.max(...x.valueBets.map(b=>b.ev)).toFixed(1)}% EV @ ${x.valueBets.find(b=>b.ev===Math.max(...x.valueBets.map(b=>b.ev)))?.decOdds?.toFixed(2)}</div>`
       : '';
@@ -2592,7 +2593,7 @@ function renderTop3Certainty(bets) {
           <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg)} · ${x.date||''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0;">
-          <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${rankColors[i]};line-height:1;">${score}</div>
+          <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${rankColors[i]};line-height:1;">${certScore}</div>
           <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;">SCORE</div>
         </div>
       </div>
