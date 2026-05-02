@@ -212,7 +212,31 @@ function renderBankrollHistory(){
 }
 
 window.exportData=function(){if(!window.scannedMatchesData?.length){showErr("Δεν υπάρχουν δεδομένα.");return;}const blob=new Blob([JSON.stringify(window.scannedMatchesData)],{type:'application/json'});const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:`apex_export_${todayISO()}.json`});a.click();URL.revokeObjectURL(a.href);showOk("Export OK!");};
-window.importData=function(ev){const file=ev.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=e=>{try{const imported=JSON.parse(e.target.result);if(!Array.isArray(imported))throw new Error("Invalid");window.scannedMatchesData=imported;rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();showOk(`Imported ${imported.length} αγώνες.`);}catch{showErr("Σφάλμα αρχείου.");}ev.target.value='';};reader.readAsText(file);};
+window.importData=function(ev){
+  const file=ev.target.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const imported=JSON.parse(e.target.result);
+      if(!Array.isArray(imported))throw new Error("Invalid");
+      window.scannedMatchesData=imported;
+      // Αποθήκευση στο vault + ενημέρωση audit UI
+      saveToVault(imported);
+      rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();
+      // Sync audit: βρες το date range και τα leagues από τα imported data
+      const dates = imported.map(d=>d.m?.fixture?.date?.split('T')[0]).filter(Boolean).sort();
+      const startD = dates[0] || todayISO();
+      const endD   = dates[dates.length-1] || todayISO();
+      syncAuditFromScan(imported, startD, endD);
+      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν. Vault ενημερώθηκε.`);
+    }catch{
+      showErr("Σφάλμα αρχείου.");
+    }
+    ev.target.value='';
+  };
+  reader.readAsText(file);
+};
 
 // ================================================================
 //  MATH / POISSON
