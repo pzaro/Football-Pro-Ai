@@ -536,8 +536,33 @@ async function buildIntel(tId,lg,s,isHome){
       ? stdDev(seaCardsArr)
       : parseFloat(Math.sqrt(seaAvgCards + (seaAvgCards * seaAvgCards) / CARD_OVERDISPERSION).toFixed(2));
 
+    // ── Bayesian regression to season mean ─────────────────────────
+    // Το form xG (από last 6-8 αγώνες) μπορεί να είναι πολύ ακραίο.
+    // Blendάρουμε υποχρεωτικά με τον season average για να αποτρέψουμε
+    // υπερεκτίμηση σε hot/cold streaks.
+    // Weight: n/(n+REG_N) → όσο περισσότερα fixtures, τόσο εμπιστευόμαστε form.
+    // REG_N=8: με 8 αγώνες form = 50% trust, με 20 αγώνες = 71% trust.
+    const REG_N = 8;
+    const formN  = Math.min(fData.goalsArr?.length || 0, 8);
+    const formW  = formN > 0 ? formN / (formN + REG_N) : 0.30;
+    const seaW   = 1 - formW;
+
+    const rawFormXG  = safeNum(fData.xg,  sXG);
+    const rawFormXGA = safeNum(fData.xga, sXGA);
+    // Cap: form xG δεν μπορεί να είναι >2× season avg (outlier protection)
+    const cappedFormXG  = Math.min(rawFormXG,  sXG  * 2.2);
+    const cappedFormXGA = Math.min(rawFormXGA, sXGA * 2.2);
+    const blendedFXG  = formW * cappedFormXG  + seaW * sXG;
+    const blendedFXGA = formW * cappedFormXGA + seaW * sXGA;
+
+    const rawSFormXG = safeNum(sData.xg, sXG);
+    const cappedSXG  = Math.min(rawSFormXG, sXG * 2.2);
+    const blendedSXG = formW * cappedSXG + seaW * sXG;
+
     return{
-      fXG:Math.max(safeNum(fData.xg,sXG),0.80),fXGA:Math.max(safeNum(fData.xga,sXGA),0.80),sXG:Math.max(safeNum(sData.xg,sXG),0.80),
+      fXG:  clamp(blendedFXG,  0.40, 3.50),
+      fXGA: clamp(blendedFXGA, 0.40, 3.50),
+      sXG:  clamp(blendedSXG,  0.40, 3.50),
       formRating:getFormRating(getFormHistory(gen,tId)),
       corRatio:safeNum(fData.corRatio,0.40),cor:safeNum(fData.cor,5.0),corAgainst:safeNum(fData.corAgainst,4.5),
       shotsCor:safeNum(fData.shotsCor,0.22),crd:safeNum(fData.crd,2.0),
@@ -1788,11 +1813,17 @@ function extractValueBets(rec, odds) {
 
   const assess = (market, modelProb, decOdds, label) => {
     if(!decOdds || decOdds <= 1.01 || modelProb <= 0) return;
+    // Sanity check: αν η implied prob του bookmaker είναι < 5% (odds > 20),
+    // η αγορά είναι πολύ ακραία για αξιόπιστο EV — αγνοούμε
     const impliedProb = 1 / decOdds;
-    const ev = modelProb * decOdds - 1;
+    if(impliedProb < 0.05) return;
+    // Αν η διαφορά model vs implied > 40 percentage points,
+    // το μοντέλο πιθανώς υπερεκτιμά — cap στο implied + 25pp max
+    const cappedModelProb = Math.min(modelProb, impliedProb + 0.25);
+    const ev = cappedModelProb * decOdds - 1;
     if(ev < MIN_EV_THRESHOLD) return;
-    const edge = (modelProb - impliedProb) * 100;
-    const kelly = bankroll > 0 ? clamp((modelProb * (decOdds-1) - (1-modelProb)) / (decOdds-1) * KELLY_FRACTION * bankroll, 0, bankroll*0.15) : 0;
+    const edge = (cappedModelProb - impliedProb) * 100;
+    const kelly = bankroll > 0 ? clamp((cappedModelProb * (decOdds-1) - (1-cappedModelProb)) / (decOdds-1) * KELLY_FRACTION * bankroll, 0, bankroll*0.15) : 0;
     bets.push({
       fixId:    rec.fixId,
       match:    `${rec.ht} vs ${rec.at}`,
@@ -1801,7 +1832,7 @@ function extractValueBets(rec, odds) {
       time:     rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
       market,
       label,
-      modelProb: parseFloat((modelProb*100).toFixed(1)),
+      modelProb: parseFloat((cappedModelProb*100).toFixed(1)),
       impliedProb: parseFloat((impliedProb*100).toFixed(1)),
       decOdds: parseFloat(decOdds.toFixed(2)),
       ev:    parseFloat((ev*100).toFixed(2)),
