@@ -76,7 +76,7 @@ let teamStatsCache = new BoundedCache(150),
     liveStatsCache = new BoundedCache(50),
     lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -1118,7 +1118,9 @@ window.runScan=async function(){
     renderBetJournal();
     // Push to Google Sheets (non-blocking)
     pushToSheets(window.scannedMatchesData).catch(()=>{});
-    showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
+    showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες. Φόρτωση αποδόσεων…`);
+    // Auto-fetch odds μετά το scan (non-blocking)
+    window.fetchAllOdds().catch(()=>{});
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
@@ -1686,16 +1688,284 @@ function tickerRefresh(){
 }
 
 // ================================================================
+//  ODDS ENGINE — Αυτόματη άντληση αποδόσεων + Value Bet ranking
+// ================================================================
+
+// Pinnacle bookmaker ID = 8 (sharpest lines, lowest margin)
+// Bet365 = 1, Unibet = 12, William Hill = 6
+const ODDS_BOOKMAKER_ID   = 8;   // Pinnacle
+const ODDS_BOOKMAKER_NAME = 'Pinnacle';
+const MIN_EV_THRESHOLD    = 0.015; // ≥1.5% EV για εμφάνιση στο Value Bets
+let oddsCache = new BoundedCache(150);
+let _oddsLoadedFixtures = new Set(); // αποφυγή διπλής φόρτωσης
+
+async function fetchOddsForFixture(fixtureId) {
+  const k = String(fixtureId);
+  if(oddsCache.has(k)) return oddsCache.get(k);
+  const d = await apiReq(`odds?fixture=${fixtureId}&bookmaker=${ODDS_BOOKMAKER_ID}`);
+  const result = parseOddsResponse(d?.response || []);
+  oddsCache.set(k, result);
+  return result;
+}
+
+/**
+ * Παρσάρει το API odds response και επιστρέφει flat object:
+ * { home, draw, away, over25, under25, over35, under35, bttsY, bttsN }
+ * Αποδόσεις σε decimal format, null αν δεν υπάρχουν.
+ */
+function parseOddsResponse(response) {
+  const out = { home:null, draw:null, away:null, over25:null, under25:null, over35:null, under35:null, bttsY:null, bttsN:null };
+  if(!response?.length) return out;
+
+  const bk = response[0]?.bookmakers?.[0];
+  if(!bk) return out;
+
+  bk.bets?.forEach(bet => {
+    const name = bet.name?.toLowerCase() || '';
+    // 1X2
+    if(name.includes('match winner') || name.includes('match result')) {
+      bet.values?.forEach(v => {
+        const val = v.value?.toLowerCase();
+        const odd = parseFloat(v.odd);
+        if(isNaN(odd)) return;
+        if(val === 'home')      out.home = odd;
+        else if(val === 'draw') out.draw = odd;
+        else if(val === 'away') out.away = odd;
+      });
+    }
+    // Over/Under Goals
+    if(name.includes('goals over/under') || name.includes('over/under')) {
+      bet.values?.forEach(v => {
+        const val  = v.value?.toLowerCase() || '';
+        const odd  = parseFloat(v.odd);
+        if(isNaN(odd)) return;
+        if(val.includes('over 2.5'))       out.over25  = odd;
+        else if(val.includes('under 2.5')) out.under25 = odd;
+        else if(val.includes('over 3.5'))  out.over35  = odd;
+        else if(val.includes('under 3.5')) out.under35 = odd;
+      });
+    }
+    // BTTS
+    if(name.includes('both teams to score') || name.includes('btts')) {
+      bet.values?.forEach(v => {
+        const val = v.value?.toLowerCase();
+        const odd = parseFloat(v.odd);
+        if(isNaN(odd)) return;
+        if(val === 'yes')     out.bttsY = odd;
+        else if(val === 'no') out.bttsN = odd;
+      });
+    }
+  });
+  return out;
+}
+
+/**
+ * Για ένα record (post-analyzeMatchSafe) και τις αποδόσεις bookmaker:
+ * Υπολογίζει EV% για κάθε αγορά και επιστρέφει array value bets.
+ */
+function extractValueBets(rec, odds) {
+  if(!rec?.pp || !odds) return [];
+  const { pp, hXGfinal, aXGfinal, cornerConf, strength, omegaPick } = rec;
+  const bankroll = bankrollData.current || 0;
+  const bets = [];
+
+  const assess = (market, modelProb, decOdds, label) => {
+    if(!decOdds || decOdds <= 1.01 || modelProb <= 0) return;
+    const impliedProb = 1 / decOdds;
+    const ev = modelProb * decOdds - 1;
+    if(ev < MIN_EV_THRESHOLD) return;
+    const edge = (modelProb - impliedProb) * 100;
+    const kelly = bankroll > 0 ? clamp((modelProb * (decOdds-1) - (1-modelProb)) / (decOdds-1) * KELLY_FRACTION * bankroll, 0, bankroll*0.15) : 0;
+    bets.push({
+      fixId:    rec.fixId,
+      match:    `${rec.ht} vs ${rec.at}`,
+      lg:       rec.lg,
+      date:     rec.m?.fixture?.date?.split('T')[0] || '',
+      time:     rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
+      market,
+      label,
+      modelProb: parseFloat((modelProb*100).toFixed(1)),
+      impliedProb: parseFloat((impliedProb*100).toFixed(1)),
+      decOdds: parseFloat(decOdds.toFixed(2)),
+      ev:    parseFloat((ev*100).toFixed(2)),
+      edge:  parseFloat(edge.toFixed(1)),
+      kelly: parseFloat(kelly.toFixed(2)),
+      omegaPick,
+      pickConf: strength || 0,
+      bookmaker: ODDS_BOOKMAKER_NAME,
+    });
+  };
+
+  assess('1X2',      pp.pHome,  odds.home,    'ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ');
+  assess('1X2',      pp.pDraw,  odds.draw,    'ΙΣΟΠΑΛΙΑ');
+  assess('1X2',      pp.pAway,  odds.away,    'ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ');
+  assess('Πάνω 2.5', pp.pO25,   odds.over25,  'ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ');
+  assess('Κάτω 2.5', pp.pU25,   odds.under25, 'ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ');
+  assess('Πάνω 3.5', pp.pO35,   odds.over35,  'ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ');
+  assess('Κάτω 3.5', 1-pp.pO35, odds.under35, 'ΚΑΤΩ ΑΠΟ 3.5 ΓΚΟΛ');
+  assess('ΓΓ',       pp.pBTTS,  odds.bttsY,   'ΓΚΟΛ/ΓΚΟΛ (ΝΑΙ)');
+  assess('ΌΧΙ ΓΓ',  1-pp.pBTTS,odds.bttsN,   'ΓΚΟΛ/ΓΚΟΛ (ΟΧΙ)');
+
+  return bets;
+}
+
+/**
+ * Φέρνει odds για όλους τους αγώνες του scan (parallel, με rate limit)
+ * και ενημερώνει τα records + latestTopLists.valueBets
+ */
+window.fetchAllOdds = async function() {
+  const sd = window.scannedMatchesData || [];
+  if(!sd.length) { showErr('Εκτελέστε πρώτα scan.'); return; }
+
+  const btn = document.getElementById('btnFetchOdds');
+  if(btn) { btn.disabled = true; btn.textContent = '⏳ Φόρτωση Αποδόσεων…'; }
+  setLoader(true, `Φόρτωση αποδόσεων ${ODDS_BOOKMAKER_NAME}…`);
+
+  let loaded = 0;
+  const total = sd.length;
+
+  try {
+    // Φόρτωση σε batches των 5 για rate limit
+    const BATCH = 5;
+    for(let i = 0; i < sd.length; i += BATCH) {
+      const batch = sd.slice(i, i + BATCH);
+      await Promise.all(batch.map(async rec => {
+        try {
+          if(_oddsLoadedFixtures.has(rec.fixId)) { loaded++; return; }
+          const odds = await fetchOddsForFixture(rec.fixId);
+          rec.odds = odds;
+          rec.valueBets = extractValueBets(rec, odds);
+          _oddsLoadedFixtures.add(rec.fixId);
+          loaded++;
+          setProgress((loaded/total)*100, `Αποδόσεις: ${loaded}/${total} αγώνες`);
+        } catch { loaded++; }
+      }));
+    }
+
+    // Rebuild value bets list
+    buildValueBetsList();
+    renderTopSections();
+    showOk(`✅ Αποδόσεις φορτώθηκαν — ${loaded} αγώνες · ${ODDS_BOOKMAKER_NAME}`);
+  } catch(e) {
+    showErr('Σφάλμα φόρτωσης αποδόσεων: ' + e.message);
+  } finally {
+    setLoader(false);
+    if(btn) { btn.disabled = false; btn.textContent = '💰 Αποδόσεις'; }
+  }
+};
+
+function buildValueBetsList() {
+  const sd = window.scannedMatchesData || [];
+  const allBets = [];
+  sd.forEach(rec => {
+    if(rec.valueBets?.length) allBets.push(...rec.valueBets);
+  });
+  // Ταξινόμηση κατά EV% DESC → top 10
+  latestTopLists.valueBets = allBets
+    .sort((a, b) => b.ev - a.ev)
+    .slice(0, 10);
+}
+
+function renderValueBetsTab(bets) {
+  if(!bets?.length) {
+    return `<div style="text-align:center;color:var(--text-muted);padding:30px 20px;">
+      <div style="font-size:2rem;margin-bottom:10px;">💰</div>
+      <div style="font-weight:700;margin-bottom:6px;">Δεν υπάρχουν Value Bets ακόμα</div>
+      <div style="font-size:0.82rem;">Πατήστε <b>Αποδόσεις</b> για φόρτωση από ${ODDS_BOOKMAKER_NAME}</div>
+    </div>`;
+  }
+
+  const rows = bets.map((b, i) => {
+    const rankColors = ['var(--accent-gold)', 'rgba(192,192,192,0.9)', 'rgba(205,127,50,0.9)'];
+    const rankCol    = rankColors[i] || 'var(--text-dim)';
+    const evColor    = b.ev >= 5 ? 'var(--accent-green)' : b.ev >= 2.5 ? 'var(--accent-teal)' : 'var(--accent-blue)';
+    const edgeColor  = b.edge >= 8 ? 'var(--accent-green)' : b.edge >= 4 ? 'var(--accent-gold)' : 'var(--text-muted)';
+    const kellyStr   = b.kelly > 0 ? `€${b.kelly.toFixed(0)}` : '—';
+    const marketBadgeColor = b.market.includes('1X2') ? 'var(--accent-blue)' :
+                             b.market.includes('Πάνω') ? 'var(--accent-green)' :
+                             b.market.includes('Κάτω') ? 'var(--accent-teal)' : 'var(--accent-gold)';
+
+    return `
+    <div onclick="scrollToMatch('row-${b.fixId}')" style="display:flex;align-items:stretch;gap:0;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;overflow:hidden;transition:border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border-light)'">
+
+      <!-- Rank -->
+      <div style="display:flex;align-items:center;justify-content:center;min-width:44px;background:rgba(255,255,255,0.03);border-right:1px solid var(--border-light);font-family:var(--font-mono);font-size:1.1rem;font-weight:900;color:${rankCol};">#${i+1}</div>
+
+      <!-- Match info -->
+      <div style="flex:1;padding:12px 14px;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+          <span style="font-size:0.6rem;font-weight:800;color:${marketBadgeColor};background:${marketBadgeColor}18;border:1px solid ${marketBadgeColor}33;border-radius:4px;padding:1px 7px;white-space:nowrap;">${esc(b.market)}</span>
+          <span style="font-size:0.65rem;color:var(--text-muted);">${esc(b.lg)}</span>
+          <span style="font-size:0.65rem;color:var(--text-dim);">${b.date} ${b.time}</span>
+        </div>
+        <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(b.match)}</div>
+        <div style="font-size:0.8rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(b.label)}</div>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:0.68rem;color:var(--text-muted);flex-wrap:wrap;">
+          <span>Μοντέλο: <strong style="color:var(--text-main);">${b.modelProb}%</strong></span>
+          <span>Implied: <strong>${b.impliedProb}%</strong></span>
+          <span>Edge: <strong style="color:${edgeColor};">+${b.edge}%</strong></span>
+          <span style="font-size:0.62rem;color:var(--text-dim);">via ${b.bookmaker}</span>
+        </div>
+      </div>
+
+      <!-- Metrics -->
+      <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;padding:12px 16px;gap:6px;min-width:130px;border-left:1px solid var(--border-light);">
+        <div style="text-align:right;">
+          <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;">Απόδοση</div>
+          <div style="font-family:var(--font-mono);font-size:1.5rem;font-weight:900;color:var(--text-main);line-height:1.1;">${b.decOdds.toFixed(2)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;">EV%</div>
+          <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:900;color:${evColor};">+${b.ev.toFixed(1)}%</div>
+        </div>
+        ${b.kelly > 0 ? `
+        <div style="text-align:right;">
+          <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;">Kelly (25%)</div>
+          <div style="font-family:var(--font-mono);font-size:0.9rem;font-weight:800;color:var(--accent-gold);">${kellyStr}</div>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Summary stats
+  const totalEV = bets.reduce((s, b) => s + b.ev, 0);
+  const avgEV   = bets.length ? (totalEV / bets.length).toFixed(1) : 0;
+  const topBet  = bets[0];
+
+  return `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;">
+      <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:10px;text-align:center;">
+        <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:3px;">Top EV%</div>
+        <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:var(--accent-green);">+${topBet?.ev.toFixed(1)||0}%</div>
+      </div>
+      <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:10px;text-align:center;">
+        <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:3px;">Μέσος EV%</div>
+        <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:var(--accent-teal);">+${avgEV}%</div>
+      </div>
+      <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:10px;text-align:center;">
+        <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:3px;">Bookmaker</div>
+        <div style="font-size:0.9rem;font-weight:900;color:var(--text-main);">${ODDS_BOOKMAKER_NAME}</div>
+      </div>
+    </div>
+    <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;">
+      💡 <strong>Value Bet</strong> = αγορά όπου η πιθανότητα του μοντέλου είναι υψηλότερη από την implied probability του bookmaker. EV ≥ +${(MIN_EV_THRESHOLD*100).toFixed(0)}% για εμφάνιση.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>`;
+}
+
+// ================================================================
 //  TOP LISTS & TABS
 // ================================================================
 function rebuildTopLists(){
   const sd = (window.scannedMatchesData||[]).filter(x => !isFinished(x.m?.fixture?.status?.short));
   latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
-  latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
+  latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΝΙΚΗ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
-  latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('OVER 2.5')).sort((a,b)=>b.strength-a.strength).slice(0,6);
+  latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('ΠΑΝΩ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
-  // 👥 PLAYERS — flatten all players, enrich with match context
+  // Build value bets from existing odds data
+  buildValueBetsList();
+  // 👥 PLAYERS
   const seen = new Set();
   const allP  = [];
   sd.forEach(d => {
@@ -1712,34 +1982,52 @@ function rebuildTopLists(){
 }
 
 function renderTopSections(){
+  if(!latestTopLists.valueBets) latestTopLists.valueBets = [];
+  const vbCount = latestTopLists.valueBets.length;
   const tabs=[
-    {id:'combo1',  lbl:`⚡ Top Picks (${acr('1X2')}/${acr('AH')})`, d:latestTopLists.combo1,  sk:'strength',   sl:'CONF'},
-    {id:'outcomes',lbl:'Match Odds',                                   d:latestTopLists.outcomes,sk:'strength',   sl:'CONF'},
-    {id:'over25',  lbl:`${acr('O2.5')}`,                              d:latestTopLists.over25,  sk:'tXG',        sl:acr('xG')},
-    {id:'corners', lbl:'🚩 Top Corners',                               d:latestTopLists.corners, sk:'cornerConf', sl:'CONF'},
-    {id:'exact',   lbl:`Exact (${acr('D-C')})`,                       d:latestTopLists.exact,   sk:'exactConf',  sl:'CONF'},
-    {id:'players', lbl:'👥 Players',                                   d:latestTopLists.players, sk:null,         sl:null}
+    {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
+    {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
+    {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
+    {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
+    {id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'},
+    {id:'exact',    lbl:`🎯 Ακριβές`,                                      d:latestTopLists.exact,      sk:'exactConf',  sl:'CONF'},
+    {id:'players',  lbl:'👥 Παίκτες',                                      d:latestTopLists.players,    sk:null,         sl:null}
   ];
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
-  tabs.forEach((tab,i)=>{html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}">${tab.lbl} <span class="tab-count">${tab.d.length}</span></button>`;});
+  tabs.forEach((tab,i)=>{
+    const isVB = tab.id==='valuebets';
+    const badge = isVB && vbCount > 0
+      ? `<span style="background:var(--accent-green);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${vbCount}</span>`
+      : `<span class="tab-count">${tab.d.length}</span>`;
+    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':''}">${tab.lbl} ${badge}</button>`;
+  });
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
     if(tab.id==='players'){
       html += renderPlayersTab(tab.d);
+    } else if(tab.id==='valuebets'){
+      html += renderValueBetsTab(tab.d);
     } else if(!tab.d.length){
       html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
     } else {
       html+=`<div style="display:flex;flex-direction:column;gap:10px;">`;
       tab.d.forEach((x,j)=>{
-        let val=tab.id==='exact'?(x.exact||'?-?')+(x.exact2&&x.exact2!==x.exact?` / ${x.exact2}`:''):Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
+        const isVBrec = !!x.ev;
+        let val = tab.id==='exact'
+          ? (x.exact||'?-?')+(x.exact2&&x.exact2!==x.exact?` / ${x.exact2}`:'')
+          : Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
+        const evBadge = x.ev > 0
+          ? `<div style="font-size:0.68rem;color:var(--accent-green);font-weight:700;margin-top:2px;">EV: +${x.ev.toFixed(1)}% @ ${x.odds?.toFixed(2)||''}</div>`
+          : '';
         html+=`<div onclick="scrollToMatch('row-${x.fixId}')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.18s;">
           <div style="font-family:var(--font-mono);font-size:1.2rem;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
           <div style="flex:1;min-width:0;">
             <div style="font-weight:700;font-size:1.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
             <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;margin-top:4px;">${esc(x.lg)}</div>
             <div style="font-size:0.85rem;color:var(--accent-green);font-weight:600;margin-top:4px;">${esc(x.omegaPick)}</div>
+            ${evBadge}
           </div>
           <div style="text-align:right;flex-shrink:0;">
             <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:800;color:var(--accent-blue);">${val}</div>
