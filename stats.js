@@ -623,22 +623,36 @@ function getLeagueParams(leagueId){
 }
 
 // 🎯 PLAYER PROPS MODEL
-function calculateScorerProb(leagueScorers, teamId, teamLambdaXG, teamTotalGoals) {
-  if(!leagueScorers || leagueScorers.length === 0) return null;
-  const playerInfo = leagueScorers.find(p => p.statistics.some(s => String(s.team.id) === String(teamId)));
-  if(!playerInfo) return null;
-  
-  const pStat = playerInfo.statistics.find(s => String(s.team.id) === String(teamId));
-  const playerGoals = pStat?.goals?.total || 0;
+// 🎯 PLAYER PROPS MODEL (Dynamic Fallback to Next Best Scorer)
+function calculateScorerProb(leagueScorers, teamId, teamLambdaXG, teamTotalGoals, teamProfiles) {
+  if(!leagueScorers || leagueScorers.length === 0 || !teamProfiles || teamProfiles.length === 0) return null;
+
+  // Βρίσκουμε τον καλύτερο ΔΙΑΘΕΣΙΜΟ παίκτη από το profile του
+  // Διαθέσιμος = ΔΕΝ είναι τραυματίας ΚΑΙ (αν έχουμε lineup) ΕΙΝΑΙ στην ενδεκάδα
+  const availablePlayers = teamProfiles.filter(p => {
+    if(p.inXI !== undefined) return p.inXI === true && !p.injured;
+    return !p.injured;
+  });
+
+  if(!availablePlayers.length) return null;
+
+  const topAvailable = availablePlayers[0];
+  const playerGoals = topAvailable.goals || 0;
+
   if(playerGoals === 0) return null;
 
   let contribution = 0.30;
   if(teamTotalGoals > 0) contribution = Math.min(playerGoals / teamTotalGoals, 0.70);
-  
+
   const playerXG = teamLambdaXG * contribution;
   const prob = (1 - Math.exp(-playerXG)) * 100;
-  
-  return { name: playerInfo.player.name, goals: playerGoals, photo: playerInfo.player.photo, prob: prob };
+
+  return {
+    name: topAvailable.name,
+    goals: playerGoals,
+    photo: topAvailable.photo,
+    prob: prob
+  };
 }
 
 // ── Advanced Corner Model ─────────────────────────────────────────────────────
@@ -1098,8 +1112,8 @@ async function analyzeMatchSafe(m,index,total){
     adjustPlayerCardProbs(hPlayers, aS, cardCtx); // home team players: opponent = away stats
     adjustPlayerCardProbs(aPlayers, hS, cardCtx); // away team players: opponent = home stats
     
-    const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason);
-    const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason);
+    const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason, hPlayers);
+    const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason, aPlayers);
 
     let actStats = null;
     if (isFinished(m.fixture.status.short)) {
@@ -2048,6 +2062,20 @@ function rebuildTopLists(){
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
   // Build value bets from existing odds data
   buildValueBetsList();
+
+  // ── Σίγουρη Τριάδα: multi-factor certainty score ──────────────────
+  const scored = sd.filter(x => x.omegaPick && !x.omegaPick.includes('ΧΩΡΙΣ')).map(x => {
+    const pickProb   = x.strength || 0;
+    const hStab      = x.hS?.r6?.sdGoals < 1.10*0.75 ? 15 : x.hS?.r6?.sdGoals < 1.10*1.10 ? 5 : 0;
+    const aStab      = x.aS?.r6?.sdGoals < 1.10*0.75 ? 15 : x.aS?.r6?.sdGoals < 1.10*1.10 ? 5 : 0;
+    const lineupBonus = x.lineupData?.available ? 8 : 0;
+    const injPenalty  = ((x.hInjAdj?.delta||0) + (x.aInjAdj?.delta||0)) * -20;
+    const hCons       = Math.abs((x.hS?.fXG||1.2) - (x.hS?.sea?.avgGoals||1.2)) < 0.3 ? 8 : 0;
+    const aCons       = Math.abs((x.aS?.fXG||1.2) - (x.aS?.sea?.avgGoals||1.2)) < 0.3 ? 8 : 0;
+    return { ...x, _certaintyScore: Math.round(pickProb + hStab + aStab + lineupBonus + injPenalty + hCons + aCons) };
+  });
+  latestTopLists.top3Certainty = scored.sort((a,b) => b._certaintyScore - a._certaintyScore).slice(0, 3);
+
   // 👥 PLAYERS
   const seen = new Set();
   const allP  = [];
@@ -2069,6 +2097,7 @@ function renderTopSections(){
   const vbCount = latestTopLists.valueBets.length;
   const tabs=[
     {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
+    {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
     {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
@@ -2079,11 +2108,14 @@ function renderTopSections(){
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
   tabs.forEach((tab,i)=>{
-    const isVB = tab.id==='valuebets';
+    const isVB  = tab.id==='valuebets';
+    const isTop = tab.id==='top3';
     const badge = isVB && vbCount > 0
       ? `<span style="background:var(--accent-green);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${vbCount}</span>`
-      : `<span class="tab-count">${tab.d.length}</span>`;
-    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':''}">${tab.lbl} ${badge}</button>`;
+      : isTop
+        ? `<span style="background:var(--accent-gold);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">3</span>`
+        : `<span class="tab-count">${tab.d.length}</span>`;
+    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':isTop?'color:var(--accent-gold);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
   });
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
@@ -2092,29 +2124,33 @@ function renderTopSections(){
       html += renderPlayersTab(tab.d);
     } else if(tab.id==='valuebets'){
       html += renderValueBetsTab(tab.d);
+    } else if(tab.id==='top3'){
+      html += renderTop3Certainty(tab.d);
     } else if(!tab.d.length){
       html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
     } else {
       html+=`<div style="display:flex;flex-direction:column;gap:10px;">`;
       tab.d.forEach((x,j)=>{
-        const isVBrec = !!x.ev;
         let val = tab.id==='exact'
           ? (x.exact||'?-?')+(x.exact2&&x.exact2!==x.exact?` / ${x.exact2}`:'')
           : Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
         const evBadge = x.ev > 0
           ? `<div style="font-size:0.68rem;color:var(--accent-green);font-weight:700;margin-top:2px;">EV: +${x.ev.toFixed(1)}% @ ${x.odds?.toFixed(2)||''}</div>`
           : '';
-        html+=`<div onclick="scrollToMatch('row-${x.fixId}')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.18s;">
-          <div style="font-family:var(--font-mono);font-size:1.2rem;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:700;font-size:1.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
-            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;margin-top:4px;">${esc(x.lg)}</div>
-            <div style="font-size:0.85rem;color:var(--accent-green);font-weight:600;margin-top:4px;">${esc(x.omegaPick)}</div>
+        html+=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);transition:border-color 0.18s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border-light)'">
+          <div style="font-family:var(--font-mono);font-size:1.1rem;color:var(--text-dim);min-width:28px;text-align:center;flex-shrink:0;">#${j+1}</div>
+          <div style="flex:1;min-width:0;cursor:pointer;" onclick="scrollToMatch('row-${x.fixId}')">
+            <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;margin-top:3px;">${esc(x.lg)}</div>
+            <div style="font-size:0.82rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(x.omegaPick)}</div>
             ${evBadge}
           </div>
-          <div style="text-align:right;flex-shrink:0;">
-            <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:800;color:var(--accent-blue);">${val}</div>
-            <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;">${tab.sl}</div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">
+            <div style="text-align:right;">
+              <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:800;color:var(--accent-blue);">${val}</div>
+              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;">${tab.sl}</div>
+            </div>
+            <button onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="font-size:0.65rem;padding:3px 8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:4px;cursor:pointer;white-space:nowrap;" title="Άνοιγμα ανάλυσης">📊 Ανάλυση</button>
           </div>
         </div>`;
       });
@@ -2243,6 +2279,87 @@ function renderPlayersTab(players) {
 
 window.switchTab=function(id){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelectorAll('.pred-tab-panel').forEach(p=>p.style.display='none');document.getElementById('tab-btn-'+id)?.classList.add('active');const panel=document.getElementById('tabpanel-'+id);if(panel)panel.style.display='block';};
 window.scrollToMatch=function(id){const el=document.getElementById(id);if(!el)return;el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='2px solid var(--accent-blue)';setTimeout(()=>el.style.outline='',2000);};
+
+// Scroll + αυτόματο άνοιγμα accordion
+window.scrollToMatchAndOpen=function(id){
+  const el=document.getElementById(id);if(!el)return;
+  // Αν υπάρχει κουμπί "▼" στο row, το πατάμε
+  const toggler = el.querySelector?.('.row-toggle') || document.querySelector(`[data-rowtoggle="${id}"]`);
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.style.outline='2px solid var(--accent-gold)';
+  setTimeout(()=>{
+    // Βρίσκουμε το TR και κάνουμε click αν δεν είναι ανοιχτό
+    if(toggler && typeof toggler.click==='function') toggler.click();
+    else { const btn=el.querySelector('button[onclick*="toggleRow"]'); if(btn) btn.click(); }
+    setTimeout(()=>el.style.outline='',2500);
+  },400);
+};
+
+function renderTop3Certainty(bets) {
+  if(!bets?.length) return `<div style="text-align:center;color:var(--text-muted);padding:30px;"><div style="font-size:2rem;margin-bottom:8px;">🥇</div><div>Εκτελέστε scan για να εμφανιστεί η Σίγουρη Τριάδα.</div></div>`;
+  const rankEmoji = ['🥇','🥈','🥉'];
+  const rankColors = ['var(--accent-gold)','rgba(192,192,192,0.9)','rgba(205,127,50,0.9)'];
+  return `
+  <div style="margin-bottom:12px;padding:10px 14px;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:0.75rem;color:var(--text-muted);">
+    🎯 <strong style="color:var(--accent-gold);">Σίγουρη Τριάδα</strong> — Οι 3 αγώνες με το υψηλότερο συνδυαστικό σκορ βεβαιότητας (model strength + σταθερότητα + lineup + consistency).
+  </div>
+  <div style="display:flex;flex-direction:column;gap:14px;">
+  ${bets.map((x,i) => {
+    const score = x._certaintyScore || 0;
+    // Stability breakdown
+    const hStab = x.hS?.r6?.sdGoals != null ? (x.hS.r6.sdGoals < 0.83 ? '✅ STABLE' : x.hS.r6.sdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE') : '—';
+    const aStab = x.aS?.r6?.sdGoals != null ? (x.aS.r6.sdGoals < 0.83 ? '✅ STABLE' : x.aS.r6.sdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE') : '—';
+    const hasLineup = x.lineupData?.available;
+    const hasInj = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
+    const evLine = x.valueBets?.length
+      ? `<div style="font-size:0.72rem;color:var(--accent-green);font-weight:700;margin-top:4px;">💰 Value: +${Math.max(...x.valueBets.map(b=>b.ev)).toFixed(1)}% EV @ ${x.valueBets.find(b=>b.ev===Math.max(...x.valueBets.map(b=>b.ev)))?.decOdds?.toFixed(2)}</div>`
+      : '';
+    return `
+    <div style="background:var(--bg-base);border:2px solid ${rankColors[i]};border-radius:var(--radius-md);overflow:hidden;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,${rankColors[i]}18,transparent);padding:14px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div style="font-size:2rem;flex-shrink:0;">${rankEmoji[i]}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:800;font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} vs ${esc(x.at)}</div>
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg)} · ${x.date||''}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${rankColors[i]};line-height:1;">${score}</div>
+          <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;">SCORE</div>
+        </div>
+      </div>
+      <!-- Pick -->
+      <div style="padding:10px 16px;border-top:1px solid var(--border-light);">
+        <div style="font-size:1rem;font-weight:800;color:var(--accent-green);">${esc(x.omegaPick)}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">${esc(x.reason||'')}</div>
+        ${evLine}
+      </div>
+      <!-- Factors -->
+      <div style="padding:10px 16px;border-top:1px solid var(--border-light);display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.7rem;">
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <span style="color:var(--text-muted);">Conf: </span><span style="font-family:var(--font-mono);color:var(--accent-blue);font-weight:700;">${(x.strength||0).toFixed(1)}%</span>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <span style="color:var(--text-muted);">tXG: </span><span style="font-family:var(--font-mono);color:var(--text-main);font-weight:700;">${Number(x.tXG||0).toFixed(2)}</span>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <span style="color:var(--text-muted);">🏠 Σταθ.: </span><span style="font-weight:600;">${hStab}</span>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <span style="color:var(--text-muted);">✈️ Σταθ.: </span><span style="font-weight:600;">${aStab}</span>
+        </div>
+        ${hasLineup ? `<div style="background:rgba(45,212,191,0.1);border-radius:5px;padding:6px 8px;color:var(--accent-teal);font-weight:700;">📋 Lineup ✓</div>` : ''}
+        ${hasInj    ? `<div style="background:rgba(244,63,94,0.1);border-radius:5px;padding:6px 8px;color:var(--accent-red);font-weight:700;">🏥 Τραυματίας</div>` : ''}
+      </div>
+      <!-- Actions -->
+      <div style="padding:10px 16px;border-top:1px solid var(--border-light);display:flex;gap:8px;flex-wrap:wrap;">
+        <button onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="flex:1;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📊 Πλήρης Ανάλυση</button>
+        <button onclick="window.openLogBetModal('${x.fixId}')" style="flex:1;padding:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--accent-green);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Log Bet</button>
+      </div>
+    </div>`;
+  }).join('')}
+  </div>`;
+}
 
 // ================================================================
 //  SUMMARY TABLE (ACTIVE) & POST-MATCH (FINISHED)
@@ -2814,7 +2931,7 @@ function renderVolatilityPanel(hS,aS,ht,at){
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${gV.col};">${fmt(r6.sdGoals)}</div><div style="font-size:0.58rem;font-weight:700;color:${gV.col};">${gV.lbl}</div></div>
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Season · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdGoals)}</div><div style="font-size:0.58rem;color:var(--text-muted);">n=${sea.n||'?'}</div></div>
       </div>
-      <div style="margin-bottom:10px;">${miniSparkline(r6.goalsArr,col)}<div style="font-size:0.58rem;color:var(--text-muted);margin-top:2px;">Γκολ ανά αγώνα (last ${r6.goalsArr?.length||0})</div></div>
+      <div style="margin-bottom:10px;">${miniSparkline(r6.goalsArr,col)}<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;"><span style="font-size:0.58rem;color:var(--text-muted);">Γκολ ανά αγώνα (last ${r6.goalsArr?.length||0})</span><span style="font-size:0.62rem;font-family:var(--font-mono);color:${col};">${r6.goalsArr?.length?r6.goalsArr.join(' · '):''}</span></div></div>
       <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Γκολ Δεχόμενα</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${gaV.col};">${fmt(r6.sdGoalsAgainst)}</div><div style="font-size:0.58rem;font-weight:700;color:${gaV.col};">${gaV.lbl}</div></div>
@@ -2825,13 +2942,13 @@ function renderVolatilityPanel(hS,aS,ht,at){
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${cV.col};">${fmt(r6.sdCorners)}</div><div style="font-size:0.58rem;font-weight:700;color:${cV.col};">${cV.lbl}</div></div>
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Σεζόν · σ <span style="color:${sea.sdCornersSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};font-size:0.5rem;">${sea.sdCornersSource==='empirical'?'●emp':'●th'}</span></div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCorners)}</div><div style="font-size:0.55rem;color:var(--text-dim);">μ=${fmt(sea.avgCorners)}</div></div>
       </div>
-      <div style="margin-bottom:10px;">${miniSparkline(r6.cornersArr,'var(--accent-teal)')}<div style="font-size:0.58rem;color:var(--text-muted);margin-top:2px;">Κόρνερ ανά αγώνα (last ${r6.cornersArr?.length||0})</div></div>
+      <div style="margin-bottom:10px;">${miniSparkline(r6.cornersArr,'var(--accent-teal)')}<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;"><span style="font-size:0.58rem;color:var(--text-muted);">Κόρνερ ανά αγώνα (last ${r6.cornersArr?.length||0})</span><span style="font-size:0.62rem;font-family:var(--font-mono);color:var(--accent-teal);">${r6.cornersArr?.length?r6.cornersArr.map(v=>Number(v).toFixed(0)).join(' · '):''}</span></div></div>
       <div style="font-size:0.62rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Κάρτες</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Last 6 · σ</div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:${cdV.col};">${fmt(r6.sdCards)}</div><div style="font-size:0.58rem;font-weight:700;color:${cdV.col};">${cdV.lbl}</div></div>
         <div style="background:var(--bg-surface);border-radius:6px;padding:8px;"><div style="font-size:0.58rem;color:var(--text-muted);margin-bottom:2px;">Σεζόν · σ <span style="color:${sea.sdCardsSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};font-size:0.5rem;">${sea.sdCardsSource==='empirical'?'●emp':'●th'}</span></div><div style="font-size:1.1rem;font-weight:900;font-family:var(--font-mono);color:var(--text-main);">${fmt(sea.sdCards)}</div><div style="font-size:0.55rem;color:var(--text-dim);">μ=${fmt(sea.avgCards)}</div></div>
       </div>
-      <div>${miniSparkline(r6.cardsArr,'var(--accent-gold)')}<div style="font-size:0.58rem;color:var(--text-muted);margin-top:2px;">Κάρτες ανά αγώνα (last ${r6.cardsArr?.length||0})</div></div>
+      <div>${miniSparkline(r6.cardsArr,'var(--accent-gold)')}<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;"><span style="font-size:0.58rem;color:var(--text-muted);">Κάρτες ανά αγώνα (last ${r6.cardsArr?.length||0})</span><span style="font-size:0.62rem;font-family:var(--font-mono);color:var(--accent-gold);">${r6.cardsArr?.length?r6.cardsArr.map(v=>Number(v).toFixed(0)).join(' · '):''}</span></div></div>
     </div>`;
   };
   const hSdG=hr6.sdGoals,aSdG=ar6.sdGoals;
