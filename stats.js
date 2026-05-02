@@ -3691,12 +3691,27 @@ window.runCustomAudit = async function(autoMode = false) {
     return;
   }
 
-  // ── Αυτόματο date range: όλες οι ημερομηνίες στο vault ──────
-  let s, e;
+  // ── Αυτόματο date range: παλιές ημερομηνίες στο vault ──────
+  let s, e, leagueIds = [];
   if(autoMode) {
-    const dates = store.map(x => x.date?.split('T')[0]).filter(Boolean).sort();
+    // Παίρνουμε μόνο records από παλιότερες ημέρες (όχι σήμερα — δεν έχουν τελειώσει)
+    const todayStr = new Date().toISOString().split('T')[0];
+    const pastRecs = store.filter(x => {
+      const d = (x.date || '').split('T')[0];
+      return d && d < todayStr;
+    });
+
+    if(!pastRecs.length) {
+      // Δεν υπάρχουν παλιοί αγώνες — audit θα τρέξει άδειο, skip
+      isRunning = false; setBtnsDisabled(false); setLoader(false);
+      return;
+    }
+
+    const dates = pastRecs.map(x => x.date.split('T')[0]).sort();
     s = dates[0];
     e = dates[dates.length - 1];
+    leagueIds = [...new Set(pastRecs.map(x => x.leagueId).filter(Boolean))];
+
     // Ενημέρωση UI
     const asEl = document.getElementById('auditStart');
     const aeEl = document.getElementById('auditEnd');
@@ -3713,14 +3728,21 @@ window.runCustomAudit = async function(autoMode = false) {
   document.getElementById('auditSection').innerHTML = '';
 
   try {
-    const endD = new Date(e); endD.setDate(endD.getDate() + 1);
+
     const lgFilter = document.getElementById('auditLeague')?.value || 'ALL';
 
     let cands = store.filter(x => {
-      const d = new Date(x.date?.split('T')[0] || x.date);
-      return d >= new Date(s) && d < endD;
+      const d = (x.date || '').split('T')[0];
+      if(!d) return false;
+      return d >= s && d <= e;
     });
-    if(lgFilter !== 'ALL') cands = cands.filter(x => String(x.leagueId) === lgFilter);
+
+    // Σε autoMode: φίλτρο πρωταθλημάτων από το τρέχον scan
+    if(autoMode && leagueIds.length > 0) {
+      cands = cands.filter(x => leagueIds.includes(x.leagueId));
+    } else if(lgFilter !== 'ALL') {
+      cands = cands.filter(x => String(x.leagueId) === lgFilter);
+    }
 
     if(!cands.length) {
       document.getElementById('auditSection').innerHTML =
