@@ -2383,15 +2383,73 @@ function buildAccordionHTML(x) {
           <div style="width:${Math.round(li.pNextHome*100)}%;background:var(--accent-gold);"></div>
           <div style="width:${Math.round(li.pNextAway*100)}%;background:var(--accent-blue);"></div>
         </div>
-      </div>
-    </div>` : '';
+     </div>
+    </div>` : '';
 
-  return `
-    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
-      <div class="accordion-grid">
+  // ─── ⚡ AI FINAL VERDICT PANEL ───────────────────────────────────
+  const hCrdExp = x.hS?.crd || 2.1;
+  const aCrdExp = x.aS?.crd || 2.1;
+  const totalCrd = hCrdExp + aCrdExp;
+  
+  const hCorExpBase = x.hS?.cor || 4.8;
+  const aCorExpBase = x.aS?.cor || 4.8;
+  const hCorShare = hCorExpBase / (hCorExpBase + aCorExpBase);
+  const hProjCor = (x.expCor || 0) * hCorShare;
+  const aProjCor = (x.expCor || 0) * (1 - hCorShare);
 
-        <div class="accordion-card">
-          <h4>Home vs Away Breakdown</h4>
+  const finalVerdictCard = `
+    <div class="accordion-card" style="grid-column: 1 / -1; border-color: var(--accent-blue); background: linear-gradient(135deg, rgba(56,189,248,0.08), transparent); box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+      <h4 style="color:var(--accent-blue); font-size: 0.85rem; border-bottom: none; margin-bottom: 12px; padding-bottom: 0;">
+        ⚡ AI FINAL VERDICT
+      </h4>
+      <div style="display:flex; justify-content: space-around; flex-wrap: wrap; gap: 15px; text-align: center;">
+        
+        <div style="flex:1; min-width: 120px;">
+          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Αναμενόμενα Γκολ (xG)</div>
+          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--text-main);">
+            <span style="color:var(--accent-gold);" title="Home xG">${x.hXGfinal.toFixed(2)}</span> <span style="color:var(--text-dim); font-size: 1rem;">-</span> <span style="color:var(--accent-blue);" title="Away xG">${x.aXGfinal.toFixed(2)}</span>
+          </div>
+        </div>
+        
+        <div style="flex:1; min-width: 120px;">
+          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Πιθανότερο Σκορ</div>
+          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--accent-green);">
+            ${x.exact} <span style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">(ή ${x.exact2})</span>
+          </div>
+        </div>
+        
+        <div style="flex:1; min-width: 120px;">
+          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Σύνολο Κόρνερ</div>
+          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--accent-teal);">
+            ${(x.expCor || 0).toFixed(1)}
+          </div>
+          <div style="font-size: 0.75rem; font-family: var(--font-mono); font-weight:700; margin-top: 4px;">
+            <span style="color:var(--accent-gold);">🏠 ${hProjCor.toFixed(1)}</span> <span style="color:var(--text-dim);">|</span> <span style="color:var(--accent-blue);">✈️ ${aProjCor.toFixed(1)}</span>
+          </div>
+        </div>
+        
+        <div style="flex:1; min-width: 120px;">
+          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Σύνολο Καρτών</div>
+          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--accent-gold);">
+            ${totalCrd.toFixed(1)}
+          </div>
+          <div style="font-size: 0.75rem; font-family: var(--font-mono); font-weight:700; margin-top: 4px;">
+            <span style="color:var(--accent-gold);">🏠 ${hCrdExp.toFixed(1)}</span> <span style="color:var(--text-dim);">|</span> <span style="color:var(--accent-blue);">✈️ ${aCrdExp.toFixed(1)}</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `;
+
+  return `
+    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
+      <div class="accordion-grid">
+      
+        ${finalVerdictCard}
+
+        <div class="accordion-card">
+          <h4>Home vs Away Breakdown</h4>
           <div class="accordion-row"><span>Form ${acr('xG')}</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
           <div class="accordion-row"><span>Form ${acr('xGA')}</span><span class="data-num" style="color:var(--text-muted)">${x.hS?.uiXGA||'0.00'} vs ${x.aS?.uiXGA||'0.00'}</span></div>
           <div class="accordion-row"><span>Split ${acr('xG')}</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
