@@ -985,6 +985,15 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   else if(cornerRes.conf>=72){omegaPick='🚩 ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Μοντέλο Κόρνερ: ${cornerRes.conf.toFixed(1)}% | Αναμ.: ${cornerRes.expCor.toFixed(1)}`;}
   else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Μέσος Καρτών: ${totCards.toFixed(1)} | Ισορροπημένος αγώνας`;}
   
+  // ── CONFIDENCE THRESHOLD ──────────────────────────────────────
+  // Αν το pickScore δεν φτάνει το ελάχιστο κατώφλι → ΧΩΡΙΣ ΣΥΣΤΑΣΗ
+  const MIN_CONF = 70;
+  if(pickScore < MIN_CONF && !omegaPick.includes('ΧΩΡΙΣ')) {
+    omegaPick = 'ΧΩΡΙΣ ΣΥΣΤΑΣΗ';
+    reason    = `Confidence ${pickScore.toFixed(0)}% < ${MIN_CONF}% (κατώφλι). ${reason}`;
+    pickScore = 0;
+  }
+
   // exactConf: αθροίζει πιθανότητες Top-1 + Top-2 (Dixon-Coles adjusted) — πιο ρεαλιστικό
   const top1P=pp.bestScore.prob, top2P=pp.secondScore.prob;
   const exactConf=Math.round(clamp((top1P+top2P)*100*4.2,0,99));
@@ -2066,7 +2075,7 @@ function renderValueBetsTab(bets) {
 //     - Injury impact (10%) — penalty αν key players out
 // ================================================================
 
-const BOMB_MIN_PROB  = 0.25;   // ≥25% model prob
+const BOMB_MIN_PROB  = 0.70;   // ≥70% model prob (aligned με MIN_CONF)
 const BOMB_MIN_ODDS  = 3.80;   // ≥3.80 fair odds
 const BOMB_MAX_ODDS  = 18.0;   // ≤18.0 (πολύ ακραία odds = ανεπαρκή sample)
 
@@ -2189,7 +2198,7 @@ function renderBombsTab(bombs) {
     <div style="text-align:center;color:var(--text-muted);padding:36px 20px;">
       <div style="font-size:2.5rem;margin-bottom:10px;">💣</div>
       <div style="font-weight:800;font-size:1rem;margin-bottom:6px;">Δεν βρέθηκαν Bombs</div>
-      <div style="font-size:0.8rem;line-height:1.6;">Χρειάζονται αγώνες με model prob ≥25% και fair odds ≥3.80.<br>Τρέξτε scan ή φορτώστε αποδόσεις.</div>
+      <div style="font-size:0.8rem;line-height:1.6;">Χρειάζονται αγώνες με model prob ≥70% και fair odds ≥3.80.<br>Ελέγξτε τα Global Engine Parameters ή δοκιμάστε με περισσότερα πρωταθλήματα.</div>
     </div>`;
 
   const scoreBar = (val, max, color) => {
@@ -2297,7 +2306,12 @@ function renderBombsTab(bombs) {
   </div>`;
 }
 function rebuildTopLists(){
-  const sd = (window.scannedMatchesData||[]).filter(x => !isFinished(x.m?.fixture?.status?.short));
+  const MIN_CONF = 70;
+  const sd = (window.scannedMatchesData||[]).filter(x =>
+    !isFinished(x.m?.fixture?.status?.short) &&
+    !x.omegaPick?.includes('ΧΩΡΙΣ') &&
+    (x.strength||0) >= MIN_CONF
+  );
   latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΝΙΚΗ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
@@ -2309,7 +2323,7 @@ function rebuildTopLists(){
   buildBombsList();
 
   // ── Σίγουρη Τριάδα: multi-factor certainty score ──────────────────
-  const scored = sd.filter(x => x.omegaPick && !x.omegaPick.includes('ΧΩΡΙΣ')).map(x => {
+  const scored = sd.filter(x => x.omegaPick && !x.omegaPick.includes('ΧΩΡΙΣ') && (x.strength||0) >= 70).map(x => {
     const pickProb   = x.strength || 0;
     const hStab      = x.hS?.r6?.sdGoals < 1.10*0.75 ? 15 : x.hS?.r6?.sdGoals < 1.10*1.10 ? 5 : 0;
     const aStab      = x.aS?.r6?.sdGoals < 1.10*0.75 ? 15 : x.aS?.r6?.sdGoals < 1.10*1.10 ? 5 : 0;
@@ -3530,8 +3544,17 @@ function renderSummaryTable() {
         const sh=x.m?.fixture?.status?.short||'', live=isLive(sh);
         const ah=x.m?.goals?.home??0, aa=x.m?.goals?.away??0;
         const scoreStr=live?`${ah}-${aa}`:'-'; const scoreCol=live?'var(--accent-green)':'var(--text-muted)';
-        const conf=clamp(safeNum(x.strength),0,100); const confCol=conf>=65?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--text-muted)';
-        let omCol=x.omegaPick?.includes('NO BET')?'var(--text-muted)':'var(--text-main)';
+        const conf=clamp(safeNum(x.strength),0,100);
+        const confCol=conf>=70?'var(--accent-green)':conf>=55?'var(--accent-gold)':'var(--accent-red)';
+        const hasSignal = conf >= 70 && x.omegaPick && !x.omegaPick.includes('ΧΩΡΙΣ');
+        let omCol = hasSignal
+          ? (x.omegaPick.includes('💣')||x.omegaPick.includes('⚡') ? 'var(--accent-gold)'
+          : x.omegaPick.includes('ΠΑΝΩ ΑΠΟ 3') ? 'var(--accent-purple)'
+          : x.omegaPick.includes('ΠΑΝΩ') ? 'var(--accent-green)'
+          : x.omegaPick.includes('ΚΑΤΩ') ? 'var(--accent-teal)'
+          : x.omegaPick.includes('ΓΚΟΛ') ? 'var(--accent-blue)'
+          : 'var(--text-main)')
+          : 'var(--text-dim)';
         const liveExtra=live&&x.liveCorners!==undefined?`<div style="font-size:0.65rem;color:var(--accent-teal);margin-top:4px;">🚩${x.liveCorners} 🟨${x.liveYellows||0}</div>`:'';
         
         const hasInjury = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
@@ -3565,8 +3588,8 @@ function renderSummaryTable() {
             <span style="color:var(--accent-blue);font-weight:800;">${x.exact||'?-?'}</span>${x.exact2&&x.exact2!==x.exact?`<br><span style="color:var(--accent-purple);font-size:0.8rem;">${x.exact2}</span>`:''}
             ${x.htAnalysis?`<br><span style="color:var(--accent-teal);font-size:0.75rem;font-weight:700;">⏱ ${x.htAnalysis.htBest.h}-${x.htAnalysis.htBest.a}</span>`:''}
           </td>
-          <td class="col-conf data-num" style="color:${confCol}; font-size:1.1rem;">${conf.toFixed(0)}%</td>
-          <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.85rem;">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
+          <td class="col-conf data-num" style="color:${confCol}; font-size:1.1rem;">${hasSignal ? conf.toFixed(0)+'%' : `<span style="color:var(--text-dim);font-size:0.8rem;">${conf.toFixed(0)}%</span>`}</td>
+          <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.85rem;">${hasSignal ? (x.omegaPick||'—').split(' ').slice(0,3).join(' ') : '<span style="color:var(--text-dim);font-size:0.75rem;">— χαμηλό conf.</span>'}</td>
         </tr>
         <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
           ${buildAccordionHTML(x)}
