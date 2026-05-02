@@ -1532,9 +1532,9 @@ function _renderLiveDashboard(liveRecs){
       ${d?`<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
         ${[{lbl:'Πάνω 2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'Πάνω 3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'Κάτω 2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'ΓΓ',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
           const p=Math.round(m.v*100);
-          return`<div style="flex:1;min-width:55px;background:var(--bg-base);border-radius:6px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">${m.lbl}</div><div style="font-size:0.9rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
+          return`<div style="flex:1;min-width:55px;background:var(--bg-base);border-radius:6px;padding:6px 8px;text-align:center;"><div style="font-size:0.66rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">${m.lbl}</div><div style="font-size:0.9rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
         }).join('')}
-        ${preMatchPick&&!isNoBet?`<div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Πρό-αγώνα</div><div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div></div>`:''}
+        ${preMatchPick&&!isNoBet?`<div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;"><div style="font-size:0.66rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Πρό-αγώνα</div><div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div></div>`:''}
       </div>`:''}
     </div>`;
   }).join('');
@@ -2011,7 +2011,7 @@ function renderValueBetsTab(bets) {
           <span>Μοντέλο: <strong style="color:var(--text-main);">${b.modelProb}%</strong></span>
           <span>Implied: <strong>${b.impliedProb}%</strong></span>
           <span>Edge: <strong style="color:${edgeColor};">+${b.edge}%</strong></span>
-          <span style="font-size:0.62rem;color:var(--text-dim);">via ${b.bookmaker}</span>
+          <span style="font-size:0.62rem;color:var(--text-muted);">via ${b.bookmaker}</span>
         </div>
       </div>
 
@@ -2232,12 +2232,12 @@ function renderBombsTab(bombs) {
         <!-- Odds box -->
         <div style="text-align:center;min-width:64px;background:rgba(0,0,0,0.15);border-radius:6px;padding:6px 10px;">
           <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:${oddsColor(b.effectiveOdds)};line-height:1;">${b.effectiveOdds.toFixed(2)}</div>
-          <div style="font-size:0.52rem;color:var(--text-dim);text-transform:uppercase;margin-top:1px;">${b.hasBookOdds?'PINNACLE':'FAIR ODDS'}</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;margin-top:1px;">${b.hasBookOdds?'PINNACLE':'FAIR ODDS'}</div>
         </div>
         <!-- Bomb score -->
         <div style="text-align:center;min-width:52px;">
           <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:${bCol};line-height:1;">${b.bombScore}</div>
-          <div style="font-size:0.52rem;color:var(--text-dim);text-transform:uppercase;">SCORE</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;">SCORE</div>
         </div>
       </div>
 
@@ -2251,25 +2251,25 @@ function renderBombsTab(bombs) {
       <!-- Factors grid -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:5px;padding:8px 14px;border-top:1px solid var(--border-light);">
         <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
-          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα 🏠</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα 🏠</div>
           <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:${b.hFormRating>=65?'var(--accent-green)':b.hFormRating>=40?'var(--accent-gold)':'var(--accent-red)'};">${b.hFormRating}%</div>
           ${scoreBar(b.hFormRating, 100, b.hFormRating>=65?'var(--accent-green)':b.hFormRating>=40?'var(--accent-gold)':'var(--accent-red)')}
         </div>
         <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
-          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα ✈️</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα ✈️</div>
           <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:${b.aFormRating>=65?'var(--accent-green)':b.aFormRating>=40?'var(--accent-gold)':'var(--accent-red)'};">${b.aFormRating}%</div>
           ${scoreBar(b.aFormRating, 100, b.aFormRating>=65?'var(--accent-green)':b.aFormRating>=40?'var(--accent-gold)':'var(--accent-red)')}
         </div>
         <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
-          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. 🏠</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. 🏠</div>
           <div style="font-size:0.72rem;font-weight:700;">${b.hSdGoals!==null&&b.hSdGoals!==undefined?hStabLbl:'—'}</div>
         </div>
         <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
-          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. ✈️</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. ✈️</div>
           <div style="font-size:0.72rem;font-weight:700;">${b.aSdGoals!==null&&b.aSdGoals!==undefined?aStabLbl:'—'}</div>
         </div>
         <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
-          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">xG</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">xG</div>
           <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:var(--accent-blue);">${Number(b.tXG||0).toFixed(2)}</div>
         </div>
         ${b.hasLineup ? `<div style="background:rgba(45,212,191,0.08);border:1px solid rgba(45,212,191,0.2);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-teal);">📋 Lineup ✓</div></div>` : ''}
@@ -2280,7 +2280,7 @@ function renderBombsTab(bombs) {
       <!-- Score breakdown -->
       <div style="padding:6px 14px 10px;border-top:1px solid var(--border-light);">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-          <span style="font-size:0.55rem;color:var(--text-dim);text-transform:uppercase;font-weight:700;">Bomb Score Breakdown</span>
+          <span style="font-size:0.65rem;color:var(--text-dim);text-transform:uppercase;font-weight:700;">Bomb Score Breakdown</span>
           <span style="font-size:0.65rem;font-family:var(--font-mono);font-weight:800;color:${bCol};">${b.bombScore}/100</span>
         </div>
         <div style="display:flex;gap:3px;">
@@ -2684,7 +2684,7 @@ function teamBlock(players, teamName, teamColor, isHome, oppS) {
   const fCol     = factor>1.05?'var(--accent-red)':factor<0.95?'var(--accent-teal)':'var(--text-dim)';
   const injBadge = injCount>0
     ? `<span style="font-size:0.65rem;color:var(--accent-red);font-weight:700;margin-left:5px;">⚠️ ${injCount} OUT</span>` : '';
-  const opp      = `<span style="font-size:0.62rem;color:var(--text-dim);margin-left:6px;">αντίπ. ${Number(oppS?.crd||0).toFixed(1)} κάρτ</span>`;
+  const opp      = `<span style="font-size:0.62rem;color:var(--text-muted);margin-left:6px;">αντίπ. ${Number(oppS?.crd||0).toFixed(1)} κάρτ</span>`;
   return {injBadge, factor, fCol, opp};
 }
 function buildAccordionHTML(x) {
@@ -3097,7 +3097,7 @@ function buildAccordionHTML(x) {
               <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
               ${hHasInj?`<span style="font-size:0.65rem;color:var(--accent-red);">⚠️ ${(x.hInjAdj?.injured||[]).length} OUT</span>`:''}
             </div>
-            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
               <span>#&nbsp;&nbsp;Παίκτης</span><span>bar&nbsp;&nbsp;xG%</span>
             </div>
             ${([...(x.hPlayers||[])].sort((a,b)=>b.xGContrib-a.xGContrib).slice(0,7).map((p,i)=>renderXGRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
@@ -3109,12 +3109,12 @@ function buildAccordionHTML(x) {
               <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
               ${aHasInj?`<span style="font-size:0.65rem;color:var(--accent-red);">⚠️ ${(x.aInjAdj?.injured||[]).length} OUT</span>`:''}
             </div>
-            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
               <span>#&nbsp;&nbsp;Παίκτης</span><span>bar&nbsp;&nbsp;xG%</span>
             </div>
             ${([...(x.aPlayers||[])].sort((a,b)=>b.xGContrib-a.xGContrib).slice(0,7).map((p,i)=>renderXGRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
-          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-dim);">xG% = συνεισφορά στο team xG (GAP: γκολ + 0.4×ασίστ) · 🏥 τραυματίας</div>
+          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">xG% = συνεισφορά στο team xG (GAP: γκολ + 0.4×ασίστ) · 🏥 τραυματίας</div>
         </div>
 
         <!-- ── Card Risk card ─────────────────────────────── -->
@@ -3127,7 +3127,7 @@ function buildAccordionHTML(x) {
               <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
               ${(()=>{const f=(x.hPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
             </div>
-            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
               <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
             </div>
             ${([...(x.hPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,7).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
@@ -3139,12 +3139,12 @@ function buildAccordionHTML(x) {
               <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
               ${(()=>{const f=(x.aPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
             </div>
-            <div style="font-size:0.62rem;color:var(--text-dim);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
               <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
             </div>
             ${([...(x.aPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,7).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
           </div>
-          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-dim);">🟨 Adj. card% (Poisson · αντίπαλος · league) · 🟥 Red card% · 🔴 κίνδυνος αποβολής · ▲▼ διόρθωση</div>
+          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">🟨 Adj. card% (Poisson · αντίπαλος · league) · 🟥 Red card% · 🔴 κίνδυνος αποβολής · ▲▼ διόρθωση</div>
         </div>
 
         <div class="accordion-card">
@@ -3307,7 +3307,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
 
   // Sparkline compact (inline, 5px bars)
   function spark(arr, color) {
-    if(!arr?.length) return '<span style="font-size:0.55rem;color:var(--text-dim);">—</span>';
+    if(!arr?.length) return '<span style="font-size:0.65rem;color:var(--text-dim);">—</span>';
     const mx = Math.max(...arr.map(Number),1);
     const bars = arr.map((v,i)=>{
       const h=Math.max(Math.round((Number(v)/mx)*20),1);
@@ -3319,7 +3319,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
   // CI badge
   function ciBadge(ci) {
     if(!ci) return '';
-    return `<div style="font-size:0.52rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;white-space:nowrap;">[${f1(ci[0])} – ${f1(ci[1])}]</div>`;
+    return `<div style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);margin-top:1px;white-space:nowrap;">[${f1(ci[0])} – ${f1(ci[1])}]</div>`;
   }
 
   // A single data cell for the table
@@ -3331,7 +3331,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
         ${spark(arr,color)}
       </div>
       <div style="font-size:0.56rem;font-weight:800;color:${vl.col};text-transform:uppercase;letter-spacing:0.04em;">${vl.icon} ${vl.lbl}</div>
-      <div style="font-size:0.52rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(sd)}</div>
+      <div style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(sd)}</div>
       ${ciBadge(ciData)}
     </div>`;
   }
@@ -3341,7 +3341,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
     if(mean==null||isNaN(mean)) return `<div style="text-align:center;padding:8px 6px;color:var(--text-dim);font-size:0.75rem;">—</div>`;
     return `<div style="text-align:center;padding:8px 6px;">
       <div style="font-family:var(--font-mono);font-size:1.05rem;font-weight:800;color:var(--text-main);">${f1(mean)}</div>
-      <div style="font-size:0.52rem;color:var(--text-muted);margin:2px 0;font-family:var(--font-mono);">σ=${f2(sd)}</div>
+      <div style="font-size:0.62rem;color:var(--text-muted);margin:2px 0;font-family:var(--font-mono);">σ=${f2(sd)}</div>
       <div style="font-size:0.5rem;color:${source==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${source==='empirical'?'emp':'Poisson'}</div>
       ${ciBadge(ci)}
     </div>`;
@@ -3432,7 +3432,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
       <!-- Label -->
       <td style="padding:8px 10px 8px 4px;vertical-align:middle;white-space:nowrap;">
         <div style="font-size:0.78rem;font-weight:700;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${row.label}</div>
-        <div style="font-size:0.55rem;color:var(--text-dim);margin-top:1px;">${row.higherBetter?'↑ better':'↓ better'}</div>
+        <div style="font-size:0.65rem;color:var(--text-dim);margin-top:1px;">${row.higherBetter?'↑ better':'↓ better'}</div>
       </td>
 
       <!-- HOME last6 -->
@@ -3440,7 +3440,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
         <div style="text-align:center;">
           <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:900;color:${hBetter?row.color:'var(--text-main)'};">${f1(row.h.val)}</div>
           <div style="display:flex;justify-content:center;margin:2px 0;">${spark(row.h.arr,row.color)}</div>
-          <div style="font-size:0.55rem;font-weight:800;color:${hV.col};text-transform:uppercase;">${hV.icon} ${hV.lbl}</div>
+          <div style="font-size:0.65rem;font-weight:800;color:${hV.col};text-transform:uppercase;">${hV.icon} ${hV.lbl}</div>
           <div style="font-size:0.5rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(row.h.sd)}</div>
           ${row.h.ci ? `<div style="font-size:0.48rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">[${f1(row.h.ci[0])}–${f1(row.h.ci[1])}]</div>` : ''}
         </div>
@@ -3476,7 +3476,7 @@ function renderVolatilityPanel(hS, aS, ht, at) {
         <div style="text-align:center;">
           <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:900;color:${aBetter?row.color:'var(--text-main)'};">${f1(row.a.val)}</div>
           <div style="display:flex;justify-content:center;margin:2px 0;">${spark(row.a.arr,row.color)}</div>
-          <div style="font-size:0.55rem;font-weight:800;color:${aV.col};text-transform:uppercase;">${aV.icon} ${aV.lbl}</div>
+          <div style="font-size:0.65rem;font-weight:800;color:${aV.col};text-transform:uppercase;">${aV.icon} ${aV.lbl}</div>
           <div style="font-size:0.5rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(row.a.sd)}</div>
           ${row.a.ci ? `<div style="font-size:0.48rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">[${f1(row.a.ci[0])}–${f1(row.a.ci[1])}]</div>` : ''}
         </div>
@@ -3561,7 +3561,7 @@ function renderSummaryTable() {
         const injBadge  = hasInjury ? `<span style="background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:0.65rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:6px;">${acr('INJ')}</span>` : '';
         const lineupSrcBadge = x.lineupData?.available
           ? `<span style="background:rgba(45,212,191,0.12);color:var(--accent-teal);font-size:0.62rem;font-weight:800;padding:2px 5px;border-radius:4px;margin-left:5px;">📋 XI</span>`
-          : `<span style="font-size:0.62rem;color:var(--text-dim);margin-left:5px;">~XI</span>`;
+          : `<span style="font-size:0.62rem;color:var(--text-muted);margin-left:5px;">~XI</span>`;
         // Sub flash pulse badge
         const subFlash = x.subTimestamp && (Date.now()-x.subTimestamp<120000)
           ? `<span class="sub-flash-badge">🔄</span>` : '';
@@ -3876,9 +3876,9 @@ window.renderMyLeaguesPanel = function() {
         const isTrap  = typeof TRAP_LEAGUES  !== 'undefined' && TRAP_LEAGUES.has(id);
         const isGold  = typeof GOLD_LEAGUES  !== 'undefined' && GOLD_LEAGUES.has(id);
         const isTight = typeof TIGHT_LEAGUES !== 'undefined' && TIGHT_LEAGUES.has(id);
-        const typeBadge = isGold  ? `<span style="font-size:0.55rem;color:var(--accent-gold);font-weight:800;margin-left:4px;">GOLD</span>`
-                        : isTrap  ? `<span style="font-size:0.55rem;color:var(--accent-red);font-weight:800;margin-left:4px;">TRAP</span>`
-                        : isTight ? `<span style="font-size:0.55rem;color:var(--accent-teal);font-weight:800;margin-left:4px;">TIGHT</span>` : '';
+        const typeBadge = isGold  ? `<span style="font-size:0.65rem;color:var(--accent-gold);font-weight:800;margin-left:4px;">GOLD</span>`
+                        : isTrap  ? `<span style="font-size:0.65rem;color:var(--accent-red);font-weight:800;margin-left:4px;">TRAP</span>`
+                        : isTight ? `<span style="font-size:0.65rem;color:var(--accent-teal);font-weight:800;margin-left:4px;">TIGHT</span>` : '';
         return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;">
           <input type="checkbox" id="lg_${id}" ${checked?'checked':''}
             onchange="toggleLeague(${id}, this.checked)"
