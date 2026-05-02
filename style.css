@@ -1,40 +1,40 @@
 /* ================================================================
-   APEX OMEGA v5.0 — Design System
-   Aesthetic: Premium Quant Terminal — refined dark, data-dense,
-   glass surfaces, micro-grid backgrounds, surgical typography
-   Fonts: Orbitron (brand) · Fira Code (data) · Inter (UI)
+   APEX OMEGA v5.0 — MILITARY OPS TERMINAL
+   Aesthetic: Classified Intelligence Dashboard
+   High-contrast, surgical typography, data-dense
+   Fonts: Bebas Neue (brand) · JetBrains Mono (data) · Space Grotesk (UI)
 ================================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&display=swap');
 
 /* ── Design tokens ─────────────────────────────────────────── */
 :root {
   /* Backgrounds — deep layered system */
-  --bg-void:    #060810;
-  --bg-dark:    #080c14;
-  --bg-panel:   #0d1420;
-  --bg-surface: #131c2e;
-  --bg-raised:  #192338;
-  --bg-base:    #0f1825;
+  --bg-void:    #050608;
+  --bg-dark:    #07090f;
+  --bg-panel:   #0b0e18;
+  --bg-surface: #101420;
+  --bg-raised:  #161d2e;
+  --bg-base:    #0d1119;
 
   /* Text */
-  --text-main:  #e8edf5;
-  --text-sub:   #9baac2;
-  --text-muted: #5d7090;
-  --text-dim:   #374259;
+  --text-main:  #f0f4ff;
+  --text-sub:   #b8c5dc;
+  --text-muted: #6a7d9e;
+  --text-dim:   #2e3d56;
 
   /* Accent palette */
-  --blue:       #38bdf8;
-  --blue-dim:   rgba(56,189,248,0.12);
-  --blue-glow:  rgba(56,189,248,0.25);
-  --purple:     #a78bfa;
-  --purple-dim: rgba(167,139,250,0.12);
-  --green:      #34d399;
-  --green-dim:  rgba(52,211,153,0.12);
-  --gold:       #fbbf24;
-  --gold-dim:   rgba(251,191,36,0.12);
-  --red:        #f87171;
-  --red-dim:    rgba(248,113,113,0.12);
+  --blue:       #4db8ff;
+  --blue-dim:   rgba(77,184,255,0.10);
+  --blue-glow:  rgba(77,184,255,0.22);
+  --purple:     #c084fc;
+  --purple-dim: rgba(192,132,252,0.10);
+  --green:      #4ade80;
+  --green-dim:  rgba(74,222,128,0.10);
+  --gold:       #fcd34d;
+  --gold-dim:   rgba(252,211,77,0.10);
+  --red:        #fb7185;
+  --red-dim:    rgba(251,113,133,0.10);
   --teal:       #2dd4bf;
   --teal-dim:   rgba(45,212,191,0.12);
 
@@ -44,9 +44,10 @@
   --border-hi:  rgba(56,189,248,0.35);
 
   /* Typography */
-  --font-ui:    'Inter', sans-serif;
-  --font-mono:  'Fira Code', monospace;
-  --font-brand: 'Orbitron', sans-serif;
+  --font-ui:    'Space Grotesk', sans-serif;
+  --font-mono:  'JetBrains Mono', monospace;
+  --font-brand: 'Bebas Neue', cursive;
+  --font-cond:  'Barlow Condensed', sans-serif;
 
   /* Radius */
   --r-sm: 6px;
@@ -74,6 +75,7 @@
   --text-muted:    #9baac2;
   --text-dim:      #374259;
   --font-sans:     var(--font-ui);
+  --font-mono:     'JetBrains Mono', monospace;
   --radius-sm:     var(--r-sm);
   --radius-md:     var(--r-md);
   --radius-lg:     var(--r-lg);
@@ -93,9 +95,13 @@ body {
   font-size: 14px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  /* Subtle dot-grid background */
-  background-image: radial-gradient(circle, rgba(56,189,248,0.04) 1px, transparent 1px);
-  background-size: 28px 28px;
+  /* Tactical grid */
+  background-image:
+    radial-gradient(ellipse 70% 50% at 50% 0%, rgba(77,184,255,0.04) 0%, transparent 60%),
+    linear-gradient(rgba(77,184,255,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77,184,255,0.018) 1px, transparent 1px);
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+  background-attachment: fixed;
   min-height: 100vh;
 }
 
@@ -109,7 +115,7 @@ body {
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
   border-bottom: 1px solid var(--border);
   padding: 0 24px;
-  height: 58px;
+  height: 60px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -119,16 +125,15 @@ body {
 
 .brand-logo {
   font-family: var(--font-brand);
-  font-size: 1.35rem;
-  font-weight: 900;
-  letter-spacing: 2px;
+  font-size: 1.75rem;
+  letter-spacing: 3px;
   color: var(--text-main);
   display: flex;
   align-items: baseline;
   gap: 0;
   user-select: none;
 }
-.brand-logo span:first-child { color: var(--blue); }
+.brand-logo span:first-child { color: var(--blue); text-shadow: 0 0 20px rgba(77,184,255,0.45); }
 .brand-logo .version-tag {
   font-size: 0.62rem;
   color: var(--text-muted);
@@ -252,10 +257,8 @@ body {
 .quant-panel.panel-purple { border-color: rgba(167,139,250,0.15); }
 
 .panel-title {
-  font-size: 0.82rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.78rem; font-weight: 700; font-family: var(--font-cond);
+  text-transform: uppercase; letter-spacing: 0.1em;
   color: var(--text-sub);
   margin-bottom: 18px;
   display: flex;
@@ -284,11 +287,11 @@ body {
   min-width: 150px;
 }
 .input-label {
-  font-size: 0.67rem;
-  font-weight: 700;
+  font-size: 0.64rem;
+  font-weight: 700; font-family: var(--font-cond);
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
 }
 .quant-input {
   background: var(--bg-surface);
@@ -326,11 +329,8 @@ select.quant-input {
 }
 .calib-item { display: flex; flex-direction: column; gap: 5px; }
 .calib-lbl {
-  font-size: 0.67rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 0.64rem; font-weight: 700; font-family: var(--font-cond);
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em;
 }
 .calib-input {
   background: var(--bg-surface);
@@ -357,10 +357,11 @@ select.quant-input {
   padding: 0 18px;
   height: 38px;
   border-radius: var(--r-sm);
-  font-family: var(--font-ui);
+  font-family: var(--font-cond);
   font-weight: 600;
-  font-size: 0.82rem;
-  letter-spacing: 0.02em;
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   cursor: pointer;
   border: 1px solid var(--border);
   background: var(--bg-surface);
@@ -481,10 +482,11 @@ select.quant-input {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-family: var(--font-ui);
-  font-size: 0.78rem;
+  font-family: var(--font-cond);
+  font-size: 0.82rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   padding: 13px 14px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -538,12 +540,12 @@ select.quant-input {
   position: sticky; top: 0;
   background: var(--bg-surface);
   padding: 10px 14px;
-  font-family: var(--font-ui);
-  font-size: 0.67rem;
+  font-family: var(--font-cond);
+  font-size: 0.7rem;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
   z-index: 10;
@@ -590,13 +592,13 @@ select.quant-input {
 .accordion-card:hover { border-color: var(--border-md); }
 
 .accordion-card h4 {
-  font-family: var(--font-ui);
-  font-size: 0.68rem;
+  font-family: var(--font-cond);
+  font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   color: var(--text-muted);
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -675,32 +677,43 @@ select.quant-input {
    AUTH SCREEN
 ================================================================ */
 #auth {
-  position: fixed;
-  inset: 0;
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; justify-content: center; align-items: center;
   background: var(--bg-void);
-  z-index: 10000;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  /* Animated grid bg */
   background-image:
-    radial-gradient(ellipse 80% 60% at 50% 50%, rgba(56,189,248,0.04) 0%, transparent 70%),
-    radial-gradient(circle, rgba(56,189,248,0.03) 1px, transparent 1px);
-  background-size: 100% 100%, 28px 28px;
+    radial-gradient(ellipse 60% 70% at 50% 50%, rgba(77,184,255,0.06) 0%, transparent 65%),
+    radial-gradient(ellipse 30% 40% at 50% 50%, rgba(192,132,252,0.04) 0%, transparent 60%),
+    linear-gradient(rgba(77,184,255,0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77,184,255,0.015) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
 }
+#auth::before {
+  content: '';
+  position: absolute; width: 480px; height: 480px; border-radius: 50%;
+  border: 1px solid rgba(77,184,255,0.06);
+  animation: radarPulse 4s ease-out infinite; pointer-events: none;
+}
+#auth::after {
+  content: '';
+  position: absolute; width: 280px; height: 280px; border-radius: 50%;
+  border: 1px solid rgba(77,184,255,0.09);
+  animation: radarPulse 4s ease-out 1.3s infinite; pointer-events: none;
+}
+@keyframes radarPulse { 0% { transform:scale(0.6); opacity:0.6; } 100% { transform:scale(2.2); opacity:0; } }
 .auth-card {
   background: var(--bg-panel);
   padding: 44px 40px;
   border-radius: var(--r-xl);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(77,184,255,0.14);
   text-align: center;
-  box-shadow: var(--shadow-lg), 0 0 60px rgba(56,189,248,0.06);
+  box-shadow: var(--shadow-lg), 0 0 80px rgba(77,184,255,0.08), inset 0 1px 0 rgba(255,255,255,0.05);
+  position: relative; z-index: 1;
   width: 100%;
   max-width: 360px;
   animation: authFadeIn 0.5s var(--ease);
 }
 @keyframes authFadeIn {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(20px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .auth-input {
@@ -812,9 +825,9 @@ select.quant-input {
   min-width: 280px;
 }
 #errorBox div {
-  background: rgba(20,6,6,0.96);
-  border: 1px solid rgba(248,113,113,0.4);
-  color: var(--red);
+  background: rgba(18,5,8,0.97);
+  border: 1px solid rgba(251,113,133,0.4);
+  color: var(--red); border-left: 3px solid var(--red);
   padding: 11px 20px;
   border-radius: var(--r-md);
   font-weight: 600;
@@ -824,9 +837,9 @@ select.quant-input {
   animation: toastIn 0.25s var(--ease);
 }
 #successBox div {
-  background: rgba(6,20,12,0.96);
-  border: 1px solid rgba(52,211,153,0.3);
-  color: var(--green);
+  background: rgba(4,18,10,0.97);
+  border: 1px solid rgba(74,222,128,0.35);
+  color: var(--green); border-left: 3px solid var(--green);
   padding: 11px 20px;
   border-radius: var(--r-md);
   font-weight: 600;
@@ -850,6 +863,30 @@ select.quant-input {
 @keyframes pulseRed {
   0%,100% { opacity: 1; transform: scale(1); box-shadow: 0 0 6px var(--red); }
   50%      { opacity: 0.5; transform: scale(1.25); box-shadow: 0 0 12px var(--red); }
+}
+
+/* Live signal animations */
+@keyframes strongPulse {
+  0%,100% { box-shadow:0 0 0 0 rgba(74,222,128,0); border-color:rgba(74,222,128,0.35); }
+  50%      { box-shadow:0 0 22px 4px rgba(74,222,128,0.30); border-color:rgba(74,222,128,0.85); }
+}
+@keyframes pickPulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+@keyframes flipBlink {
+  0%,100%{background:rgba(252,211,77,0.12);border-color:var(--gold);}
+  40%{background:rgba(252,211,77,0.30);border-color:rgba(252,211,77,0.9);}
+}
+.live-strong-signal { animation: strongPulse 1.8s ease-in-out infinite; }
+.live-pick-pulse { animation: pickPulse 1.4s ease-in-out infinite; }
+.live-strong-badge {
+  display: inline-block; margin-top: 8px; font-size: 0.62rem; font-weight: 800;
+  color: #060a06; background: var(--green); padding: 3px 10px; border-radius: 8px;
+  letter-spacing: 0.06em; font-family: var(--font-cond); text-transform: uppercase;
+  animation: pickPulse 1.2s ease-in-out infinite;
+}
+.live-flip-alert {
+  background: rgba(252,211,77,0.12); border: 1px solid var(--gold);
+  border-radius: var(--r-sm); padding: 10px 14px; font-size: 0.78rem;
+  animation: flipBlink 0.9s ease-in-out 6;
 }
 
 /* ================================================================
@@ -935,16 +972,48 @@ select.quant-input {
 /* ================================================================
    RESPONSIVE
 ================================================================ */
-@media (max-width: 768px) {
-  .container  { padding: 14px 12px; }
-  .quant-panel { padding: 16px 14px; }
-  .terminal-header { padding: 0 14px; height: 52px; }
-  .ticker-wrapper { top: 52px; }
-  .brand-logo { font-size: 1.1rem; }
-  .accordion-grid { grid-template-columns: 1fr; }
+/* Mobile */
+@media (max-width: 640px) {
+  body { font-size: 13px; }
+  .container { padding: 10px 10px; }
+  .quant-panel { padding: 13px 12px; border-radius: var(--r-md); margin-bottom: 10px; }
+  .terminal-header { padding: 0 12px; height: 54px; }
+  .ticker-wrapper { top: 54px; }
+  .brand-logo { font-size: 1.45rem; letter-spacing: 2px; }
+  .brand-logo .version-tag { display: none; }
+  .accordion-grid { grid-template-columns: 1fr; gap: 10px; }
   .tabs-wrapper { padding: 0; }
-  .tab-btn { padding: 11px 10px; font-size: 0.72rem; }
-  .summary-table td, .summary-table th { padding: 10px 8px; font-size: 0.82rem; }
+  .tab-btn { padding: 11px 9px; font-size: 0.75rem; }
+  .summary-table td { padding: 9px 7px; font-size: 0.8rem; }
+  .summary-table th { padding: 9px 7px; font-size: 0.64rem; }
+  .toolbar { gap: 8px; }
+  .btn { font-size: 0.84rem; padding: 0 13px; }
+  .calib-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .credit-widget .credit-label, .bankroll-widget .bankroll-label { display: none; }
+  .header-right { gap: 6px; }
+  .auth-card { padding: 36px 22px 30px; }
+}
+
+/* Tablet */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .container { padding: 16px; }
+  .accordion-grid { grid-template-columns: repeat(2, 1fr); }
+  .calib-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Legacy 768px */
+@media (max-width: 768px) {
   .credit-widget .credit-label,
   .bankroll-widget .bankroll-label { display: none; }
+}
+
+/* Touch: larger tap targets */
+@media (hover: none) {
+  .btn, .tab-btn { min-height: 44px; }
+  .summary-table td { padding: 13px 8px; }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
