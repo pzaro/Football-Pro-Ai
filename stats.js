@@ -219,19 +219,26 @@ window.importData=function(ev){
   reader.onload=e=>{
     try{
       const imported=JSON.parse(e.target.result);
-      if(!Array.isArray(imported))throw new Error("Invalid");
+      if(!Array.isArray(imported))throw new Error("Invalid format");
       window.scannedMatchesData=imported;
-      // Αποθήκευση στο vault + ενημέρωση audit UI
+
+      // Αποθήκευση στο vault + ενημέρωση UI
       saveToVault(imported);
       rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();
-      // Sync audit: βρες το date range και τα leagues από τα imported data
-      const dates = imported.map(d=>d.m?.fixture?.date?.split('T')[0]).filter(Boolean).sort();
-      const startD = dates[0] || todayISO();
+
+      // Βρες με ΑΣΦΑΛΕΙΑ τις ημερομηνίες — είτε d.m.fixture.date είτε d.date
+      const dates = imported.map(d => {
+        const dt = d.m?.fixture?.date || d.date;
+        return dt ? dt.split('T')[0] : null;
+      }).filter(Boolean).sort();
+
+      const startD = dates[0]              || todayISO();
       const endD   = dates[dates.length-1] || todayISO();
+
       syncAuditFromScan(imported, startD, endD);
       showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν. Vault ενημερώθηκε.`);
-    }catch{
-      showErr("Σφάλμα αρχείου.");
+    }catch(err){
+      showErr("Σφάλμα αρχείου: " + err.message);
     }
     ev.target.value='';
   };
@@ -4009,25 +4016,27 @@ function updateAuditLeagueFilter() {
  * - scroll στο Audit panel
  */
 function syncAuditFromScan(scannedData, scanStart, scanEnd) {
-  // 1. Ανανέωση dropdown με νέα πρωταθλήματα
+  // 1. Ανανέωση dropdown με ΟΛΑ τα νέα πρωταθλήματα από το Vault
   updateAuditLeagueFilter();
 
-  // 2. Βρες τα μοναδικά leagueIds από το scan
-  const scannedLeagueIds = [...new Set((scannedData || []).map(d => d.leagueId).filter(Boolean))];
+  // 2. Βρες τα μοναδικά leagueIds — ΑΛΕΞΙΣΦΑΙΡΟ parsing
+  // Το id μπορεί να είναι είτε στο d.leagueId είτε στο d.m.league.id
+  const scannedLeagueIds = [...new Set((scannedData || []).map(d => {
+    return d.leagueId || d.m?.league?.id;
+  }).filter(Boolean))];
 
   // 3. Επέλεξε αυτόματα: αν ένα πρωτάθλημα → επέλεξέ το, αν πολλά → ALL
   const sel = document.getElementById('auditLeague');
   if(sel) {
     if(scannedLeagueIds.length === 1) {
       sel.value = String(scannedLeagueIds[0]);
-      // Αν δεν βρεθεί η option (race condition), fallback σε ALL
       if(!sel.value || sel.value !== String(scannedLeagueIds[0])) sel.value = 'ALL';
     } else {
       sel.value = 'ALL';
     }
   }
 
-  // 4. Συγχρόνισε date range — χρησιμοποιεί το ίδιο εύρος με το scan
+  // 4. Συγχρόνισε date range
   const asEl = document.getElementById('auditStart');
   const aeEl = document.getElementById('auditEnd');
   if(asEl && scanStart) asEl.value = scanStart;
@@ -4041,21 +4050,23 @@ function syncAuditFromScan(scannedData, scanStart, scanEnd) {
     if(arrow) arrow.textContent = '▲';
   }
 
-  // 6. Flash στο audit section για να τραβήξει την προσοχή
+  // 6. Flash στο audit section
   const auditSec = document.getElementById('auditSection');
   if(auditSec) {
-    auditSec.innerHTML = `<div style="background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.25);border-radius:8px;padding:14px 18px;font-size:0.82rem;display:flex;align-items:center;gap:10px;">
+    let lgDisplayName = 'Όλα';
+    if(scannedLeagueIds.length === 1) {
+      lgDisplayName = (typeof LEAGUES_DATA !== 'undefined'
+        ? LEAGUES_DATA.find(l => l.id === scannedLeagueIds[0])?.name
+        : null) || String(scannedLeagueIds[0]);
+    }
+    auditSec.innerHTML = `<div style="background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.25);border-radius:8px;padding:14px 18px;font-size:0.82rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span style="font-size:1.2rem;">📊</span>
-      <div>
+      <div style="flex:1;min-width:180px;">
         <div style="font-weight:700;color:var(--accent-gold);margin-bottom:3px;">Audit έτοιμο για εκτέλεση</div>
-        <div style="color:var(--text-muted);">Πρωτάθλημα: <strong style="color:var(--text-main);">${
-          scannedLeagueIds.length === 1
-            ? ((typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA.find(l=>l.id===scannedLeagueIds[0])?.name : null) || scannedLeagueIds[0])
-            : 'Όλα'
-        }</strong> · Περίοδος: <strong style="color:var(--text-main);">${scanStart||'—'} → ${scanEnd||'—'}</strong></div>
-        <div style="color:var(--text-muted);font-size:0.75rem;margin-top:4px;">Πατήστε <strong>Run Audit</strong> για αξιολόγηση & βελτιστοποίηση παραμέτρων</div>
+        <div style="color:var(--text-muted);">Πρωτάθλημα: <strong style="color:var(--text-main);">${esc(lgDisplayName)}</strong> · Περίοδος: <strong style="color:var(--text-main);">${scanStart||'—'} → ${scanEnd||'—'}</strong></div>
+        <div style="color:var(--text-muted);font-size:0.72rem;margin-top:4px;">Πατήστε <strong>Run Audit</strong> για αξιολόγηση &amp; βελτιστοποίηση παραμέτρων</div>
       </div>
-      <button onclick="runCustomAudit(false)" class="btn btn-purple" style="margin-left:auto;white-space:nowrap;">▶ Run Audit</button>
+      <button onclick="runCustomAudit(false)" class="btn btn-purple" style="white-space:nowrap;">▶ Run Audit</button>
     </div>`;
   }
 }
