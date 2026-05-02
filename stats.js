@@ -4243,6 +4243,70 @@ window.renderLeagueMods = function() {
   const container = document.getElementById('leagueModsContainer');
   if(!container || typeof LEAGUES_DATA === 'undefined') return;
   
+  let html = `<table class="summary-table" style="font-size:0.8rem;">
+    <thead style="position:sticky; top:0; z-index:1;">
+      <tr>
+        <th class="left-align">League</th>
+        <th title="xG Multiplier">xG Mult</th>
+        <th title="Διαφορά xG (1X2)">xG Diff</th>
+        <th title="Min xG (O2.5)">Min O2.5</th>
+        <th title="Min xG (O3.5)">Min O3.5</th>
+        <th title="Min xG (BTTS)">Min BTTS</th>
+        <th title="Max xG (U2.5)">Max U2.5</th>
+      </tr>
+    </thead><tbody>`;
+    
+  LEAGUES_DATA.forEach(l => {
+    const mods = leagueMods[l.id] || {};
+    html += `<tr>
+      <td class="left-align" style="font-weight:700; color:var(--text-main); font-size:0.85rem; white-space:nowrap;">${l.name}</td>
+      <td><input type="number" step="0.01" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_o35_${l.id}" value="${mods.minXGO35 || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_btts_${l.id}" value="${mods.minBTTS || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_u25_${l.id}" value="${mods.maxU25 || ''}" placeholder="Def"></td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  container.innerHTML = html;
+};
+
+window.saveLeagueMods = function() {
+  if(typeof LEAGUES_DATA === 'undefined') return;
+  LEAGUES_DATA.forEach(l => {
+    const mVal    = parseFloat(document.getElementById(`mod_mult_${l.id}`)?.value);
+    const dVal    = parseFloat(document.getElementById(`mod_diff_${l.id}`)?.value);
+    const o25Val  = parseFloat(document.getElementById(`mod_o25_${l.id}`)?.value);
+    const o35Val  = parseFloat(document.getElementById(`mod_o35_${l.id}`)?.value);
+    const bttsVal = parseFloat(document.getElementById(`mod_btts_${l.id}`)?.value);
+    const u25Val  = parseFloat(document.getElementById(`mod_u25_${l.id}`)?.value);
+    
+    if(!isNaN(mVal) || !isNaN(dVal) || !isNaN(o25Val) || !isNaN(o35Val) || !isNaN(bttsVal) || !isNaN(u25Val)) {
+      leagueMods[l.id] = {};
+      if(!isNaN(mVal))    leagueMods[l.id].mult     = mVal;
+      if(!isNaN(dVal))    leagueMods[l.id].xgDiff   = dVal;
+      if(!isNaN(o25Val))  leagueMods[l.id].minXGO25 = o25Val;
+      if(!isNaN(o35Val))  leagueMods[l.id].minXGO35 = o35Val;
+      if(!isNaN(bttsVal)) leagueMods[l.id].minBTTS  = bttsVal;
+      if(!isNaN(u25Val))  leagueMods[l.id].maxU25   = u25Val;
+    } else {
+      delete leagueMods[l.id];
+    }
+  });
+  try{ localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); }catch{}
+  showOk('Saved League Mods!');
+  if(window.scannedMatchesData.length > 0) window.resimulateMatches();
+};
+
+// ================================================================
+//  SETTINGS & INIT
+// ================================================================
+
+window.renderLeagueMods = function() {
+  const container = document.getElementById('leagueModsContainer');
+  if(!container || typeof LEAGUES_DATA === 'undefined') return;
+  
   let html = `<table class="summary-table" style="font-size:0.85rem;">
     <thead style="position:sticky; top:0; z-index:1;">
       <tr><th class="left-align">League</th><th>xG Multiplier</th><th>Διαφορά xG (1X2)</th><th>Min xG (O2.5)</th></tr>
