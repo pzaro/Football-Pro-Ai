@@ -3932,8 +3932,8 @@ window.runCustomAudit = async function(autoMode = false) {
       window._lastAuditCalibRecs = calibRecs;
       window.runAutoCalibration(calibRecs);
 
-      // Αν autoMode: εφαρμόζουμε αμέσως αν βρεθεί βελτίωση
-      if(autoMode && window._pendingAdjustments) {
+      // Εφαρμόζουμε αμέσως αν βρεθεί βελτίωση — πάντα, όχι μόνο σε autoMode
+      if(window._pendingAdjustments) {
         const hasImprovements = Object.values(window._pendingAdjustments)
           .some(d => Object.keys(d.optimized||{}).length > 0);
         if(hasImprovements) {
@@ -4991,17 +4991,17 @@ function gridSearchLeague(records, leagueId) {
   const stats    = {};
   const logLines = [];
 
-  // Ομαδοποίηση ανά market
+  // Χρησιμοποιούμε ΟΛΟΥΣ τους αγώνες για κάθε market
+  // Το backtestParam κρίνει ποιοι θα λάμβαναν σήμα με κάθε threshold
   const byMarket = {
-    outcomes: records.filter(r => (r.predicted||'').match(/ΑΣΟΣ|ΝΙΚΗ|ΔΙΠΛΟ|AH/)),
-    over25:   records.filter(r => (r.predicted||'').includes('ΠΑΝΩ ΑΠΟ 2.5')),
-    over35:   records.filter(r => (r.predicted||'').includes('ΠΑΝΩ ΑΠΟ 3.5')),
-    btts:     records.filter(r => (r.predicted||'').match(/ΓΚΟΛ.ΓΚΟΛ|GG/)),
-    corners:  records.filter(r => (r.predicted||'').includes('ΚΟΡΝΕΡ')),
-    bombs:    records.filter(r => r.isBomb),
+    outcomes: records,  // xgDiff → 1X2
+    over25:   records,  // tXG → Over 2.5
+    over35:   records,  // tXG → Over 3.5
+    btts:     records,  // bttsProxy → BTTS
+    corners:  records,  // mult/tXG → corners
+    bombs:    records,  // mult/tXG → bombs
   };
 
-  // Map market → param
   const marketToParam = {
     outcomes: 'xgDiff',
     over25:   'minXGO25',
@@ -5014,62 +5014,51 @@ function gridSearchLeague(records, leagueId) {
   const optimized = {};
 
   Object.entries(CALIB_TARGETS).forEach(([market, target]) => {
-    const recs = byMarket[market];
+    const recs = byMarket[market].filter(r => r.actual); // μόνο settled
     if(!recs || recs.length < CALIB_MIN_N) return;
 
-    const param   = marketToParam[market];
-    const grid    = makeGrid(param);
-    const curMod  = leagueMods[leagueId] || {};
-    const curLP   = getLeagueParams(leagueId);
-    const curVal  = curMod[param] ?? curLP[param] ?? grid[Math.floor(grid.length/2)];
+    const param  = marketToParam[market];
+    const grid   = makeGrid(param);
+    const curMod = leagueMods[leagueId] || {};
+    const curLP  = getLeagueParams(leagueId);
+    const curVal = curMod[param] ?? curLP[param] ?? grid[Math.floor(grid.length/2)];
 
-    // Measure current accuracy (baseline)
-    const baselineAcc = recs.filter(r => r.actual && r.correct).length / recs.filter(r=>r.actual).length;
+    // Baseline: accuracy με την τρέχουσα παράμετρο
+    const baselineAcc = backtestParam(recs, param, curVal) ?? 0;
 
-    // Grid search: find best value
-    let bestVal      = curVal;
-    let bestAcc      = 0;
-    let bestDist     = Infinity;
-    let reachedTarget = false;
-    const curve      = [];
+    // Grid search
+    let bestVal       = curVal;
+    let bestAcc       = baselineAcc;
+    let bestDist      = Infinity;
+    let reachedTarget = baselineAcc >= target;
+    const curve       = [];
 
     grid.forEach(val => {
       const acc = backtestParam(recs, param, val);
       if(acc === null) return;
-
       curve.push({ val, acc });
       const dist = Math.abs(acc - target);
 
-      // Prefer: first value that meets/exceeds target
       if(acc >= target && !reachedTarget) {
-        bestVal = val;
-        bestAcc = acc;
-        bestDist = dist;
-        reachedTarget = true;
-      }
-      // Among target-meeting values, prefer closest (fewest signals sacrificed)
-      else if(acc >= target && reachedTarget && dist < bestDist) {
-        bestVal = val;
-        bestAcc = acc;
-        bestDist = dist;
-      }
-      // If target not yet met, track highest accuracy
-      else if(!reachedTarget && acc > bestAcc) {
-        bestVal = val;
-        bestAcc = acc;
-        bestDist = dist;
+        bestVal = val; bestAcc = acc; bestDist = dist; reachedTarget = true;
+      } else if(acc >= target && reachedTarget && dist < bestDist) {
+        // Από τις τιμές που πετυχαίνουν τον στόχο, επιλέγουμε
+        // εκείνη που θυσιάζει το λιγότερο volume (κοντύτερη στο target)
+        bestVal = val; bestAcc = acc; bestDist = dist;
+      } else if(!reachedTarget && acc > bestAcc) {
+        bestVal = val; bestAcc = acc; bestDist = dist;
       }
     });
 
-    // Only update if significantly different from current
-    const changed = Math.abs(bestVal - curVal) > 0.001;
-    const improved = bestAcc > baselineAcc + 0.02;
+    // Εφαρμόζουμε αν: η βέλτιστη τιμή είναι διαφορετική ΚΑΙ βελτιώνει έστω 1%
+    const changed  = Math.abs(bestVal - curVal) > 0.001;
+    const improved = bestAcc > baselineAcc + 0.01; // χαλαρότερο threshold: +1%
 
     stats[market] = {
-      n: recs.filter(r=>r.actual).length,
-      baselineAcc: parseFloat((baselineAcc*100).toFixed(1)),
-      bestAcc:     parseFloat((bestAcc*100).toFixed(1)),
-      target:      target*100,
+      n:            recs.length,
+      baselineAcc:  parseFloat((baselineAcc*100).toFixed(1)),
+      bestAcc:      parseFloat((bestAcc*100).toFixed(1)),
+      target:       target*100,
       reachedTarget,
       curVal,
       bestVal,
@@ -5079,14 +5068,12 @@ function gridSearchLeague(records, leagueId) {
     };
 
     if(changed && improved) {
-      // Merge: if mult is touched by multiple markets, use best
       if(param === 'mult' && optimized[param] !== undefined) {
-        // Average the two suggestions (corners + bombs)
         optimized[param] = parseFloat(((optimized[param] + bestVal) / 2).toFixed(4));
       } else {
         optimized[param] = bestVal;
       }
-      logLines.push(`${market}: baseline ${(baselineAcc*100).toFixed(0)}% → best ${(bestAcc*100).toFixed(0)}% (target ${target*100}%) | ${param}: ${curVal.toFixed(3)} → ${bestVal.toFixed(3)}`);
+      logLines.push(`${market}: ${(baselineAcc*100).toFixed(0)}%→${(bestAcc*100).toFixed(0)}% (στόχος ${target*100}%) | ${param}: ${curVal.toFixed(3)}→${bestVal.toFixed(3)}`);
     }
   });
 
