@@ -3263,107 +3263,250 @@ function renderVolatilityPanel(hS, aS, ht, at) {
   const hSea = hS.sea || {};
   const aSea = aS.sea || {};
 
-  const BASE_GOALS   = 1.10;
-  const BASE_CORNERS = 2.26;
-  const BASE_CARDS   = 2.03;
+  const BASE = { goals:1.10, goalsAgainst:1.10, corners:2.26, cards:2.03 };
 
-  const f1 = v => (v !== null && v !== undefined && !isNaN(v)) ? Number(v).toFixed(1) : '—';
-  const f2 = v => (v !== null && v !== undefined && !isNaN(v)) ? Number(v).toFixed(2) : '—';
+  const f1 = v => (v!=null&&!isNaN(v)) ? Number(v).toFixed(1) : '—';
+  const f2 = v => (v!=null&&!isNaN(v)) ? Number(v).toFixed(2) : '—';
+  const pf  = v => (v!=null&&!isNaN(v)) ? Number(v).toFixed(0) : '—';
 
-  // ── Ένα στατιστικό block: sparkline + αριθμοί + stats grid ──────
-  function statBlock(label, arr, sdR6, meanSea, sdSea, nSea, color, baseline, seaSource) {
-    const μ6  = arrMean(arr);
-    const n6  = arr ? arr.length : 0;
-    const ci6 = (μ6 !== null && sdR6 > 0) ? ci95(μ6, sdR6, n6) : null;
-    const ciS = (meanSea !== null && sdSea > 0 && nSea > 1) ? ci95(meanSea, sdSea, nSea) : null;
-    const vLbl = volatilityLabel(sdR6, baseline);
+  // ── Helpers ──────────────────────────────────────────────────────
+  function vLabel(sd, base) {
+    if(sd==null||isNaN(sd)) return {lbl:'N/A', col:'var(--text-dim)', icon:'○'};
+    const r = sd/base;
+    if(r < 0.75) return {lbl:'STABLE',   col:'var(--accent-teal)',  icon:'▼'};
+    if(r < 1.10) return {lbl:'NORMAL',   col:'var(--accent-blue)',  icon:'―'};
+    if(r < 1.40) return {lbl:'VOLATILE', col:'var(--accent-gold)',  icon:'▲'};
+    return             {lbl:'HIGH VOL',  col:'var(--accent-red)',   icon:'⚡'};
+  }
 
-    const sparkBars = n6
-      ? (() => {
-          const mx = Math.max(...arr.map(Number), 1);
-          return arr.map((v,i) => {
-            const h = Math.max(Math.round((Number(v)/mx)*32), 2);
-            return `<div title="${Number(v).toFixed(1)}" style="flex:1;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${0.4+(i/n6)*0.6};min-width:4px;"></div>`;
-          }).join('');
-        })()
-      : '';
+  // Compare two values: returns color for "better" side
+  // For goals scored: higher = better (attack). For goals against: lower = better (defense)
+  function compareColor(hVal, aVal, higherIsBetter=true) {
+    if(hVal==null||aVal==null||isNaN(hVal)||isNaN(aVal)) return ['var(--text-main)','var(--text-main)'];
+    const hBetter = higherIsBetter ? hVal>aVal : hVal<aVal;
+    const tie = Math.abs(hVal-aVal)<0.05;
+    if(tie) return ['var(--text-main)','var(--text-main)'];
+    return hBetter
+      ? ['var(--accent-green)','var(--text-sub)']
+      : ['var(--text-sub)','var(--accent-green)'];
+  }
 
-    const numBadges = n6
-      ? arr.map(v => `<span style="font-size:0.58rem;font-family:var(--font-mono);color:${color};background:${color}18;border:1px solid ${color}30;border-radius:3px;padding:1px 5px;">${Number(v).toFixed(0)}</span>`).join('')
-      : '';
+  // Sparkline compact (inline, 5px bars)
+  function spark(arr, color) {
+    if(!arr?.length) return '<span style="font-size:0.55rem;color:var(--text-dim);">—</span>';
+    const mx = Math.max(...arr.map(Number),1);
+    const bars = arr.map((v,i)=>{
+      const h=Math.max(Math.round((Number(v)/mx)*20),1);
+      return `<div style="width:5px;height:${h}px;background:${color};border-radius:1px;opacity:${0.35+(i/arr.length)*0.65};"></div>`;
+    }).join('');
+    return `<div style="display:inline-flex;align-items:flex-end;gap:1px;height:20px;vertical-align:middle;">${bars}</div>`;
+  }
 
-    return `<div style="margin-bottom:16px;">
-      <div style="font-size:0.6rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">${label}</div>
-      ${n6 ? `
-      <div style="display:flex;align-items:flex-end;gap:2px;height:32px;margin-bottom:5px;">${sparkBars}</div>
-      <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:8px;">${numBadges}</div>` : ''}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
-        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid ${color};">
-          <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Last ${n6} · ΜΟ</div>
-          <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:${μ6!==null?color:'var(--text-dim)'};">${f1(μ6)}</div>
-          <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(sdR6)} · <span style="color:${vLbl.col};font-weight:700;">${vLbl.lbl}</span></div>
-          ${ci6 ? `<div style="font-size:0.52rem;color:var(--text-dim);margin-top:3px;border-top:1px solid var(--border-light);padding-top:2px;">95% CI: [${f1(ci6[0])} — ${f1(ci6[1])}]</div>` : ''}
-        </div>
-        <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid var(--border-light);">
-          <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Σεζόν · ΜΟ <span style="color:${seaSource==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${seaSource==='empirical'?'emp':'th'}</span></div>
-          <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:${meanSea!==null?'var(--text-main)':'var(--text-dim)'};">${f1(meanSea)}</div>
-          <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(sdSea)} · n=${nSea||'?'}</div>
-          ${ciS ? `<div style="font-size:0.52rem;color:var(--text-dim);margin-top:3px;border-top:1px solid var(--border-light);padding-top:2px;">95% CI: [${f1(ciS[0])} — ${f1(ciS[1])}]</div>` : ''}
-        </div>
+  // CI badge
+  function ciBadge(ci) {
+    if(!ci) return '';
+    return `<div style="font-size:0.52rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;white-space:nowrap;">[${f1(ci[0])} – ${f1(ci[1])}]</div>`;
+  }
+
+  // A single data cell for the table
+  function cell(val, sd, ciData, arr, color, base, isBetter) {
+    const vl = vLabel(sd, base);
+    return `<div style="text-align:center;padding:8px 6px;">
+      <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:${isBetter?color:'var(--text-main)'};">${f1(val)}</div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin:2px 0;">
+        ${spark(arr,color)}
       </div>
+      <div style="font-size:0.56rem;font-weight:800;color:${vl.col};text-transform:uppercase;letter-spacing:0.04em;">${vl.icon} ${vl.lbl}</div>
+      <div style="font-size:0.52rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(sd)}</div>
+      ${ciBadge(ciData)}
     </div>`;
   }
 
-  // ── Ένα team block ────────────────────────────────────────────────
-  function teamBlock(label, r6, sea, isHome) {
-    const col  = isHome ? 'var(--accent-gold)' : 'var(--accent-blue)';
-
-    // Γκολ Δεχόμενα: το goalsAgainstArr αποθηκεύεται στο r6
-    const μGA  = arrMean(r6.goalsAgainstArr);
-    const n6   = r6.goalsAgainstArr ? r6.goalsAgainstArr.length : 0;
-    const gaCI = (μGA !== null && r6.sdGoalsAgainst > 0) ? ci95(μGA, r6.sdGoalsAgainst, n6) : null;
-    const gaV  = volatilityLabel(r6.sdGoalsAgainst, BASE_GOALS);
-
-    return `<div style="flex:1;min-width:240px;">
-      <div style="font-size:0.72rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border-light);">${esc(label)}</div>
-
-      ${statBlock('Γκολ Σκοραρίσματος', r6.goalsArr,   r6.sdGoals,   sea.avgGoals,   sea.sdGoals,   sea.n, col,                    BASE_GOALS,   sea.sdGoalsSource  ||'th')}
-
-      <div style="margin-bottom:16px;">
-        <div style="font-size:0.6rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Γκολ Δεχόμενα</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
-          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid rgba(244,63,94,0.5);">
-            <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Last ${n6} · ΜΟ</div>
-            <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:${gaV.col};">${f1(μGA)}</div>
-            <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(r6.sdGoalsAgainst)} · <span style="color:${gaV.col};font-weight:700;">${gaV.lbl}</span></div>
-            ${gaCI ? `<div style="font-size:0.52rem;color:var(--text-dim);margin-top:3px;border-top:1px solid var(--border-light);padding-top:2px;">95% CI: [${f1(gaCI[0])} — ${f1(gaCI[1])}]</div>` : ''}
-          </div>
-          <div style="background:var(--bg-surface);border-radius:5px;padding:7px;border-left:2px solid var(--border-light);">
-            <div style="font-size:0.52rem;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;font-weight:700;">Σεζόν · ΜΟ</div>
-            <div style="font-family:var(--font-mono);font-weight:900;font-size:1.05rem;color:var(--text-main);">${f1(sea.avgGoalsAgainst)}</div>
-            <div style="font-size:0.52rem;color:var(--text-muted);">σ=${f2(sea.sdGoalsAgainst)}</div>
-          </div>
-        </div>
-      </div>
-
-      ${statBlock('Κόρνερ',  r6.cornersArr, r6.sdCorners, sea.avgCorners, sea.sdCorners, sea.n, 'var(--accent-teal)', BASE_CORNERS, sea.sdCornersSource||'th')}
-      ${statBlock('Κάρτες',  r6.cardsArr,   r6.sdCards,   sea.avgCards,   sea.sdCards,   sea.n, 'var(--accent-gold)', BASE_CARDS,   sea.sdCardsSource  ||'th')}
+  // Season cell (no sparkline)
+  function seaCell(mean, sd, ci, color, source) {
+    if(mean==null||isNaN(mean)) return `<div style="text-align:center;padding:8px 6px;color:var(--text-dim);font-size:0.75rem;">—</div>`;
+    return `<div style="text-align:center;padding:8px 6px;">
+      <div style="font-family:var(--font-mono);font-size:1.05rem;font-weight:800;color:var(--text-main);">${f1(mean)}</div>
+      <div style="font-size:0.52rem;color:var(--text-muted);margin:2px 0;font-family:var(--font-mono);">σ=${f2(sd)}</div>
+      <div style="font-size:0.5rem;color:${source==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${source==='empirical'?'emp':'Poisson'}</div>
+      ${ciBadge(ci)}
     </div>`;
   }
 
-  // ── Alert box ─────────────────────────────────────────────────────
+  // ── Build all data ────────────────────────────────────────────────
+  const rows = [
+    {
+      label:'Γκολ ⚽',
+      icon:'⚽',
+      color:'var(--accent-green)',
+      base: BASE.goals,
+      higherBetter: true,
+      h: { val:arrMean(hr6.goalsArr),  sd:hr6.sdGoals,  arr:hr6.goalsArr,  ci:(arrMean(hr6.goalsArr)!=null&&hr6.sdGoals>0)?ci95(arrMean(hr6.goalsArr),hr6.sdGoals,hr6.goalsArr?.length):null,
+           seaMean:hSea.avgGoals, seaSd:hSea.sdGoals, seaCi:(hSea.avgGoals!=null&&hSea.sdGoals>0)?ci95(hSea.avgGoals,hSea.sdGoals,hSea.n):null, seaSrc:hSea.sdGoalsSource||'th' },
+      a: { val:arrMean(ar6.goalsArr),  sd:ar6.sdGoals,  arr:ar6.goalsArr,  ci:(arrMean(ar6.goalsArr)!=null&&ar6.sdGoals>0)?ci95(arrMean(ar6.goalsArr),ar6.sdGoals,ar6.goalsArr?.length):null,
+           seaMean:aSea.avgGoals, seaSd:aSea.sdGoals, seaCi:(aSea.avgGoals!=null&&aSea.sdGoals>0)?ci95(aSea.avgGoals,aSea.sdGoals,aSea.n):null, seaSrc:aSea.sdGoalsSource||'th' },
+    },
+    {
+      label:'Γκολ Δεχ. 🛡',
+      icon:'🛡',
+      color:'var(--accent-red)',
+      base: BASE.goalsAgainst,
+      higherBetter: false,
+      h: { val:arrMean(hr6.goalsAgainstArr), sd:hr6.sdGoalsAgainst, arr:hr6.goalsAgainstArr,
+           ci:(arrMean(hr6.goalsAgainstArr)!=null&&hr6.sdGoalsAgainst>0)?ci95(arrMean(hr6.goalsAgainstArr),hr6.sdGoalsAgainst,hr6.goalsAgainstArr?.length):null,
+           seaMean:hSea.avgGoalsAgainst, seaSd:hSea.sdGoalsAgainst, seaCi:null, seaSrc:'th' },
+      a: { val:arrMean(ar6.goalsAgainstArr), sd:ar6.sdGoalsAgainst, arr:ar6.goalsAgainstArr,
+           ci:(arrMean(ar6.goalsAgainstArr)!=null&&ar6.sdGoalsAgainst>0)?ci95(arrMean(ar6.goalsAgainstArr),ar6.sdGoalsAgainst,ar6.goalsAgainstArr?.length):null,
+           seaMean:aSea.avgGoalsAgainst, seaSd:aSea.sdGoalsAgainst, seaCi:null, seaSrc:'th' },
+    },
+    {
+      label:'Κόρνερ 🚩',
+      icon:'🚩',
+      color:'var(--accent-teal)',
+      base: BASE.corners,
+      higherBetter: true,
+      h: { val:arrMean(hr6.cornersArr), sd:hr6.sdCorners, arr:hr6.cornersArr,
+           ci:(arrMean(hr6.cornersArr)!=null&&hr6.sdCorners>0)?ci95(arrMean(hr6.cornersArr),hr6.sdCorners,hr6.cornersArr?.length):null,
+           seaMean:hSea.avgCorners, seaSd:hSea.sdCorners, seaCi:(hSea.avgCorners!=null&&hSea.sdCorners>0)?ci95(hSea.avgCorners,hSea.sdCorners,hSea.n):null, seaSrc:hSea.sdCornersSource||'th' },
+      a: { val:arrMean(ar6.cornersArr), sd:ar6.sdCorners, arr:ar6.cornersArr,
+           ci:(arrMean(ar6.cornersArr)!=null&&ar6.sdCorners>0)?ci95(arrMean(ar6.cornersArr),ar6.sdCorners,ar6.cornersArr?.length):null,
+           seaMean:aSea.avgCorners, seaSd:aSea.sdCorners, seaCi:(aSea.avgCorners!=null&&aSea.sdCorners>0)?ci95(aSea.avgCorners,aSea.sdCorners,aSea.n):null, seaSrc:aSea.sdCornersSource||'th' },
+    },
+    {
+      label:'Κάρτες 🟨',
+      icon:'🟨',
+      color:'var(--accent-gold)',
+      base: BASE.cards,
+      higherBetter: false,
+      h: { val:arrMean(hr6.cardsArr), sd:hr6.sdCards, arr:hr6.cardsArr,
+           ci:(arrMean(hr6.cardsArr)!=null&&hr6.sdCards>0)?ci95(arrMean(hr6.cardsArr),hr6.sdCards,hr6.cardsArr?.length):null,
+           seaMean:hSea.avgCards, seaSd:hSea.sdCards, seaCi:(hSea.avgCards!=null&&hSea.sdCards>0)?ci95(hSea.avgCards,hSea.sdCards,hSea.n):null, seaSrc:hSea.sdCardsSource||'th' },
+      a: { val:arrMean(ar6.cardsArr), sd:ar6.sdCards, arr:ar6.cardsArr,
+           ci:(arrMean(ar6.cardsArr)!=null&&ar6.sdCards>0)?ci95(arrMean(ar6.cardsArr),ar6.sdCards,ar6.cardsArr?.length):null,
+           seaMean:aSea.avgCards, seaSd:aSea.sdCards, seaCi:(aSea.avgCards!=null&&aSea.sdCards>0)?ci95(aSea.avgCards,aSea.sdCards,aSea.n):null, seaSrc:aSea.sdCardsSource||'th' },
+    },
+  ];
+
+  // ── Alert banner ─────────────────────────────────────────────────
   const hSdG = hr6.sdGoals, aSdG = ar6.sdGoals;
-  const bothVolatile = hSdG > BASE_GOALS*1.4 && aSdG > BASE_GOALS*1.4;
-  const bothStable   = hSdG !== null && aSdG !== null && !isNaN(hSdG) && !isNaN(aSdG)
-                    && hSdG < BASE_GOALS*0.75 && aSdG < BASE_GOALS*0.75;
-
+  const bothVolatile = hSdG>BASE.goals*1.4 && aSdG>BASE.goals*1.4;
+  const bothStable   = hSdG!=null&&aSdG!=null&&!isNaN(hSdG)&&!isNaN(aSdG)&&hSdG<BASE.goals*0.75&&aSdG<BASE.goals*0.75;
   const alertBox = bothVolatile
-    ? `<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);border-radius:6px;padding:8px 12px;font-size:0.72rem;margin-bottom:14px;">⚠️ <strong>Υψηλή αμοιβαία διακύμανση</strong> — Μεγαλύτερο εύρος αβεβαιότητας στην πρόβλεψη.</div>`
+    ? `<div style="display:flex;align-items:center;gap:8px;background:rgba(251,113,133,0.07);border:1px solid rgba(251,113,133,0.25);border-radius:7px;padding:8px 12px;margin-bottom:12px;font-size:0.72rem;"><span style="font-size:1rem;">⚠️</span><span><strong style="color:var(--accent-red);">Αμοιβαία Αστάθεια</strong> — Μεγαλύτερο εύρος αβεβαιότητας.</span></div>`
     : bothStable
-    ? `<div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:8px 12px;font-size:0.72rem;margin-bottom:14px;">✅ <strong>Σταθερές αποδόσεις και των δύο ομάδων</strong> — Υψηλότερη αξιοπιστία πρόβλεψης.</div>`
+    ? `<div style="display:flex;align-items:center;gap:8px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.22);border-radius:7px;padding:8px 12px;margin-bottom:12px;font-size:0.72rem;"><span style="font-size:1rem;">✅</span><span><strong style="color:var(--accent-green);">Αμοιβαία Σταθερότητα</strong> — Υψηλότερη αξιοπιστία πρόβλεψης.</span></div>`
     : '';
 
-  return alertBox + `<div style="display:flex;gap:18px;flex-wrap:wrap;">${teamBlock(ht,hr6,hSea,true)}${teamBlock(at,ar6,aSea,false)}</div>`;
+  // ── Team header labels (short) ────────────────────────────────────
+  const htShort = esc((ht||'Home').split(' ').slice(0,2).join(' '));
+  const atShort = esc((at||'Away').split(' ').slice(0,2).join(' '));
+
+  // ── Build comparative table ───────────────────────────────────────
+  // Columns: Μέγεθος | HOME last6 | HOME sea | VS | AWAY last6 | AWAY sea
+  const tableRows = rows.map(row => {
+    const [hCol, aCol] = compareColor(row.h.val, row.a.val, row.higherBetter);
+    const hBetter = hCol === 'var(--accent-green)';
+    const aBetter = aCol === 'var(--accent-green)';
+
+    // Volatility label for each
+    const hV = vLabel(row.h.sd, row.base);
+    const aV = vLabel(row.a.sd, row.base);
+
+    return `
+    <tr style="border-bottom:1px solid var(--border-light);">
+
+      <!-- Label -->
+      <td style="padding:8px 10px 8px 4px;vertical-align:middle;white-space:nowrap;">
+        <div style="font-size:0.78rem;font-weight:700;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${row.label}</div>
+        <div style="font-size:0.55rem;color:var(--text-dim);margin-top:1px;">${row.higherBetter?'↑ better':'↓ better'}</div>
+      </td>
+
+      <!-- HOME last6 -->
+      <td style="padding:4px;background:${hBetter?'rgba(74,222,128,0.04)':'transparent'};border-left:1px solid var(--border-light);">
+        <div style="text-align:center;">
+          <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:900;color:${hBetter?row.color:'var(--text-main)'};">${f1(row.h.val)}</div>
+          <div style="display:flex;justify-content:center;margin:2px 0;">${spark(row.h.arr,row.color)}</div>
+          <div style="font-size:0.55rem;font-weight:800;color:${hV.col};text-transform:uppercase;">${hV.icon} ${hV.lbl}</div>
+          <div style="font-size:0.5rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(row.h.sd)}</div>
+          ${row.h.ci ? `<div style="font-size:0.48rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">[${f1(row.h.ci[0])}–${f1(row.h.ci[1])}]</div>` : ''}
+        </div>
+      </td>
+
+      <!-- HOME season -->
+      <td style="padding:4px;background:rgba(255,255,255,0.01);border-left:1px solid rgba(255,255,255,0.04);">
+        <div style="text-align:center;">
+          <div style="font-family:var(--font-mono);font-size:0.9rem;font-weight:700;color:var(--text-sub);">${f1(row.h.seaMean)}</div>
+          <div style="font-size:0.5rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(row.h.seaSd)}</div>
+          <div style="font-size:0.48rem;color:${row.h.seaSrc==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${row.h.seaSrc==='empirical'?'emp':'th'}</div>
+          ${row.h.seaCi ? `<div style="font-size:0.48rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">[${f1(row.h.seaCi[0])}–${f1(row.h.seaCi[1])}]</div>` : ''}
+        </div>
+      </td>
+
+      <!-- VS divider -->
+      <td style="padding:0 4px;text-align:center;vertical-align:middle;">
+        <div style="font-size:0.6rem;font-weight:800;color:var(--text-dim);font-family:var(--font-cond);">VS</div>
+      </td>
+
+      <!-- AWAY season -->
+      <td style="padding:4px;background:rgba(255,255,255,0.01);border-right:1px solid rgba(255,255,255,0.04);">
+        <div style="text-align:center;">
+          <div style="font-family:var(--font-mono);font-size:0.9rem;font-weight:700;color:var(--text-sub);">${f1(row.a.seaMean)}</div>
+          <div style="font-size:0.5rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(row.a.seaSd)}</div>
+          <div style="font-size:0.48rem;color:${row.a.seaSrc==='empirical'?'var(--accent-green)':'var(--text-dim)'};">●${row.a.seaSrc==='empirical'?'emp':'th'}</div>
+          ${row.a.seaCi ? `<div style="font-size:0.48rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">[${f1(row.a.seaCi[0])}–${f1(row.a.seaCi[1])}]</div>` : ''}
+        </div>
+      </td>
+
+      <!-- AWAY last6 -->
+      <td style="padding:4px;background:${aBetter?'rgba(74,222,128,0.04)':'transparent'};border-left:1px solid var(--border-light);">
+        <div style="text-align:center;">
+          <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:900;color:${aBetter?row.color:'var(--text-main)'};">${f1(row.a.val)}</div>
+          <div style="display:flex;justify-content:center;margin:2px 0;">${spark(row.a.arr,row.color)}</div>
+          <div style="font-size:0.55rem;font-weight:800;color:${aV.col};text-transform:uppercase;">${aV.icon} ${aV.lbl}</div>
+          <div style="font-size:0.5rem;color:var(--text-muted);font-family:var(--font-mono);">σ=${f2(row.a.sd)}</div>
+          ${row.a.ci ? `<div style="font-size:0.48rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">[${f1(row.a.ci[0])}–${f1(row.a.ci[1])}]</div>` : ''}
+        </div>
+      </td>
+
+    </tr>`;
+  }).join('');
+
+  return `
+  ${alertBox}
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+  <table style="width:100%;border-collapse:collapse;min-width:420px;">
+    <thead>
+      <tr style="border-bottom:2px solid var(--border-md);">
+        <th style="padding:6px 4px 8px;text-align:left;font-size:0.6rem;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em;white-space:nowrap;font-family:var(--font-cond);">Μέγεθος</th>
+        <!-- HOME block -->
+        <th colspan="2" style="padding:6px 4px 8px;text-align:center;border-left:1px solid var(--border-light);">
+          <div style="font-size:0.68rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-cond);">🏠 ${htShort}</div>
+          <div style="display:flex;justify-content:center;gap:1px;margin-top:3px;">
+            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">LAST 6</span>
+            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">ΣΕΖΟΝ</span>
+          </div>
+        </th>
+        <th style="padding:0;width:24px;"></th>
+        <!-- AWAY block -->
+        <th colspan="2" style="padding:6px 4px 8px;text-align:center;border-right:1px solid var(--border-light);">
+          <div style="font-size:0.68rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-cond);">✈️ ${atShort}</div>
+          <div style="display:flex;justify-content:center;gap:1px;margin-top:3px;">
+            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">ΣΕΖΟΝ</span>
+            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">LAST 6</span>
+          </div>
+        </th>
+      </tr>
+    </thead>
+    <tbody>${tableRows}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6" style="padding:6px 4px 2px;font-size:0.5rem;color:var(--text-dim);font-family:var(--font-mono);">
+          ΜΟ = μέσος όρος · σ = τυπική απόκλιση · ΔΕ 95% = διάστημα εμπιστοσύνης · ●emp = empirical data · ●th = Poisson/NegBin θεωρητικό · <span style="color:var(--accent-green);">πράσινο</span> = καλύτερη πλευρά
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+  </div>`;
 }
 
 function renderSummaryTable() {
