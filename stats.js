@@ -2052,8 +2052,250 @@ function renderValueBetsTab(bets) {
 }
 
 // ================================================================
-//  TOP LISTS & TABS
+//  💣 BOMBS ENGINE — Υψηλή απόδοση + υψηλή πιθανότητα επαλήθευσης
+//
+//  Κριτήρια επιλογής:
+//  1. Implied probability (από Poisson model) ≥ 25%
+//  2. Implied odds ≥ 3.80 (αν υπάρχουν bookmaker odds)
+//     ή model-derived fair odds ≥ 3.80 (αν ΔΕΝ υπάρχουν odds)
+//  3. Composite Bomb Score βάσει:
+//     - Model probability (weighted 35%)
+//     - Form consistency (25%) — last 6 form rating
+//     - Stability (20%) — χαμηλό σ στα γκολ
+//     - Lineup quality (10%) — coverage ≥ 90%
+//     - Injury impact (10%) — penalty αν key players out
 // ================================================================
+
+const BOMB_MIN_PROB  = 0.25;   // ≥25% model prob
+const BOMB_MIN_ODDS  = 3.80;   // ≥3.80 fair odds
+const BOMB_MAX_ODDS  = 18.0;   // ≤18.0 (πολύ ακραία odds = ανεπαρκή sample)
+
+function computeBombScore(rec) {
+  if(!rec || !rec.pp) return null;
+
+  const pp      = rec.pp;
+  const hS      = rec.hS || {};
+  const aS      = rec.aS || {};
+  const odds    = rec.odds || {};  // bookmaker odds αν υπάρχουν
+
+  // ── Βρίσκουμε ποια αγορά είναι bomb candidate ──────────────────
+  const candidates = [];
+
+  const tryCandidate = (market, modelProb, label, icon, bookOdds) => {
+    if(modelProb <= 0 || modelProb > 0.95) return;
+    const fairOdds = parseFloat((1 / modelProb).toFixed(2));
+    // Επιλέγουμε: bookmaker odds αν υπάρχουν, αλλιώς fair odds
+    const effectiveOdds = (bookOdds && bookOdds > 1.5 && bookOdds <= BOMB_MAX_ODDS)
+      ? bookOdds : fairOdds;
+
+    if(effectiveOdds < BOMB_MIN_ODDS) return;
+    if(modelProb < BOMB_MIN_PROB) return;
+    if(effectiveOdds > BOMB_MAX_ODDS) return;
+
+    // ── Composite Score ──────────────────────────────────────────
+    // 1. Model probability component (0–35)
+    const probScore = clamp((modelProb - BOMB_MIN_PROB) / (0.60 - BOMB_MIN_PROB) * 35, 0, 35);
+
+    // 2. Form consistency (0–25): μέσος όρος form rating two teams
+    const hForm = safeNum(hS.formRating, 50);
+    const aForm = safeNum(aS.formRating, 50);
+    const avgForm = (hForm + aForm) / 2;
+    const formScore = clamp((avgForm - 30) / 70 * 25, 0, 25);
+
+    // 3. Stability score (0–20): αν σ < 0.83 (STABLE) per team
+    const hSD = hS.r6?.sdGoals;
+    const aSD = aS.r6?.sdGoals;
+    const hStab = hSD !== null && hSD < 0.83 ? 10 : hSD < 1.21 ? 5 : 0;
+    const aStab = aSD !== null && aSD < 0.83 ? 10 : aSD < 1.21 ? 5 : 0;
+    const stabScore = hStab + aStab; // max 20
+
+    // 4. Lineup quality (0–10)
+    const hCov = rec.lineupData?.available ? (rec.hInjAdj?.coverage ?? 0.85) : 0.80;
+    const aCov = rec.lineupData?.available ? (rec.aInjAdj?.coverage ?? 0.85) : 0.80;
+    const lineupScore = clamp(((hCov + aCov) / 2 - 0.6) / 0.4 * 10, 0, 10);
+
+    // 5. Injury penalty (0 to −10)
+    const hInjDelta = rec.hInjAdj?.delta || 0;
+    const aInjDelta = rec.aInjAdj?.delta || 0;
+    const injPenalty = clamp((hInjDelta + aInjDelta) * 15, -10, 0);
+
+    // 6. DC / Situational bonus (0–5)
+    const dcTrust = rec.dcResult?.trust || 0;
+    const sitBonus = dcTrust > 0.6 ? 3 : dcTrust > 0.3 ? 1 : 0;
+    const derbyPenalty = rec.sitCtx?.isDerby ? -3 : 0; // derbies more unpredictable
+    const motBonus = (rec.sitCtx?.hMot > 1.05 || rec.sitCtx?.aMot > 1.05) ? 2 : 0;
+
+    const totalScore = Math.round(
+      probScore + formScore + stabScore + lineupScore +
+      injPenalty + sitBonus + derbyPenalty + motBonus
+    );
+
+    candidates.push({
+      market, label, icon, modelProb, fairOdds, effectiveOdds,
+      hasBookOdds: !!(bookOdds && bookOdds > 1.5),
+      bombScore: clamp(totalScore, 0, 100),
+      breakdown: { probScore, formScore, stabScore, lineupScore, injPenalty, sitBonus }
+    });
+  };
+
+  // Ελέγχουμε κάθε αγορά
+  tryCandidate('Πάνω 3.5', pp.pO35, 'ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ',  '🚀', odds.over35);
+  tryCandidate('Πάνω 2.5', pp.pO25, 'ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ',  '🔥', odds.over25);
+  tryCandidate('Κάτω 2.5', pp.pU25, 'ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ',  '🔒', odds.under25);
+  tryCandidate('ΓΓ',       pp.pBTTS,'ΓΚΟΛ/ΓΚΟΛ (GG)',       '🎯', odds.bttsY);
+  tryCandidate('Νίκη 🏠',  pp.pHome,'ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ',      '🏠', odds.home);
+  tryCandidate('Νίκη ✈️',  pp.pAway,'ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ',  '✈️', odds.away);
+  tryCandidate('Ισοπαλία', pp.pDraw,'ΙΣΟΠΑΛΙΑ',             '🤝', odds.draw);
+
+  if(!candidates.length) return null;
+
+  // Ο καλύτερος candidate βάσει bombScore
+  const best = candidates.sort((a,b) => b.bombScore - a.bombScore)[0];
+  return { ...best, allCandidates: candidates.slice(0,3) };
+}
+
+function buildBombsList() {
+  const sd = (window.scannedMatchesData || []).filter(x => !isFinished(x.m?.fixture?.status?.short));
+  const bombs = [];
+
+  sd.forEach(rec => {
+    const bomb = computeBombScore(rec);
+    if(!bomb || bomb.bombScore < 35) return; // minimum quality threshold
+    bombs.push({
+      fixId:    rec.fixId,
+      ht:       rec.ht,
+      at:       rec.at,
+      lg:       rec.lg,
+      date:     rec.m?.fixture?.date?.split('T')[0] || '',
+      time:     rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
+      hFormRating: rec.hS?.formRating || 50,
+      aFormRating: rec.aS?.formRating || 50,
+      hSdGoals:    rec.hS?.r6?.sdGoals,
+      aSdGoals:    rec.aS?.r6?.sdGoals,
+      hasLineup:   rec.lineupData?.available,
+      hasInjury:   (rec.hInjAdj?.delta < -0.05 || rec.aInjAdj?.delta < -0.05),
+      sitCtx:      rec.sitCtx,
+      tXG:         rec.tXG,
+      omegaPick:   rec.omegaPick,
+      ...bomb
+    });
+  });
+
+  latestTopLists.bombs = bombs.sort((a,b) => b.bombScore - a.bombScore).slice(0,8);
+}
+
+function renderBombsTab(bombs) {
+  if(!bombs?.length) return `
+    <div style="text-align:center;color:var(--text-muted);padding:36px 20px;">
+      <div style="font-size:2.5rem;margin-bottom:10px;">💣</div>
+      <div style="font-weight:800;font-size:1rem;margin-bottom:6px;">Δεν βρέθηκαν Bombs</div>
+      <div style="font-size:0.8rem;line-height:1.6;">Χρειάζονται αγώνες με model prob ≥25% και fair odds ≥3.80.<br>Τρέξτε scan ή φορτώστε αποδόσεις.</div>
+    </div>`;
+
+  const scoreBar = (val, max, color) => {
+    const w = clamp(Math.round((val/max)*100), 0, 100);
+    return `<div style="background:var(--border-light);border-radius:3px;height:4px;margin-top:2px;"><div style="height:4px;width:${w}%;background:${color};border-radius:3px;"></div></div>`;
+  };
+
+  const bombColor = score => score >= 75 ? 'var(--accent-green)' : score >= 55 ? 'var(--accent-gold)' : 'var(--text-muted)';
+  const oddsColor = odds => odds >= 7.0 ? 'var(--accent-purple)' : odds >= 5.0 ? 'var(--accent-red)' : odds >= 3.8 ? 'var(--accent-gold)' : 'var(--text-muted)';
+
+  return `
+  <div style="margin-bottom:12px;padding:10px 14px;background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.25);border-radius:8px;font-size:0.75rem;color:var(--text-muted);">
+    💣 <strong style="color:var(--accent-red);">Bombs</strong> — Αγορές με model prob ≥ ${(BOMB_MIN_PROB*100).toFixed(0)}% και fair odds ≥ ${BOMB_MIN_ODDS.toFixed(2)}. Βαθμολογία βάσει φόρμας, σταθερότητας, lineup και xG.
+  </div>
+  <div style="display:flex;flex-direction:column;gap:10px;">
+  ${bombs.map((b,i) => {
+    const hStabLbl = b.hSdGoals < 0.83 ? '✅ STABLE' : b.hSdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE';
+    const aStabLbl = b.aSdGoals < 0.83 ? '✅ STABLE' : b.aSdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE';
+    const bCol     = bombColor(b.bombScore);
+
+    return `
+    <div style="background:var(--bg-base);border:1px solid ${b.bombScore>=70?'rgba(244,63,94,0.4)':'var(--border-light)'};border-radius:var(--radius-sm);overflow:hidden;${b.bombScore>=70?'box-shadow:0 0 12px rgba(244,63,94,0.15);':''}">
+
+      <!-- Header row -->
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:${b.bombScore>=70?'rgba(244,63,94,0.06)':'transparent'};">
+        <div style="font-family:var(--font-mono);font-size:0.9rem;color:var(--text-dim);min-width:26px;text-align:center;">#${i+1}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:0.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(b.ht)} vs ${esc(b.at)}</div>
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:1px;">${esc(b.lg)} · ${b.date} ${b.time}</div>
+        </div>
+        <!-- Odds box -->
+        <div style="text-align:center;min-width:64px;background:rgba(0,0,0,0.15);border-radius:6px;padding:6px 10px;">
+          <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:${oddsColor(b.effectiveOdds)};line-height:1;">${b.effectiveOdds.toFixed(2)}</div>
+          <div style="font-size:0.52rem;color:var(--text-dim);text-transform:uppercase;margin-top:1px;">${b.hasBookOdds?'PINNACLE':'FAIR ODDS'}</div>
+        </div>
+        <!-- Bomb score -->
+        <div style="text-align:center;min-width:52px;">
+          <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:${bCol};line-height:1;">${b.bombScore}</div>
+          <div style="font-size:0.52rem;color:var(--text-dim);text-transform:uppercase;">SCORE</div>
+        </div>
+      </div>
+
+      <!-- Pick -->
+      <div style="padding:8px 14px;border-top:1px solid var(--border-light);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:0.85rem;font-weight:800;color:var(--accent-green);">${b.icon} ${esc(b.label)}</span>
+        <span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--accent-blue);">Πιθ. ${(b.modelProb*100).toFixed(1)}%</span>
+        <span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--text-muted);">Fair odds: ${b.fairOdds.toFixed(2)}</span>
+      </div>
+
+      <!-- Factors grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:5px;padding:8px 14px;border-top:1px solid var(--border-light);">
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα 🏠</div>
+          <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:${b.hFormRating>=65?'var(--accent-green)':b.hFormRating>=40?'var(--accent-gold)':'var(--accent-red)'};">${b.hFormRating}%</div>
+          ${scoreBar(b.hFormRating, 100, b.hFormRating>=65?'var(--accent-green)':b.hFormRating>=40?'var(--accent-gold)':'var(--accent-red)')}
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα ✈️</div>
+          <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:${b.aFormRating>=65?'var(--accent-green)':b.aFormRating>=40?'var(--accent-gold)':'var(--accent-red)'};">${b.aFormRating}%</div>
+          ${scoreBar(b.aFormRating, 100, b.aFormRating>=65?'var(--accent-green)':b.aFormRating>=40?'var(--accent-gold)':'var(--accent-red)')}
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. 🏠</div>
+          <div style="font-size:0.72rem;font-weight:700;">${b.hSdGoals!==null&&b.hSdGoals!==undefined?hStabLbl:'—'}</div>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. ✈️</div>
+          <div style="font-size:0.72rem;font-weight:700;">${b.aSdGoals!==null&&b.aSdGoals!==undefined?aStabLbl:'—'}</div>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.52rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">xG</div>
+          <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:var(--accent-blue);">${Number(b.tXG||0).toFixed(2)}</div>
+        </div>
+        ${b.hasLineup ? `<div style="background:rgba(45,212,191,0.08);border:1px solid rgba(45,212,191,0.2);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-teal);">📋 Lineup ✓</div></div>` : ''}
+        ${b.hasInjury ? `<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.2);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-red);">🏥 Τραυμ.</div></div>` : ''}
+        ${b.sitCtx?.isDerby ? `<div style="background:rgba(244,63,94,0.08);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-red);">🔥 Derby</div></div>` : ''}
+      </div>
+
+      <!-- Score breakdown -->
+      <div style="padding:6px 14px 10px;border-top:1px solid var(--border-light);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <span style="font-size:0.55rem;color:var(--text-dim);text-transform:uppercase;font-weight:700;">Bomb Score Breakdown</span>
+          <span style="font-size:0.65rem;font-family:var(--font-mono);font-weight:800;color:${bCol};">${b.bombScore}/100</span>
+        </div>
+        <div style="display:flex;gap:3px;">
+          ${[
+            {lbl:'Πιθ.', v: b.breakdown.probScore,  max:35, col:'var(--accent-blue)'},
+            {lbl:'Φόρμα', v: b.breakdown.formScore, max:25, col:'var(--accent-green)'},
+            {lbl:'Σταθ.', v: b.breakdown.stabScore, max:20, col:'var(--accent-teal)'},
+            {lbl:'Lineup', v: b.breakdown.lineupScore, max:10, col:'var(--accent-purple)'},
+          ].map(s => `<div style="flex:${s.max};background:${s.col}20;border-radius:3px;height:16px;position:relative;overflow:hidden;" title="${s.lbl}: ${s.v.toFixed(0)}/${s.max}">
+            <div style="height:16px;width:${clamp(s.v/s.max*100,0,100)}%;background:${s.col};border-radius:3px;"></div>
+            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:0.45rem;color:#fff;font-weight:800;white-space:nowrap;">${s.lbl}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="padding:8px 14px;border-top:1px solid var(--border-light);display:flex;gap:8px;">
+        <button onclick="scrollToMatchAndOpen('row-${b.fixId}')" style="flex:1;padding:7px;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.3);color:var(--accent-red);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.75rem;">💣 Πλήρης Ανάλυση</button>
+        <button onclick="window.openLogBetModal('${b.fixId}')" style="padding:7px 14px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--accent-green);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.75rem;">📒</button>
+      </div>
+    </div>`;
+  }).join('')}
+  </div>`;
+}
 function rebuildTopLists(){
   const sd = (window.scannedMatchesData||[]).filter(x => !isFinished(x.m?.fixture?.status?.short));
   latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
@@ -2063,6 +2305,8 @@ function rebuildTopLists(){
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
   // Build value bets from existing odds data
   buildValueBetsList();
+  // Build bombs
+  buildBombsList();
 
   // ── Σίγουρη Τριάδα: multi-factor certainty score ──────────────────
   const scored = sd.filter(x => x.omegaPick && !x.omegaPick.includes('ΧΩΡΙΣ')).map(x => {
@@ -2098,6 +2342,7 @@ function renderTopSections(){
   const vbCount = latestTopLists.valueBets.length;
   const tabs=[
     {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
+    {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
     {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
@@ -2109,14 +2354,18 @@ function renderTopSections(){
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
   tabs.forEach((tab,i)=>{
-    const isVB  = tab.id==='valuebets';
-    const isTop = tab.id==='top3';
+    const isVB   = tab.id==='valuebets';
+    const isTop  = tab.id==='top3';
+    const isBomb = tab.id==='bombs';
+    const bombCount = latestTopLists.bombs?.length || 0;
     const badge = isVB && vbCount > 0
       ? `<span style="background:var(--accent-green);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${vbCount}</span>`
       : isTop
         ? `<span style="background:var(--accent-gold);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">3</span>`
-        : `<span class="tab-count">${tab.d.length}</span>`;
-    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':isTop?'color:var(--accent-gold);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
+        : isBomb && bombCount > 0
+          ? `<span style="background:var(--accent-red);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${bombCount}</span>`
+          : `<span class="tab-count">${tab.d.length}</span>`;
+    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
   });
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
@@ -2127,6 +2376,8 @@ function renderTopSections(){
       html += renderValueBetsTab(tab.d);
     } else if(tab.id==='top3'){
       html += renderTop3Certainty(tab.d);
+    } else if(tab.id==='bombs'){
+      html += renderBombsTab(tab.d);
     } else if(!tab.d.length){
       html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
     } else {
