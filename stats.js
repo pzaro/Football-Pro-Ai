@@ -3769,9 +3769,11 @@ window.runCustomAudit = async function(autoMode = false) {
       const aTot = ah + aa, aExact = `${ah}-${aa}`, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
       stats.games++;
 
-      // 1X2 / AH
+      // Stats μόνο για records με πραγματικό pick (hasPick)
+      const hadPick = p.hasPick || (!!(p.omegaPick && !p.omegaPick.includes('ΧΩΡΙΣ') && (p.strength||0) >= 70));
+
       let isHit1X2 = false;
-      if(p.outPick && p.outPick !== '-') {
+      if(hadPick && p.outPick && p.outPick !== '-') {
         isHit1X2 = p.outPick === aOut;
         if(p.omegaPick?.includes('AH')) {
           if(p.omegaPick.includes('ΑΣΟΣ'))  isHit1X2 = (ah - aa) >= 2;
@@ -3780,12 +3782,12 @@ window.runCustomAudit = async function(autoMode = false) {
         if(!p.omegaPick?.includes('ΗΜΙΧΡΟΝΟ')) { stats.validOut++; if(isHit1X2) stats.outHit++; }
       }
 
-      if(p.predOver25)  { stats.o25T++; if(aTot > 2.5) stats.o25H++; }
-      if(p.predOver35)  { stats.o35T++; if(aTot > 3.5) stats.o35H++; }
-      if(p.predUnder25) { stats.u25T++; if(aTot < 2.5) stats.u25H++; }
-      if(p.predBTTS)    { stats.bttsT++; if(aBtts)     stats.bttsH++; }
-      if(p.predCorner)  { stats.corT++;  stats.corH += isHit1X2 ? 1 : 0; } // proxy
-      if(p.exactScorePred === aExact) stats.exHit++;
+      if(hadPick && p.predOver25)  { stats.o25T++; if(aTot > 2.5) stats.o25H++; }
+      if(hadPick && p.predOver35)  { stats.o35T++; if(aTot > 3.5) stats.o35H++; }
+      if(hadPick && p.predUnder25) { stats.u25T++; if(aTot < 2.5) stats.u25H++; }
+      if(hadPick && p.predBTTS)    { stats.bttsT++; if(aBtts)     stats.bttsH++; }
+      if(hadPick && p.predCorner)  { stats.corT++;  stats.corH += isHit1X2 ? 1 : 0; }
+      if(hadPick && p.exactScorePred === aExact) stats.exHit++;
 
       curveData.push({ tXG: p.tXG||2.5, hitO25: aTot>2.5 ? 1 : 0 });
       rows.push({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2 });
@@ -3933,27 +3935,30 @@ function saveToVault(data){
     let store=JSON.parse(localStorage.getItem(LS_PREDS)||"[]");
     const map=new Map(store.map(x=>[String(x.fixtureId),x]));
     data.forEach(d=>{
-      if(d.omegaPick==="NO BET"||d.omegaPick==="ΧΩΡΙΣ ΣΥΣΤΑΣΗ")return;
+      // Αποθηκεύουμε ΟΛΟΥΣ τους αγώνες — ακόμα και ΧΩΡΙΣ ΣΥΣΤΑΣΗ
+      // Το vault χρειάζεται τα raw xG/tXG για calibration
+      if(!d.fixId || !d.m) return; // skip invalid records only
       map.set(String(d.fixId),{
-        fixtureId:d.fixId,
-        date:d.m.fixture.date,
-        leagueId:d.leagueId,
-        league:d.lg,
-        homeTeam:d.ht,
-        awayTeam:d.at,
-        outPick:d.outPick,
-        exactScorePred:d.exact,
-        exactScorePred2:d.exact2,
-        predOver25:d.omegaPick.includes('ΠΑΝΩ ΑΠΟ 2')||d.omegaPick.includes('ΠΑΝΩ ΑΠΟ 3'),
-        predOver35:d.omegaPick.includes('ΠΑΝΩ ΑΠΟ 3'),
-        predUnder25:d.omegaPick.includes('ΚΑΤΩ ΑΠΟ 2'),
-        predBTTS:d.omegaPick.includes('ΓΚΟΛ/ΓΚΟΛ')||d.omegaPick.includes('GG'),
-        predCorner:d.omegaPick.includes('ΚΟΡΝΕΡ'),
-        omegaPick:d.omegaPick,
-        tXG:d.tXG,
-        xgDiff:d.xgDiff||0,           // ← νέο: για calibration
-        strength:d.strength||0,        // ← νέο: confidence
-        isBomb:!!(d.isBomb),           // ← νέο: bomb flag
+        fixtureId:    d.fixId,
+        date:         d.m.fixture.date,
+        leagueId:     d.leagueId,
+        league:       d.lg,
+        homeTeam:     d.ht,
+        awayTeam:     d.at,
+        outPick:      d.outPick,
+        exactScorePred:  d.exact,
+        exactScorePred2: d.exact2,
+        predOver25:   d.omegaPick?.includes('ΠΑΝΩ ΑΠΟ 2') || d.omegaPick?.includes('ΠΑΝΩ ΑΠΟ 3'),
+        predOver35:   d.omegaPick?.includes('ΠΑΝΩ ΑΠΟ 3'),
+        predUnder25:  d.omegaPick?.includes('ΚΑΤΩ ΑΠΟ 2'),
+        predBTTS:     d.omegaPick?.includes('ΓΚΟΛ/ΓΚΟΛ') || d.omegaPick?.includes('GG'),
+        predCorner:   d.omegaPick?.includes('ΚΟΡΝΕΡ'),
+        omegaPick:    d.omegaPick || 'ΧΩΡΙΣ ΣΥΣΤΑΣΗ',
+        tXG:          d.tXG   || 0,
+        xgDiff:       d.xgDiff || 0,
+        strength:     d.strength || 0,
+        isBomb:       !!(d.isBomb),
+        hasPick:      !!(d.omegaPick && !d.omegaPick.includes('ΧΩΡΙΣ') && d.strength >= 70),
       });
     });
     localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));
