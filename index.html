@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.0 — AI Quant Terminal</title>
+  <title>APEX OMEGA v5.0 — OPS TERMINAL</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -103,31 +103,6 @@
       </div>
     </div>
 
-    <!-- ── MY LEAGUES MANAGER ────────────────────────────────── -->
-    <div class="quant-panel" style="border-color:rgba(251,191,36,0.25);">
-      <div class="panel-title clickable" style="color:var(--gold);" onclick="togglePanel('myLeaguesPanel','myLeaguesArrow')">
-        <span style="display:flex;align-items:center;gap:10px;">
-          ⭐ My Leagues — Επιλογή Πρωταθλημάτων
-          <span id="myLeaguesBadge" style="font-family:var(--font-mono);font-size:0.72rem;background:rgba(251,191,36,0.15);color:var(--gold);padding:2px 10px;border-radius:10px;border:1px solid rgba(251,191,36,0.3);">— πρωταθλήματα</span>
-        </span>
-        <span id="myLeaguesArrow" class="arrow">▼</span>
-      </div>
-      <div id="myLeaguesPanel" style="display:none;">
-        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
-          Επιλέξτε τα πρωταθλήματα που θέλετε να σκαναριστούν όταν επιλέγετε <b>⭐ My Leagues</b>. Οι αλλαγές αποθηκεύονται αυτόματα.
-        </div>
-        <div class="toolbar" style="margin-bottom:14px;">
-          <button class="btn btn-outline" onclick="window.selectAllLeagues()" style="font-size:0.78rem;">✅ Όλα</button>
-          <button class="btn btn-outline" onclick="window.clearAllLeagues()" style="font-size:0.78rem;color:var(--red);border-color:rgba(244,63,94,0.3);">☐ Κανένα</button>
-          <button class="btn btn-outline" onclick="window.resetMyLeagues()" style="font-size:0.78rem;color:var(--teal);border-color:rgba(45,212,191,0.3);">↺ Reset Default</button>
-        </div>
-        <div id="myLeaguesContainer" style="max-height:480px;overflow-y:auto;"></div>
-        <div class="toolbar" style="margin-top:14px;">
-          <button class="btn btn-gold" onclick="window.renderMyLeaguesPanel();showOk('My Leagues αποθηκεύτηκαν!');">💾 Αποθήκευση</button>
-        </div>
-      </div>
-    </div>
-
     <!-- ── PER-LEAGUE CALIBRATION ───────────────────────────── -->
     <div class="quant-panel" style="border-color:rgba(45,212,191,0.18);">
       <div class="panel-title clickable" style="color:var(--teal);" onclick="togglePanel('leagueModsPanel','leagueArrow')">
@@ -165,7 +140,7 @@
         <div class="input-group" style="flex:2;">
           <label class="input-label">League Filter</label>
           <select id="leagueFilter" class="quant-input">
-            <option value="MY_LEAGUES">⭐ My Leagues</option>
+            <option value="MY_LEAGUES">⭐ My Leagues (High Yield)</option>
             <option value="ALL">🌐 All Top Leagues</option>
           </select>
         </div>
@@ -175,7 +150,6 @@
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
         <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">↑ Import</button>
         <button class="btn btn-outline" id="btnFetchLineups" onclick="window.fetchAllLineups()" style="color:var(--teal);border-color:rgba(45,212,191,0.3);">📋 Fetch Lineups</button>
-        <button class="btn btn-outline" id="btnFetchOdds" onclick="window.fetchAllOdds()" style="color:var(--gold);border-color:rgba(251,191,36,0.3);">💰 Αποδόσεις</button>
         <button class="btn btn-primary" id="btnPre" onclick="runScan()">▶ Run Scan</button>
       </div>
     </div>
