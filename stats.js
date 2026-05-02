@@ -2783,51 +2783,58 @@ function buildAccordionHTML(x) {
   const aProjCor = (x.expCor || 0) * (1 - hCorShare);
 
   const finalVerdictCard = `
-    <div class="accordion-card" style="grid-column: 1 / -1; border-color: var(--accent-blue); background: linear-gradient(135deg, rgba(56,189,248,0.08), transparent); box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-      <h4 style="color:var(--accent-blue); font-size: 0.85rem; border-bottom: none; margin-bottom: 12px; padding-bottom: 0;">
-        ⚡ AI FINAL VERDICT
-      </h4>
-      <div style="display:flex; justify-content: space-around; flex-wrap: wrap; gap: 15px; text-align: center;">
-        
-        <div style="flex:1; min-width: 120px;">
-          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Αναμενόμενα Γκολ (xG)</div>
-          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--text-main);">
-            <span style="color:var(--accent-gold);" title="Home xG">${x.hXGfinal.toFixed(2)}</span> <span style="color:var(--text-dim); font-size: 1rem;">-</span> <span style="color:var(--accent-blue);" title="Away xG">${x.aXGfinal.toFixed(2)}</span>
-          </div>
-        </div>
-        
-        <div style="flex:1; min-width: 120px;">
-          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Πιθανότερο Σκορ</div>
-          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--accent-green);">
-            ${x.exact} <span style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">(ή ${x.exact2})</span>
-          </div>
-        </div>
-        
-        <div style="flex:1; min-width: 120px;">
-          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Σύνολο Κόρνερ</div>
-          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--accent-teal);">
-            ${(x.expCor || 0).toFixed(1)}
-          </div>
-          <div style="font-size: 0.75rem; font-family: var(--font-mono); font-weight:700; margin-top: 4px;">
-            <span style="color:var(--accent-gold);">🏠 ${hProjCor.toFixed(1)}</span> <span style="color:var(--text-dim);">|</span> <span style="color:var(--accent-blue);">✈️ ${aProjCor.toFixed(1)}</span>
-          </div>
-        </div>
-        
-        <div style="flex:1; min-width: 120px;">
-          <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 5px; letter-spacing: 0.5px;">Σύνολο Καρτών</div>
-          <div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 900; color: var(--accent-gold);">
-            ${totalCrd.toFixed(1)}
-          </div>
-          <div style="font-size: 0.75rem; font-family: var(--font-mono); font-weight:700; margin-top: 4px;">
-            <span style="color:var(--accent-gold);">🏠 ${hCrdExp.toFixed(1)}</span> <span style="color:var(--text-dim);">|</span> <span style="color:var(--accent-blue);">✈️ ${aCrdExp.toFixed(1)}</span>
-          </div>
-        </div>
+    <div class="accordion-card" style="grid-column:1/-1;border-color:rgba(77,184,255,0.35);background:linear-gradient(135deg,rgba(77,184,255,0.06),transparent);box-shadow:0 4px 20px rgba(0,0,0,0.25);">
 
-      </div>
-    </div>
-  `;
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:0.7rem;font-weight:800;font-family:var(--font-cond);color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.12em;">⚡ ΤΕΛΙΚΗ ΣΥΣΤΑΣΗ</span>
+          <span style="background:${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?'rgba(74,222,128,0.12)':'rgba(255,255,255,0.04)'};border:1px solid ${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?'rgba(74,222,128,0.3)':'var(--border-light)'};color:${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?'var(--accent-green)':'var(--text-muted)'};font-size:0.7rem;font-weight:800;font-family:var(--font-cond);padding:3px 10px;border-radius:10px;text-transform:uppercase;">${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?esc(x.omegaPick):'ΧΩΡΙΣ ΣΥΣΤΑΣΗ'}</span>
+        </div>
+        <span style="font-family:var(--font-mono);font-size:0.78rem;color:${(x.strength||0)>=70?'var(--accent-green)':'var(--text-muted)'};font-weight:700;background:${(x.strength||0)>=70?'rgba(74,222,128,0.08)':'rgba(255,255,255,0.03)'};padding:3px 10px;border-radius:8px;border:1px solid ${(x.strength||0)>=70?'rgba(74,222,128,0.2)':'var(--border-light)'};">CONF ${(x.strength||0).toFixed(0)}%</span>
+      </div>
 
-  return `
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+      <table style="width:100%;border-collapse:collapse;min-width:300px;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border-md);">
+            <th style="padding:5px 8px 7px 0;text-align:left;width:32%;font-size:0.6rem;font-weight:700;color:var(--text-muted);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.1em;"></th>
+            <th style="padding:5px 4px 7px;text-align:center;width:23%;font-size:0.68rem;font-weight:800;color:var(--accent-gold);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">HOME</th>
+            <th style="padding:5px 4px 7px;text-align:center;width:23%;font-size:0.68rem;font-weight:800;color:var(--accent-blue);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">AWAY</th>
+            <th style="padding:5px 4px 7px;text-align:center;width:22%;font-size:0.62rem;font-weight:700;color:var(--text-muted);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">ΣΥΝΟΛΟ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border-light);">
+            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">⚽ xG</td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-gold);">${x.hXGfinal.toFixed(2)}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);">${x.aXGfinal.toFixed(2)}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--text-main);">${(x.hXGfinal+x.aXGfinal).toFixed(2)}</span></td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border-light);background:rgba(74,222,128,0.03);">
+            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">🎯 Σκορ</td>
+            <td colspan="2" style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.45rem;font-weight:900;color:var(--accent-green);">${x.exact}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:0.88rem;font-weight:700;color:var(--text-muted);">${x.exact2&&x.exact2!==x.exact?x.exact2:'—'}</span><div style="font-size:0.6rem;color:var(--text-muted);">alt</div></td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border-light);">
+            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">🚩 Κόρνερ</td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-gold);">${hProjCor.toFixed(1)}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);">${aProjCor.toFixed(1)}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--accent-teal);">${(x.expCor||0).toFixed(1)}</span></td>
+          </tr>
+          <tr>
+            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">🟨 Κάρτες</td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-gold);">${hCrdExp.toFixed(1)}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);">${aCrdExp.toFixed(1)}</span></td>
+            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--accent-gold);">${totalCrd.toFixed(1)}</span></td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      ${x.reason&&!x.reason.includes('Ανεπαρκής')?`<div style="margin-top:10px;padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:5px;border-left:2px solid rgba(77,184,255,0.4);"><span style="font-size:0.68rem;color:var(--text-muted);font-family:var(--font-mono);">${esc(x.reason)}</span></div>`:''}
+    </div>`;
+
+  return `
     <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
       <div class="accordion-grid">
       
@@ -3795,6 +3802,30 @@ window.runCustomAudit=async function(){
     
     html+=`</tbody></table></div></div>`;
     document.getElementById('auditSection').innerHTML=html;
+
+    // ── Auto-Calibration: feed audit records into calibration engine ──
+    const calibRecs = filteredStore.map(p => ({
+      leagueId:  p.leagueId,
+      predicted: p.omegaPick || '',
+      actual:    p.actual || null,
+      isBomb:    !!(p.omegaPick && (p.omegaPick.includes('💣') || parseFloat(1/(p.tXG||3)) >= 3.8)),
+      correct:   p.actual ? (()=>{
+        const pick = p.omegaPick||'';
+        const ah = parseInt(p.actual.split('-')[0]), aa = parseInt(p.actual.split('-')[1]);
+        const aTot = ah+aa;
+        if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ ΓΗΠΕΔ')) return ah>aa;
+        if(pick.includes('ΔΙΠΛΟ')||pick.includes('ΝΙΚΗ ΦΙΛΟΞ'))  return aa>ah;
+        if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) return aTot>2.5;
+        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) return aTot>3.5;
+        if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')) return aTot<2.5;
+        if(pick.includes('ΓΚΟΛ/ΓΚΟΛ'))    return ah>0&&aa>0;
+        if(pick.includes('ΚΟΡΝΕΡ'))        return true; // no corner actual data
+        return false;
+      })() : null,
+    }));
+    window._lastAuditCalibRecs = calibRecs;
+    window.runAutoCalibration(calibRecs, false); // preview mode (no auto-apply)
+
     showOk('Audit & AI Analysis ολοκληρώθηκε.');
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
@@ -4603,6 +4634,297 @@ function renderStabilitySignals(rec) {
   </div>`;
 }
 
+// ================================================================
+//  AUTO-CALIBRATION ENGINE
+//  Μαθαίνει από τα αποτελέσματα του audit και ρυθμίζει αυτόματα
+//  τα per-league parameters για να πλησιάσει τους στόχους.
+//
+//  ΣΤΟΧΟΙ:
+//    - Σημεία (1X2/AH)  ≥ 75%
+//    - BTTS              ≥ 80%
+//    - Over 2.5          ≥ 75%
+//    - Over 3.5          ≥ 75%
+//    - Κόρνερ            ≥ 70%
+//    - Bombs             ≥ 60%
+//
+//  ΜΗΧΑΝΙΣΜΟΣ:
+//    - Αν accuracy < target → αυστηροποίηση threshold (mult/minXG/xgDiff ↑)
+//    - Αν accuracy > target + 10% → χαλάρωση threshold (περισσότερα signals)
+//    - Learning rate 0.04 per iteration (gentle gradient)
+//    - Bounds: mult [0.75, 1.40], minXGO25 [2.00, 3.20], xgDiff [0.30, 0.90]
+//    - Min sample size: 8 per market για αξιόπιστη βαθμονόμηση
+// ================================================================
+
+const CALIB_TARGETS = {
+  outcomes:  0.75,   // 1X2 / AH picks
+  btts:      0.80,   // BTTS
+  over25:    0.75,   // Πάνω 2.5
+  over35:    0.75,   // Πάνω 3.5
+  corners:   0.70,   // Κόρνερ
+  bombs:     0.60,   // Bombs (υψηλή απόδοση)
+};
+
+const CALIB_LR    = 0.04;   // Learning rate (ήπιο)
+const CALIB_BAND  = 0.08;   // Dead-band: ±8% γύρω από target → δεν αλλάζουμε
+const CALIB_MIN_N = 8;      // Ελάχιστα δεδομένα για βαθμονόμηση
+
+const PARAM_BOUNDS = {
+  mult:      [0.75, 1.40],
+  minXGO25:  [2.00, 3.20],
+  minXGO35:  [2.70, 4.00],
+  xgDiff:    [0.30, 0.90],
+  minBTTS:   [0.60, 1.30],
+  maxU25:    [1.80, 2.80],
+};
+
+const LS_CALIB_LOG = 'omega_calib_log_v5.0';
+let calibLog = [];
+
+function loadCalibLog() {
+  try { const c = JSON.parse(localStorage.getItem(LS_CALIB_LOG)); if(Array.isArray(c)) calibLog = c; } catch {}
+}
+function saveCalibLog() {
+  try { localStorage.setItem(LS_CALIB_LOG, JSON.stringify(calibLog.slice(0,100))); } catch {}
+}
+
+/**
+ * Κύρια συνάρτηση: αναλύει audit records και επιστρέφει
+ * προτεινόμενα adjustments ανά league.
+ */
+function computeCalibAdjustments(auditRecords) {
+  // Group records by leagueId
+  const byLeague = {};
+  auditRecords.forEach(r => {
+    const id = r.leagueId || r.lgId || 0;
+    if(!byLeague[id]) byLeague[id] = [];
+    byLeague[id].push(r);
+  });
+
+  const adjustments = {};
+
+  Object.entries(byLeague).forEach(([leagueId, recs]) => {
+    const lid = parseInt(leagueId);
+    const cur = { ...getLeagueParams(lid) };
+    const mods = { ...(leagueMods[lid] || {}) };
+    const adj = {};
+    const stats = {};
+    const log = [];
+
+    // ── Compute accuracy per market ─────────────────────────────
+    const marketHits = { outcomes:0, btts:0, over25:0, over35:0, corners:0, bombs:0 };
+    const marketN    = { outcomes:0, btts:0, over25:0, over35:0, corners:0, bombs:0 };
+
+    recs.forEach(r => {
+      // r.predicted / r.actual — set by audit engine
+      if(!r.actual) return; // not yet settled
+      const pick = r.predicted || '';
+      const act  = r.actual;
+
+      if(pick.includes('ΑΣΟΣ')||pick.includes('ΝΙΚΗ')||pick.includes('ΔΙΠΛΟ')||pick.includes('AH')) {
+        marketN.outcomes++;
+        if(r.correct) marketHits.outcomes++;
+      }
+      if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) {
+        marketN.btts++;
+        if(r.correct) marketHits.btts++;
+      }
+      if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) {
+        marketN.over25++;
+        if(r.correct) marketHits.over25++;
+      }
+      if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) {
+        marketN.over35++;
+        if(r.correct) marketHits.over35++;
+      }
+      if(pick.includes('ΚΟΡΝΕΡ')||pick.includes('ΚΟΡΝ')) {
+        marketN.corners++;
+        if(r.correct) marketHits.corners++;
+      }
+      if(r.isBomb) {
+        marketN.bombs++;
+        if(r.correct) marketHits.bombs++;
+      }
+    });
+
+    // ── Apply gradient adjustments ───────────────────────────────
+    Object.entries(CALIB_TARGETS).forEach(([market, target]) => {
+      const n = marketN[market];
+      if(n < CALIB_MIN_N) return; // not enough data
+
+      const acc = marketHits[market] / n;
+      const err = acc - target; // negative = underperforming
+      stats[market] = { acc: parseFloat((acc*100).toFixed(1)), n, target: target*100, err: parseFloat((err*100).toFixed(1)) };
+
+      if(Math.abs(err) < CALIB_BAND) return; // within acceptable band
+
+      const direction = err < 0 ? 1 : -1; // if below target → tighten (raise thresholds)
+      const delta = CALIB_LR * Math.abs(err) * direction;
+
+      if(market === 'outcomes') {
+        // xgDiff: higher = more selective (fewer but better 1X2 picks)
+        const newDiff = clamp((mods.xgDiff ?? cur.xgDiff) + delta * 0.4, ...PARAM_BOUNDS.xgDiff);
+        adj.xgDiff = parseFloat(newDiff.toFixed(3));
+        log.push(`Σημεία: acc=${(acc*100).toFixed(0)}% vs target ${target*100}% → xgDiff ${(mods.xgDiff??cur.xgDiff).toFixed(3)} → ${adj.xgDiff}`);
+      }
+      if(market === 'over25') {
+        // minXGO25: higher = more selective
+        const newMin = clamp((mods.minXGO25 ?? cur.minXGO25) + delta * 0.5, ...PARAM_BOUNDS.minXGO25);
+        adj.minXGO25 = parseFloat(newMin.toFixed(3));
+        log.push(`Πάνω 2.5: acc=${(acc*100).toFixed(0)}% → minXGO25 ${(mods.minXGO25??cur.minXGO25).toFixed(3)} → ${adj.minXGO25}`);
+      }
+      if(market === 'over35') {
+        const newMin = clamp((mods.minXGO35 ?? cur.minXGO35) + delta * 0.5, ...PARAM_BOUNDS.minXGO35);
+        adj.minXGO35 = parseFloat(newMin.toFixed(3));
+        log.push(`Πάνω 3.5: acc=${(acc*100).toFixed(0)}% → minXGO35 ${(mods.minXGO35??cur.minXGO35).toFixed(3)} → ${adj.minXGO35}`);
+      }
+      if(market === 'btts') {
+        const newBTTS = clamp((mods.minBTTS ?? cur.minBTTS) + delta * 0.3, ...PARAM_BOUNDS.minBTTS);
+        adj.minBTTS = parseFloat(newBTTS.toFixed(3));
+        log.push(`BTTS: acc=${(acc*100).toFixed(0)}% → minBTTS ${(mods.minBTTS??cur.minBTTS).toFixed(3)} → ${adj.minBTTS}`);
+      }
+      if(market === 'corners') {
+        // mult επηρεάζει και τα corners indirectly μέσω xG
+        const newMult = clamp((mods.mult ?? cur.mult) + delta * 0.15, ...PARAM_BOUNDS.mult);
+        adj.mult = parseFloat(newMult.toFixed(3));
+        log.push(`Κόρνερ: acc=${(acc*100).toFixed(0)}% → mult ${(mods.mult??cur.mult).toFixed(3)} → ${adj.mult}`);
+      }
+      if(market === 'bombs') {
+        // Bombs depend on overall xG → adjust mult slightly
+        const newMult = clamp((mods.mult ?? cur.mult) + delta * 0.10, ...PARAM_BOUNDS.mult);
+        if(!adj.mult) adj.mult = parseFloat(newMult.toFixed(3));
+        log.push(`Bombs: acc=${(acc*100).toFixed(0)}% → mult ${(mods.mult??cur.mult).toFixed(3)} → ${adj.mult}`);
+      }
+    });
+
+    if(Object.keys(adj).length > 0) {
+      adjustments[lid] = { adj, stats, log, n: recs.length };
+    }
+  });
+
+  return adjustments;
+}
+
+/**
+ * Εφαρμόζει τα adjustments στο leagueMods και αποθηκεύει.
+ */
+function applyCalibAdjustments(adjustments) {
+  const applied = [];
+  Object.entries(adjustments).forEach(([lid, data]) => {
+    const id = parseInt(lid);
+    if(!leagueMods[id]) leagueMods[id] = {};
+    Object.assign(leagueMods[id], data.adj);
+    applied.push({ leagueId: id, ...data });
+  });
+
+  try { localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); } catch {}
+
+  // Log entry
+  calibLog.unshift({
+    date: new Date().toLocaleString('el-GR'),
+    applied: applied.map(a => ({
+      leagueId: a.leagueId,
+      adj: a.adj,
+      stats: a.stats,
+      n: a.n,
+    }))
+  });
+  saveCalibLog();
+
+  // Re-simulate with new params
+  window.resimulateMatches();
+  renderLeagueMods();
+  return applied;
+}
+
+/**
+ * UI renderer: εμφανίζει το calibration panel με preview και apply
+ */
+window.runAutoCalibration = function(auditRecords, autoApply = false) {
+  if(!auditRecords?.length) { showErr('Δεν υπάρχουν audit records.'); return; }
+
+  const adjustments = computeCalibAdjustments(auditRecords);
+  const el = document.getElementById('autoCalibPanel');
+  if(!el) return;
+
+  if(!Object.keys(adjustments).length) {
+    el.innerHTML = `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);">
+      ✅ <strong>Όλα τα πρωταθλήματα εντός στόχου!</strong> Δεν απαιτείται βαθμονόμηση.
+    </div>`;
+    return;
+  }
+
+  const rows = Object.entries(adjustments).map(([lid, data]) => {
+    const lgName = (typeof LEAGUES_DATA !== 'undefined' ? LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
+    const statsHtml = Object.entries(data.stats).map(([m,s]) => {
+      const ok = s.acc >= s.target;
+      const bar = `<div style="background:var(--border-light);border-radius:2px;height:4px;width:60px;display:inline-block;vertical-align:middle;margin-left:4px;"><div style="height:4px;width:${Math.min(s.acc/s.target*100,100).toFixed(0)}%;background:${ok?'var(--accent-green)':'var(--accent-red)'};border-radius:2px;"></div></div>`;
+      const marketLabel = {outcomes:'1X2',btts:'BTTS',over25:'O2.5',over35:'O3.5',corners:'COR',bombs:'BOMB'}[m]||m;
+      return `<span style="font-size:0.65rem;margin-right:8px;white-space:nowrap;"><span style="color:${ok?'var(--accent-green)':'var(--accent-red)'};">${marketLabel}:${s.acc}%</span>${bar}<span style="color:var(--text-muted);">(στόχ:${s.target}%,n=${s.n})</span></span>`;
+    }).join('');
+
+    const adjHtml = Object.entries(data.adj).map(([k,v]) => {
+      const cur = getLeagueParams(parseInt(lid));
+      const curVal = leagueMods[lid]?.[k] ?? cur[k] ?? '?';
+      const arrow = v > curVal ? '▲' : '▼';
+      const col = v > curVal ? 'var(--accent-gold)' : 'var(--accent-teal)';
+      return `<span style="font-size:0.68rem;font-family:var(--font-mono);color:${col};margin-right:8px;">${k}: ${typeof curVal==='number'?curVal.toFixed(3):curVal} ${arrow} <strong>${v}</strong></span>`;
+    }).join('');
+
+    return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+        <span style="font-weight:700;font-size:0.82rem;color:var(--text-main);">${esc(lgName)}</span>
+        <span style="font-size:0.65rem;color:var(--text-muted);">n=${data.n} αγώνες</span>
+      </div>
+      <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px;">${statsHtml}</div>
+      <div style="padding:6px 8px;background:rgba(252,211,77,0.06);border-radius:5px;border-left:2px solid rgba(252,211,77,0.3);">
+        <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-cond);text-transform:uppercase;font-weight:700;letter-spacing:0.08em;">Προτεινόμενες αλλαγές: </span>${adjHtml}
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+  <div style="margin-bottom:12px;padding:10px 14px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;font-size:0.75rem;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <span style="font-size:1rem;">🎯</span>
+    <span style="flex:1;">Ανάλυση <strong style="color:var(--accent-gold);">${Object.keys(adjustments).length} πρωταθλήματος</strong> που χρειάζονται βαθμονόμηση.</span>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button onclick="applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:32px;font-size:0.78rem;">✅ Εφαρμογή Όλων</button>
+      <button onclick="resetCalibration()" class="btn btn-outline" style="height:32px;font-size:0.78rem;color:var(--accent-red);border-color:rgba(251,113,133,0.25);">↺ Reset</button>
+    </div>
+  </div>
+  ${rows}
+  <div style="margin-top:10px;font-size:0.62rem;color:var(--text-muted);">Learning rate: ${CALIB_LR} · Band: ±${(CALIB_BAND*100).toFixed(0)}% · Min samples: ${CALIB_MIN_N}</div>`;
+
+  window._pendingAdjustments = adjustments;
+  if(autoApply) applyCalibAdjustments(adjustments);
+};
+
+/**
+ * Render calibration history log
+ */
+function renderCalibLog() {
+  const el = document.getElementById('calibLogSection');
+  if(!el || !calibLog.length) return;
+  el.innerHTML = calibLog.slice(0, 10).map(entry => `
+    <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:0.72rem;">
+      <div style="color:var(--text-muted);margin-bottom:4px;font-family:var(--font-mono);">${entry.date}</div>
+      ${(entry.applied||[]).map(a => `
+        <div style="color:var(--text-sub);">${(typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA.find(l=>l.id==a.leagueId)?.name:null)||`League ${a.leagueId}`}:
+          ${Object.entries(a.adj).map(([k,v])=>`<span style="color:var(--accent-gold);font-family:var(--font-mono);">${k}=${v}</span>`).join(' · ')}
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+window.resetCalibration = function() {
+  if(!confirm('Επαναφορά ΟΛΩΝ των per-league calibration στις default τιμές;')) return;
+  leagueMods = {};
+  try { localStorage.removeItem(LS_LGMODS); } catch {}
+  window.resimulateMatches();
+  renderLeagueMods();
+  const el = document.getElementById('autoCalibPanel');
+  if(el) el.innerHTML = '';
+  showOk('Επαναφορά ολοκληρώθηκε.');
+};
+
 window.resimulateMatches=function(){
   if(!window.scannedMatchesData.length)return;
   window.scannedMatchesData.forEach(d=>{
@@ -4801,6 +5123,8 @@ window.addEventListener('DOMContentLoaded',()=>{
       loadSettings();loadBankroll();initCredits();updateAuditLeagueFilter();
       renderLeagueMods();
       window.loadBetJournal();
+      loadCalibLog();
+      renderCalibLog();
       // My Leagues panel
       window.renderMyLeaguesPanel();
       updateLeagueFilterOption();
