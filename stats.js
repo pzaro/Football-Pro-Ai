@@ -28,14 +28,14 @@ const ACRONYM_DICT = {
   'xGA':      'xG Against — Αναμενόμενα γκολ που δέχεται η ομάδα. Μετράει αδυναμία άμυνας',
   'xG%':      'xG Contribution % — Ποσοστό συνεισφοράς παίκτη στο team xG βάσει GAP (Γκολ + 0.4 × Ασίστ)',
   'xG Adj':   'xG Adjusted — Διορθωμένο xG μετά αφαίρεση τραυματισμένων παικτών. Εμφανίζεται σε χρυσό χρώμα',
-  'xG Diff':  'xG Difference — Διαφορά xG μεταξύ home/away. Κατώφλι για σήματα 1X2 (default: 0.48)',
+  'Διαφορά xG':  'Διαφορά xGerence — Διαφορά xG μεταξύ home/away. Κατώφλι για σήματα 1X2 (default: 0.48)',
   'GAP':      'Goal-Assist Points — Γκολ + 0.4 × Ασίστ. Composite δείκτης επιθετικής συνεισφοράς παίκτη',
   'H2H':      'Head-to-Head — Ιστορικές απευθείας αναμετρήσεις. Χρησιμοποιείται για 12% blend στο λ',
   'D-C':      'Dixon-Coles — Στατιστική διόρθωση Poisson για χαμηλά σκορ (0-0, 1-0, 0-1, 1-1) με ρ = −0.13',
   'INJ':      'Injury flag — Τραυματισμένοι παίκτες με σημαντική επίπτωση στο xG (delta < −0.05)',
   'Conf%':    'Confidence % — Εσωτερική βαθμολογία εμπιστοσύνης σήματος (0–99%). Βάσει Poisson πιθανοτήτων',
   'Card%':    'Card Probability % — Πιθανότητα κίτρινης κάρτας: 1 − e^(−κάρτες/εμφανίσεις). Poisson μοντέλο',
-  'Adj🟨%':   'Adjusted Card % — Διορθωμένη πιθανότητα κάρτας που συνυπολογίζει: (1) επιθετικότητα αντιπάλου, (2) αγωνιστική ένταση (xG Diff), (3) league type. ▲ = αυξημένος κίνδυνος, ▼ = μειωμένος',
+  'Adj🟨%':   'Adjusted Card % — Διορθωμένη πιθανότητα κάρτας που συνυπολογίζει: (1) επιθετικότητα αντιπάλου, (2) αγωνιστική ένταση (Διαφορά xG), (3) league type. ▲ = αυξημένος κίνδυνος, ▼ = μειωμένος',
   'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit',
   'Kelly':    'Kelly Criterion — Μαθηματικός τύπος βέλτιστου ποσού στοιχήματος βάσει bankroll & πλεονεκτήματος',
   'LRU':      'Least Recently Used — Στρατηγική cache: αφαιρείται πρώτο το παλαιότερο/ανενεργό entry',
@@ -861,33 +861,33 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
   
-  let omegaPick='NO BET',reason='Insufficient statistical edge.',pickScore=0;
+  let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Ανεπαρκής στατιστικό πλεονέκτημα.',pickScore=0;
   
   // 1. ASIAN HANDICAP (-1.5)
-  if(pAH_Home >= 0.38 && xgDiff >= 0.90 && hS.formRating >= 50){omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;reason=`AH -1.5 Prob: ${pct(pAH_Home)}`;}
-  else if(pAH_Away >= 0.38 && xgDiff <= -0.90 && aS.formRating >= 50){omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;reason=`AH -1.5 Prob: ${pct(pAH_Away)}`;}
+  if(pAH_Home >= 0.38 && xgDiff >= 0.90 && hS.formRating >= 50){omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Home)} | Διαφ. xG: +${xgDiff.toFixed(2)}`;}
+  else if(pAH_Away >= 0.38 && xgDiff <= -0.90 && aS.formRating >= 50){omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Away)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;}
 
   // 2. HALF-TIME WINNER
-  else if(ppHT.pHome >= 0.45 && xgDiff >= 0.75){omegaPick='⏱️ 1 ΗΜΙΧΡΟΝΟ';pickScore=ppHT.pHome*100;reason=`HT 1 Prob: ${pct(ppHT.pHome)}`;}
-  else if(ppHT.pAway >= 0.45 && xgDiff <= -0.75){omegaPick='⏱️ 2 ΗΜΙΧΡΟΝΟ';pickScore=ppHT.pAway*100;reason=`HT 2 Prob: ${pct(ppHT.pAway)}`;}
+  else if(ppHT.pHome >= 0.45 && xgDiff >= 0.75){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΓΗΠΕΔΟΥΧΟΙ';pickScore=ppHT.pHome*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pHome)} | xG Διαφ.: +${xgDiff.toFixed(2)}`;}
+  else if(ppHT.pAway >= 0.45 && xgDiff <= -0.75){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΦΙΛΟΞΕΝΟΥΜΕΝΟΙ';pickScore=ppHT.pAway*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pAway)} | xG Διαφ.: ${xgDiff.toFixed(2)}`;}
 
   // 3. OVER / UNDER
-  else if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 OVER 3.5 GOALS';pickScore=pp.pO35*100;reason=`Poisson O3.5: ${pct(pp.pO35)} | tXG:${tXG.toFixed(2)}`;}
-  else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 OVER 2.5 GOALS';pickScore=pp.pO25*100;reason=`Poisson O2.5: ${pct(pp.pO25)} | tXG:${tXG.toFixed(2)}`;}
-  else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 UNDER 2.5 GOALS';pickScore=pp.pU25*100;reason=`Poisson U2.5: ${pct(pp.pU25)} | tXG:${tXG.toFixed(2)}`;}
+  else if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ';pickScore=pp.pO35*100;reason=`Poisson Πάνω 3.5: ${pct(pp.pO35)} | Συν. xG: ${tXG.toFixed(2)}`;}
+  else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pO25*100;reason=`Poisson Πάνω 2.5: ${pct(pp.pO25)} | Συν. xG: ${tXG.toFixed(2)}`;}
+  else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pU25*100;reason=`Poisson Κάτω 2.5: ${pct(pp.pU25)} | Συν. xG: ${tXG.toFixed(2)}`;}
   
   // 4. GOAL / GOAL
-  else if(btts>=lp.minBTTS&&pp.pBTTS>=0.50&&hXG>=0.95&&aXG>=0.95){omegaPick='🎯 GOAL/GOAL (BTTS)';pickScore=pp.pBTTS*100;reason=`BTTS: ${pct(pp.pBTTS)}`;}
+  else if(btts>=lp.minBTTS&&pp.pBTTS>=0.50&&hXG>=0.95&&aXG>=0.95){omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;reason=`Πιθ. ΓΓ: ${pct(pp.pBTTS)} | xG: ${hXG.toFixed(2)} – ${aXG.toFixed(2)}`;}
   
   // 5. STRAIGHT WIN (1X2)
   else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff){
-    const outcome=outPick==='1'?'🏠 ΑΣΟΣ':'✈️ ΔΙΠΛΟ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
-    if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Home':'Away'}: ${pct(outProb)}`;}
+    const outcome=outPick==='1'?'🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ':'✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
+    if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Γηπεδ.':'Φιλοξ.'}: ${pct(outProb)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;}
   }
   
   // 6. PROPS
-  else if(cornerRes.conf>=72){omegaPick='🚩 OVER 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Corner Model: ${cornerRes.conf.toFixed(1)}%`;}
-  else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 OVER 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Avg Cards: ${totCards.toFixed(1)}`;}
+  else if(cornerRes.conf>=72){omegaPick='🚩 ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Μοντέλο Κόρνερ: ${cornerRes.conf.toFixed(1)}% | Αναμ.: ${cornerRes.expCor.toFixed(1)}`;}
+  else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Μέσος Καρτών: ${totCards.toFixed(1)} | Ισορροπημένος αγώνας`;}
   
   // exactConf: αθροίζει πιθανότητες Top-1 + Top-2 (Dixon-Coles adjusted) — πιο ρεαλιστικό
   const top1P=pp.bestScore.prob, top2P=pp.secondScore.prob;
@@ -1290,14 +1290,14 @@ function computeInPlayPick(baseRec,liveFixture){
   const ppAdj=getPoissonProbabilities(hLambdaAdj,aLambdaAdj);
   const decayed=inPlayMarketDecay(ppAdj,elapsed,hGoals,aGoals);
   const totGoals=hGoals+aGoals;
-  let inPlayPick='NO BET ⏱',inPlayConf=0,inPlayReason='';
-  if(totGoals>=3||decayed.pO35>=0.70){inPlayPick='🚀 OVER 3.5 GOALS';inPlayConf=decayed.pO35*100;inPlayReason=`${totGoals>=4?'4+ goals':'P(O3.5): '+(decayed.pO35*100).toFixed(0)+'%'} · ${elapsed}'`;}
-  else if(totGoals>=2||decayed.pO25>=0.72){inPlayPick='🔥 OVER 2.5 GOALS';inPlayConf=decayed.pO25*100;inPlayReason=`${totGoals===2?'2 goals':'P(O2.5): '+(decayed.pO25*100).toFixed(0)+'%'} · ${elapsed}'`;}
-  else if(decayed.pU25>=0.72&&elapsed>=60){inPlayPick='🔒 UNDER 2.5 GOALS';inPlayConf=decayed.pU25*100;inPlayReason=`${totGoals} goals · ${elapsed}' · P(U2.5): ${(decayed.pU25*100).toFixed(0)}%`;}
-  else if(decayed.pBTTS>=0.68&&hGoals===1&&aGoals===0&&elapsed<=70){inPlayPick='🎯 BTTS (Away to score)';inPlayConf=decayed.pBTTS*100;inPlayReason=`Home leads 1-0 · ${elapsed}'`;}
-  else if(decayed.pBTTS>=0.68&&aGoals===1&&hGoals===0&&elapsed<=70){inPlayPick='🎯 BTTS (Home to score)';inPlayConf=decayed.pBTTS*100;inPlayReason=`Away leads 1-0 · ${elapsed}'`;}
-  else if(elapsed<30){const decay=1-(elapsed/90)*0.3;inPlayPick=baseRec.omegaPick||'NO BET ⏱';inPlayConf=(baseRec.strength||0)*decay;inPlayReason=`Pre-match signal · ${elapsed}' elapsed`;}
-  else{inPlayReason=`Insufficient edge at ${elapsed}'`;}
+  let inPlayPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ ⏱',inPlayConf=0,inPlayReason='';
+  if(totGoals>=3||decayed.pO35>=0.70){inPlayPick='🚀 ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ';inPlayConf=decayed.pO35*100;inPlayReason=`${totGoals>=4?'4+ γκολ':'Πιθ. Πάνω 3.5: '+(decayed.pO35*100).toFixed(0)+'%'} · ${elapsed}'`;}
+  else if(totGoals>=2||decayed.pO25>=0.72){inPlayPick='🔥 ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ';inPlayConf=decayed.pO25*100;inPlayReason=`${totGoals===2?'2 γκολ':'Πιθ. Πάνω 2.5: '+(decayed.pO25*100).toFixed(0)+'%'} · ${elapsed}'`;}
+  else if(decayed.pU25>=0.72&&elapsed>=60){inPlayPick='🔒 ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ';inPlayConf=decayed.pU25*100;inPlayReason=`${totGoals} γκολ · ${elapsed}' · Πιθ. Κάτω 2.5: ${(decayed.pU25*100).toFixed(0)}%`;}
+  else if(decayed.pBTTS>=0.68&&hGoals===1&&aGoals===0&&elapsed<=70){inPlayPick='🎯 ΓΚΟΛ/ΓΚΟΛ (Οι φιλοξ. να σκοράρουν)';inPlayConf=decayed.pBTTS*100;inPlayReason=`Γηπεδ. προηγούνται 1-0 · ${elapsed}'`;}
+  else if(decayed.pBTTS>=0.68&&aGoals===1&&hGoals===0&&elapsed<=70){inPlayPick='🎯 ΓΚΟΛ/ΓΚΟΛ (Οι γηπεδ. να σκοράρουν)';inPlayConf=decayed.pBTTS*100;inPlayReason=`Φιλοξ. προηγούνται 1-0 · ${elapsed}'`;}
+  else if(elapsed<30){const decay=1-(elapsed/90)*0.3;inPlayPick=baseRec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ ⏱';inPlayConf=(baseRec.strength||0)*decay;inPlayReason=`Σήμα pre-match · Παρέλ.: ${elapsed}'`;}
+  else{inPlayReason=`Ανεπαρκής στατιστικό πλεονέκτημα στο ${elapsed}'`;}
   return{inPlayPick,inPlayConf:clamp(inPlayConf,0,99),inPlayReason,hGoals,aGoals,elapsed,status,decayed,ppAdj};
 }
 
@@ -1365,9 +1365,14 @@ function _updateLiveTrackerUI(){
 
 function _flashSignalAlert(alert){
   const box=document.getElementById('liveAlertFlash');if(!box)return;
-  box.innerHTML=`<div style="background:rgba(251,191,36,0.15);border:1px solid var(--accent-gold);border-radius:var(--radius-sm);padding:10px 14px;font-size:0.75rem;">🔔 <strong>SIGNAL FLIP</strong> · ${esc(alert.ht)} vs ${esc(alert.at)} · ${alert.elapsed}' · ${esc(alert.score)}<br><span style="color:var(--accent-red)">${esc(alert.from)}</span> → <span style="color:var(--accent-green)">${esc(alert.to)}</span></div>`;
+  box.innerHTML=`<div class="live-flip-alert">🔔 <strong>ΑΛΛΑΓΗ ΣΗΜΑΤΟΣ</strong> · ${esc(alert.ht)} εναντίον ${esc(alert.at)} · ${alert.elapsed}' · Σκορ: ${esc(alert.score)}<br><span style="color:var(--accent-red)">${esc(alert.from)}</span> → <span style="color:var(--accent-green)">${esc(alert.to)}</span></div>`;
   setTimeout(()=>{if(box)box.innerHTML='';},8000);
   const logSec=document.getElementById('liveAlertSection');if(logSec)logSec.style.display='block';
+}
+
+function _renderLiveAlerts(){
+  const el=document.getElementById('liveAlertLog');if(!el||!liveAlerts.length)return;
+  el.innerHTML=liveAlerts.map(a=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:0.7rem;flex-wrap:wrap;"><span style="color:var(--text-muted);font-family:var(--font-mono);min-width:55px;">${a.time}</span><span style="font-weight:700;color:var(--text-main);">${esc(a.ht)} εναντίον ${esc(a.at)}</span><span style="color:var(--text-muted);">${a.elapsed}' · ${a.score}</span><span style="color:var(--accent-red);">${esc(a.from)}</span><span style="color:var(--text-muted);">→</span><span style="color:var(--accent-green);">${esc(a.to)}</span></div>`).join('');
 }
 
 function _renderLiveDashboard(liveRecs){
@@ -1384,14 +1389,17 @@ function _renderLiveDashboard(liveRecs){
     const conf=inPlay?clamp(inPlay.inPlayConf,0,99):0;
     const confColor=conf>=70?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--accent-red)';
     const pick=inPlay?.inPlayPick||'NO BET ⏱',reason=inPlay?.inPlayReason||'';
-    const isNoBet=pick.includes('NO BET');
-    const pickColor=isNoBet?'var(--text-muted)':pick.includes('UNDER')?'var(--accent-teal)':pick.includes('OVER 3.5')?'var(--accent-purple)':pick.includes('BTTS')?'var(--accent-gold)':'var(--accent-green)';
+    const isNoBet=pick.includes('ΧΩΡΙΣ ΣΥΣΤΑΣΗ');
+    const pickColor=isNoBet?'var(--text-muted)':pick.includes('ΚΑΤΩ')?'var(--accent-teal)':pick.includes('ΠΑΝΩ ΑΠΟ 3.5')?'var(--accent-purple)':pick.includes('ΓΚΟΛ/ΓΚΟΛ')?'var(--accent-gold)':'var(--accent-green)';
     const preMatchPick=preMatch?.omegaPick||'';
-    const isFlip=inPlay&&!isNoBet&&preMatchPick&&preMatchPick!==pick&&!preMatchPick.includes('NO BET');
-    const flipBadge=isFlip?`<span style="font-size:0.6rem;background:rgba(251,191,36,0.2);color:var(--accent-gold);border:1px solid var(--accent-gold);border-radius:4px;padding:1px 6px;font-weight:700;margin-left:6px;">FLIP</span>`:'';
+    const isFlip=inPlay&&!isNoBet&&preMatchPick&&preMatchPick!==pick&&!preMatchPick.includes('ΧΩΡΙΣ ΣΥΣΤΑΣΗ');
+    const flipBadge=isFlip?`<span style="font-size:0.6rem;background:rgba(251,191,36,0.2);color:var(--accent-gold);border:1px solid var(--accent-gold);border-radius:4px;padding:1px 6px;font-weight:700;margin-left:6px;">ΑΛΛΑΓΗ</span>`:'';
     const timeProgress=status==='HT'?50:clamp(el_min/90*100,0,100);
     const d=inPlay?.decayed;
-    return`<div class="match-card" id="live-card-${lf.fixture.id}" style="border-color:${isFlip?'var(--accent-gold)':isNoBet?'var(--border-light)':'rgba(16,185,129,0.25)'};">
+    // Ισχυρή σύσταση: conf >= 75 και όχι ΧΩΡΙΣ ΣΥΣΤΑΣΗ
+    const isStrong = !isNoBet && conf >= 75;
+    const cardBorder = isFlip ? 'var(--accent-gold)' : isStrong ? 'var(--accent-green)' : isNoBet ? 'var(--border-light)' : 'rgba(16,185,129,0.25)';
+    return`<div class="match-card${isStrong?' live-strong-signal':''}" id="live-card-${lf.fixture.id}" style="border-color:${cardBorder};${isStrong?'border-width:2px;':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:160px;">
           <div class="match-league"><span class="live-dot"></span><span class="league-badge">${esc(status)}</span><span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span></div>
@@ -1400,25 +1408,26 @@ function _renderLiveDashboard(liveRecs){
         </div>
         <div style="text-align:center;min-width:80px;">
           <div style="font-size:2rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-green);line-height:1;">${hG} - ${aG}</div>
-          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">${status==='HT'?'HT':`${el_min}'`}</div>
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">${status==='HT'?'ΗΜ/ΝΙΟ':`${el_min}'`}</div>
           <div style="margin-top:6px;background:var(--bg-base);border-radius:4px;overflow:hidden;height:4px;"><div style="height:4px;width:${timeProgress}%;background:var(--accent-green);border-radius:4px;"></div></div>
         </div>
         <div style="flex:1;min-width:160px;text-align:right;">
-          <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">In-Play Signal${flipBadge}</div>
-          <div style="font-size:0.85rem;font-weight:800;color:${pickColor};">${esc(pick)}</div>
+          <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Σήμα Live${flipBadge}</div>
+          <div class="${isStrong?'live-pick-pulse':''}" style="font-size:0.85rem;font-weight:800;color:${pickColor};">${esc(pick)}</div>
           <div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px;">${esc(reason)}</div>
           <div style="margin-top:6px;">
-            <div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:0.65rem;"><span style="color:var(--text-muted);">Conf</span><span style="font-family:var(--font-mono);color:${confColor};font-weight:700;">${conf.toFixed(0)}%</span></div>
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:0.65rem;"><span style="color:var(--text-muted);">Βεβαιότητα</span><span style="font-family:var(--font-mono);color:${confColor};font-weight:700;">${conf.toFixed(0)}%</span></div>
             <div style="background:var(--bg-base);border-radius:3px;height:5px;margin-top:3px;"><div style="height:5px;width:${conf}%;background:${confColor};border-radius:3px;"></div></div>
           </div>
+          ${isStrong?`<div class="live-strong-badge">🔔 ΙΣΧΥΡΗ ΣΥΣΤΑΣΗ</div>`:''}
         </div>
       </div>
       ${d?`<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
-        ${[{lbl:'O2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'O3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'U2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'BTTS',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
+        ${[{lbl:'Πάνω 2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'Πάνω 3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'Κάτω 2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'ΓΓ',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
           const p=Math.round(m.v*100);
           return`<div style="flex:1;min-width:55px;background:var(--bg-base);border-radius:6px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">${m.lbl}</div><div style="font-size:0.9rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
         }).join('')}
-        ${preMatchPick&&!isNoBet?`<div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Pre-match</div><div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div></div>`:''}
+        ${preMatchPick&&!isNoBet?`<div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Πρό-αγώνα</div><div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div></div>`:''}
       </div>`:''}
     </div>`;
   }).join('');
@@ -2292,7 +2301,8 @@ function buildAccordionHTML(x) {
             </div>
             <div style="margin-top:8px;font-size:0.68rem;color:var(--text-muted);">DC λ: 🏠 ${x.dcResult.dcH?.toFixed(2)} | ✈️ ${x.dcResult.dcA?.toFixed(2)} · League avg: ${x.dcResult.lgAvg?.toFixed(2)}</div>
           </div>` : ''}
-          <button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Log Bet για αυτό το match</button>
+          <button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Καταγραφή Στοιχήματος</button>
+          ${renderStabilitySignals(x)}
         </div>` : ''}
 
         <div class="accordion-card" style="min-width: 320px;">
@@ -2561,36 +2571,36 @@ window.runCustomAudit=async function(){
     const r1X2 = rv(stats.outHit, stats.validOut);
 
     if(stats.o25T >= 10 && rO25 < 55) {
-      recs.push(`⚠️ Το <b>Over 2.5</b> χάνει (Win Rate: ${rO25.toFixed(1)}%). Προτείνεται αύξηση του <i>Min Total xG (O2.5)</i> κατά <b>+0.10</b> στα Global Settings.`);
+      recs.push(`⚠️ Το <b>Πάνω 2.5</b> χάνει (Ποσοστό: ${rO25.toFixed(1)}%). Προτείνεται αύξηση του <i>Ελάχ. xG (Πάνω 2.5)</i> κατά <b>+0.10</b> στα Καθολικές Ρυθμίσεις.`);
     } else if(stats.o25T >= 10 && rO25 > 70) {
-      recs.push(`💡 Το <b>Over 2.5</b> είναι υπερ-κερδοφόρο (${rO25.toFixed(1)}%). Προτείνεται μείωση του <i>Min Total xG (O2.5)</i> κατά <b>-0.05</b> για να βρίσκει περισσότερα σημεία.`);
+      recs.push(`💡 Το <b>Πάνω 2.5</b> αποδίδει εξαιρετικά (${rO25.toFixed(1)}%). Προτείνεται μείωση του <i>Ελάχ. xG (Πάνω 2.5)</i> κατά <b>-0.05</b> για περισσότερα σήματα.`);
     }
 
     if(stats.o35T >= 8 && rO35 < 50) {
-      recs.push(`⚠️ Το <b>Over 3.5</b> υστερεί (${rO35.toFixed(1)}%). Προτείνεται αυστηροποίηση του <i>Min Total xG (O3.5)</i> κατά <b>+0.15</b>.`);
+      recs.push(`⚠️ Το <b>Πάνω 3.5</b> υστερεί (${rO35.toFixed(1)}%). Προτείνεται αυστηροποίηση του <i>Ελάχ. xG (Πάνω 3.5)</i> κατά <b>+0.15</b>.`);
     }
 
     if(stats.validOut >= 8 && r1X2 < 50) {
-      recs.push(`⚠️ Χαμηλό ποσοστό στα <b>Σημεία (1X2/AH)</b> (${r1X2.toFixed(1)}%). Προτείνεται αύξηση του απαιτούμενου <i>xG Diff</i> κατά <b>+0.05</b> (π.χ. από 0.48 σε 0.53).`);
+      recs.push(`⚠️ Χαμηλό ποσοστό στα <b>Αποτελέσματα (1Χ2/ΑΧ)</b> (${r1X2.toFixed(1)}%). Προτείνεται αύξηση του απαιτούμενου <i>Διαφορά xG</i> κατά <b>+0.05</b> (π.χ. από 0.48 σε 0.53).`);
     }
 
     if(recs.length > 0) {
       advisorHTML = `<div style="background:rgba(251,191,36,0.1); border:1px solid var(--accent-gold); border-radius:var(--radius-sm); padding:15px; margin-bottom:20px;">
-        <h4 style="color:var(--accent-gold); margin-bottom:10px; font-size:0.9rem; text-transform:uppercase; display:flex; align-items:center; gap:8px;">🤖 AI Advisor Recommendations</h4>
+        <h4 style="color:var(--accent-gold); margin-bottom:10px; font-size:0.9rem; text-transform:uppercase; display:flex; align-items:center; gap:8px;">🤖 Προτάσεις AI Σύμβουλου</h4>
         <ul style="color:var(--text-main); font-size:0.85rem; padding-left:20px; line-height:1.6;">
           ${recs.map(r => `<li style="margin-bottom:5px;">${r}</li>`).join('')}
         </ul>
       </div>`;
     } else if (stats.games > 0) {
        advisorHTML = `<div style="background:rgba(16,185,129,0.1); border:1px solid var(--accent-green); border-radius:var(--radius-sm); padding:15px; margin-bottom:20px; text-align:center;">
-        <span style="color:var(--accent-green); font-weight:700;">✅ Το σύστημα είναι άριστα καλιμπραρισμένο. Δεν προτείνονται αλλαγές!</span>
+        <span style="color:var(--accent-green); font-weight:700;">✅ Το σύστημα είναι άριστα βαθμονομημένο. Δεν προτείνονται αλλαγές!</span>
       </div>`;
     }
 
     const statsCards=[{lbl:acr('1X2')+' / '+acr('AH'),h:stats.outHit,t:stats.validOut},{lbl:acr('O2.5'),h:stats.o25H,t:stats.o25T},{lbl:acr('O3.5'),h:stats.o35H,t:stats.o35T},{lbl:acr('U2.5'),h:stats.u25H,t:stats.u25T},{lbl:acr('BTTS'),h:stats.bttsH,t:stats.bttsT},{lbl:'Exact',h:stats.exHit,t:stats.games},];
     
     let html=`<div class="quant-panel">
-      <div class="panel-title">📊 Audit Results — ${cands.length} predictions</div>
+      <div class="panel-title">📊 Αποτελέσματα Αξιολόγησης — ${cands.length} προβλέψεις</div>
       ${advisorHTML}
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:15px;margin-bottom:20px;">
         ${statsCards.map(m=>{const v=rv(m.h,m.t);return`<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:20px;text-align:center;"><div style="font-size:0.85rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">${m.lbl}</div><div style="font-size:1.8rem;font-weight:900;font-family:var(--font-mono);color:${m.t>0?col(v):'var(--text-muted)'};">${m.t>0?v.toFixed(1)+'%':'N/A'}</div><div style="font-size:0.75rem;color:var(--text-muted);margin-top:5px;">${m.h}/${m.t}</div></div>`;}).join('')}
@@ -2643,7 +2653,7 @@ window.renderLeagueMods = function() {
   
   let html = `<table class="summary-table" style="font-size:0.85rem;">
     <thead style="position:sticky; top:0; z-index:1;">
-      <tr><th class="left-align">League</th><th>xG Multiplier</th><th>xG Diff (1X2)</th><th>Min xG (O2.5)</th></tr>
+      <tr><th class="left-align">League</th><th>xG Multiplier</th><th>Διαφορά xG (1X2)</th><th>Min xG (O2.5)</th></tr>
     </thead><tbody>`;
     
   LEAGUES_DATA.forEach(l => {
@@ -2684,7 +2694,7 @@ window.saveLeagueMods = function() {
 //  SETTINGS & INIT
 // ================================================================
 window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}try{const lm=JSON.parse(localStorage.getItem(LS_LGMODS));if(lm)leagueMods=lm;}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
-window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Global Settings!');};
+window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Καθολικές Ρυθμίσεις!');};
 // ================================================================
 //  DIXON-COLES ATTACK/DEFENSE RATINGS
 //  Υπολογίζει attack strength / defense strength από season totals.
@@ -3049,7 +3059,7 @@ async function pushToSheets(data) {
   const url = localStorage.getItem(LS_SHEETS_URL);
   if(!url || !data?.length) return;
 
-  // Batch rows για team stats + predictions
+  // Batch rows για team stats + προβλέψεις
   const teamRows = [];
   const predRows = [];
 
@@ -3115,11 +3125,153 @@ async function pushToSheets(data) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ teamRows, predRows, sentAt: new Date().toISOString() }),
     });
-    if(resp.ok) showOk(`📊 Sheets: ${predRows.length} predictions + ${teamRows.length} team rows pushed.`);
+    if(resp.ok) showOk(`📊 Sheets: ${predRows.length} προβλέψεις + ${teamRows.length} team rows pushed.`);
     else showErr('Sheets push failed: ' + resp.status);
   } catch(e) {
     showErr('Sheets push error: ' + e.message);
   }
+}
+
+// ================================================================
+//  STABILITY SIGNALS ENGINE
+//  Αναλύει τη διακύμανση κάθε ομάδας και παράγει σαφή σήματα
+//  ποντάρίσματος βάσει σταθερότητας σε γκολ, κόρνερ, κάρτες.
+// ================================================================
+
+const STABILITY_THRESHOLDS = {
+  goals:   { stable: 0.82, volatile: 1.30 },  // σ / baseline 1.10
+  corners: { stable: 0.75, volatile: 1.35 },  // σ / baseline 2.26
+  cards:   { stable: 0.80, volatile: 1.40 },  // σ / baseline 1.48
+};
+const BASE_SD = { goals: 1.10, corners: 2.26, cards: 1.48 };
+
+function assessStability(sd, metric) {
+  if(sd === null || sd === undefined) return 'unknown';
+  const ratio = sd / BASE_SD[metric];
+  if(ratio < STABILITY_THRESHOLDS[metric].stable)   return 'stable';
+  if(ratio < STABILITY_THRESHOLDS[metric].volatile)  return 'normal';
+  return 'volatile';
+}
+
+function computeStabilitySignals(rec) {
+  const { hS, aS, omegaPick, tXG, pp, cornerConf, strength } = rec;
+  if(!hS || !aS) return [];
+  const signals = [];
+
+  const hr6 = hS.r6 || {}, ar6 = aS.r6 || {};
+
+  // ── Γκολ Σταθερότητα ────────────────────────────────────────────
+  const hGoalStab  = assessStability(hr6.sdGoals,         'goals');
+  const aGoalStab  = assessStability(ar6.sdGoals,         'goals');
+  const hDefStab   = assessStability(hr6.sdGoalsAgainst,  'goals');
+  const aDefStab   = assessStability(ar6.sdGoalsAgainst,  'goals');
+
+  // Και οι δύο σταθερές επίθεση + xG υπoστηρίζει Over
+  if(hGoalStab==='stable' && aGoalStab==='stable' &&
+     hDefStab!=='stable'  && aDefStab!=='stable'  && tXG >= 2.5) {
+    signals.push({
+      type: 'goals_over', strength: 'strong',
+      icon: '🔥', color: 'var(--accent-green)',
+      title: 'Σταθερή Επίθεση — Υπέρ ΠΑΝΩ 2.5',
+      text: `Αμφότερες οι ομάδες παρουσιάζουν σταθερή επιθετική παραγωγή (σ < ${(BASE_SD.goals*STABILITY_THRESHOLDS.goals.stable).toFixed(2)}). Ευνοεί ποντάρισμα σε ΠΑΝΩ 2.5.`,
+    });
+  }
+
+  // Και οι δύο σταθερή άμυνα + χαμηλό xG → Under
+  if(hDefStab==='stable' && aDefStab==='stable' && tXG <= 2.2 &&
+     pp && pp.pU25 >= 0.52) {
+    signals.push({
+      type: 'goals_under', strength: 'strong',
+      icon: '🔒', color: 'var(--accent-teal)',
+      title: 'Σταθερή Άμυνα — Υπέρ ΚΑΤΩ 2.5',
+      text: `Αμφότερες παρουσιάζουν χαμηλή αστάθεια στα γκολ που δέχονται. Σε συνδυασμό με χαμηλό xG (${tXG.toFixed(2)}), ευνοεί ΚΑΤΩ 2.5.`,
+    });
+  }
+
+  // Μία ομάδα πολύ πιο σταθερή σε επίθεση → 1X2 εμπιστοσύνη
+  if(hGoalStab==='stable' && aGoalStab==='volatile' && pp && pp.pHome >= 0.52) {
+    signals.push({
+      type: 'home_stable', strength: 'medium',
+      icon: '🏠', color: 'var(--accent-blue)',
+      title: 'Γηπεδούχοι Σταθεροί — Υπέρ Νίκης',
+      text: `Οι γηπεδούχοι έχουν σταθερή επιθετική παραγωγή ενώ οι φιλοξενούμενοι παρουσιάζουν αστάθεια. Ενισχύει την πρόβλεψη νίκης γηπεδούχων.`,
+    });
+  }
+  if(aGoalStab==='stable' && hGoalStab==='volatile' && pp && pp.pAway >= 0.52) {
+    signals.push({
+      type: 'away_stable', strength: 'medium',
+      icon: '✈️', color: 'var(--accent-blue)',
+      title: 'Φιλοξενούμενοι Σταθεροί — Υπέρ Νίκης',
+      text: `Οι φιλοξενούμενοι έχουν σταθερή επιθετική παραγωγή ενώ οι γηπεδούχοι παρουσιάζουν αστάθεια. Ενισχύει την πρόβλεψη νίκης φιλοξενούμενων.`,
+    });
+  }
+
+  // ── Κόρνερ Σταθερότητα ──────────────────────────────────────────
+  const hCorStab = assessStability(hr6.sdCorners, 'corners');
+  const aCorStab = assessStability(ar6.sdCorners, 'corners');
+
+  if(hCorStab==='stable' && aCorStab==='stable' && cornerConf >= 60) {
+    signals.push({
+      type: 'corners_stable', strength: 'strong',
+      icon: '🚩', color: 'var(--accent-teal)',
+      title: 'Σταθερά Κόρνερ — Υψηλή Βεβαιότητα',
+      text: `Και οι δύο ομάδες παρουσιάζουν σταθερή παραγωγή κόρνερ (σ < ${(BASE_SD.corners*STABILITY_THRESHOLDS.corners.stable).toFixed(2)}). Η εκτίμηση ΠΑΝΩ 8.5 κόρνερ έχει αυξημένη αξιοπιστία.`,
+    });
+  }
+  if(hCorStab==='volatile' || aCorStab==='volatile') {
+    signals.push({
+      type: 'corners_volatile', strength: 'warn',
+      icon: '⚠️', color: 'var(--accent-gold)',
+      title: 'Αστάθεια Κόρνερ — Προσοχή στο Πόνταρισμα',
+      text: `${hCorStab==='volatile'?rec.ht:rec.at} παρουσιάζει υψηλή αστάθεια σε κόρνερ. Μειωμένη αξιοπιστία για αγορές κόρνερ.`,
+    });
+  }
+
+  // ── Κάρτες Σταθερότητα ──────────────────────────────────────────
+  const hCrdStab = assessStability(hr6.sdCards, 'cards');
+  const aCrdStab = assessStability(ar6.sdCards, 'cards');
+
+  if(hCrdStab==='stable' && aCrdStab==='stable' &&
+     (safeNum(hS.crd,0)+safeNum(aS.crd,0)) >= 5.5) {
+    signals.push({
+      type: 'cards_stable', strength: 'medium',
+      icon: '🟨', color: 'var(--accent-gold)',
+      title: 'Σταθερές Κάρτες — Υπέρ ΠΑΝΩ 5.5',
+      text: `Αμφότερες παρουσιάζουν σταθερή τάση σε κάρτες. Ο μέσος όρος επιβεβαιώνει πόνταρισμα ΠΑΝΩ 5.5 καρτών.`,
+    });
+  }
+
+  // ── Σήμα Volatility Alert (αποθάρρυνση) ─────────────────────────
+  const hVolatile = (hGoalStab==='volatile'||hCorStab==='volatile'||hCrdStab==='volatile');
+  const aVolatile = (aGoalStab==='volatile'||aCorStab==='volatile'||aCrdStab==='volatile');
+  if(hVolatile && aVolatile) {
+    signals.push({
+      type: 'both_volatile', strength: 'warn',
+      icon: '🌪️', color: 'var(--accent-red)',
+      title: 'Αμοιβαία Αστάθεια — Υψηλό Ρίσκο',
+      text: `Και οι δύο ομάδες παρουσιάζουν αστάθεια σε πολλές μεtrικές. Ο αγώνας είναι δύσκολα προβλέψιμος. Προτείνεται αποχή ή μικρό stake.`,
+    });
+  }
+
+  return signals;
+}
+
+function renderStabilitySignals(rec) {
+  const signals = computeStabilitySignals(rec);
+  if(!signals.length) return '';
+
+  return `<div style="margin-top:14px;">
+    <div style="font-size:0.65rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">📊 Σήματα Σταθερότητας</div>
+    ${signals.map(s => `
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:${s.strength==='warn'?'rgba(251,191,36,0.06)':s.strength==='strong'?'rgba(16,185,129,0.07)':'rgba(56,189,248,0.05)'};border:1px solid ${s.strength==='warn'?'rgba(251,191,36,0.25)':s.strength==='strong'?'rgba(16,185,129,0.25)':'rgba(56,189,248,0.2)'};border-radius:8px;margin-bottom:6px;">
+      <span style="font-size:1.1rem;flex-shrink:0;">${s.icon}</span>
+      <div style="flex:1;">
+        <div style="font-size:0.75rem;font-weight:800;color:${s.color};margin-bottom:3px;">${esc(s.title)}</div>
+        <div style="font-size:0.7rem;color:var(--text-muted);line-height:1.5;">${esc(s.text)}</div>
+      </div>
+      ${s.strength==='strong'?`<span style="font-size:0.62rem;background:rgba(16,185,129,0.15);color:var(--accent-green);border:1px solid rgba(16,185,129,0.3);border-radius:10px;padding:2px 8px;font-weight:700;white-space:nowrap;align-self:center;">ΙΣΧΥΡΟ</span>`:''}
+    </div>`).join('')}
+  </div>`;
 }
 
 window.resimulateMatches=function(){
@@ -3173,6 +3325,52 @@ window.addEventListener('DOMContentLoaded',()=>{
     }
     .acr:hover { opacity: 0.75; }
 
+    /* ── Αναβόσβησμα ισχυρής live σύστασης ── */
+    @keyframes strongPulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); border-color: rgba(16,185,129,0.4); }
+      50%      { box-shadow: 0 0 18px 4px rgba(16,185,129,0.35); border-color: rgba(16,185,129,0.9); }
+    }
+    .live-strong-signal {
+      animation: strongPulse 1.8s ease-in-out infinite;
+    }
+
+    /* ── Αναλαμπή κειμένου για ισχυρές συστάσεις ── */
+    @keyframes pickPulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.65; }
+    }
+    .live-pick-pulse {
+      animation: pickPulse 1.4s ease-in-out infinite;
+    }
+
+    /* ── Badge ισχυρής σύστασης ── */
+    .live-strong-badge {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 0.65rem;
+      font-weight: 800;
+      color: #000;
+      background: var(--accent-green);
+      padding: 3px 10px;
+      border-radius: 10px;
+      letter-spacing: 0.5px;
+      animation: pickPulse 1.2s ease-in-out infinite;
+    }
+
+    /* ── Alert αλλαγής σήματος ── */
+    @keyframes flipBlink {
+      0%,100% { background: rgba(251,191,36,0.15); border-color: var(--accent-gold); }
+      40%      { background: rgba(251,191,36,0.35); border-color: rgba(251,191,36,0.9); }
+    }
+    .live-flip-alert {
+      background: rgba(251,191,36,0.15);
+      border: 1px solid var(--accent-gold);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 0.75rem;
+      animation: flipBlink 0.9s ease-in-out 6;
+    }
+
     /* ── Substitution flash animation ── */
     @keyframes subPulse {
       0%,100% { opacity:1; transform:scale(1); }
@@ -3188,16 +3386,12 @@ window.addEventListener('DOMContentLoaded',()=>{
       0%   { background: rgba(251,191,36,0.30); }
       100% { background: transparent; }
     }
-    .cell-flash {
-      animation: flashCell 2s ease-out forwards;
-    }
+    .cell-flash { animation: flashCell 2s ease-out forwards; }
     @keyframes flashRow {
       0%   { background: rgba(251,191,36,0.15); }
       100% { background: transparent; }
     }
-    .row-flash {
-      animation: flashRow 2.5s ease-out forwards;
-    }
+    .row-flash { animation: flashRow 2.5s ease-out forwards; }
     #apex-tip {
       position: fixed;
       z-index: 999999;
@@ -3306,7 +3500,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
   // Sheet: Predictions
-  var pred = ss.getSheetByName('predictions') || ss.insertSheet('predictions');
+  var pred = ss.getSheetByName('προβλέψεις') || ss.insertSheet('προβλέψεις');
   if(pred.getLastRow()===0) pred.appendRow(['date','fixtureId','home','away','league','leagueId','pick','conf%','tXG','hXG','aXG','xgDiff','exact','htScore','pO25','pO35','pU25','pBTTS','cornerConf','ev%','kelly','sitFlags','hasLineup','hasInjury']);
   (data.predRows||[]).forEach(function(r){ pred.appendRow([r.date,r.fixtureId,r.home,r.away,r.league,r.leagueId,r.omegaPick,r.confidence,r.tXG,r.hXG,r.aXG,r.xgDiff,r.exactScore,r.htScore,r.pO25,r.pO35,r.pU25,r.pBTTS,r.cornerConf,r.ev,r.kelly,r.sitFlags,r.hasLineup,r.hasInjury]); });
 
