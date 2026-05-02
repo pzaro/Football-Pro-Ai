@@ -5403,11 +5403,18 @@ window.addEventListener('DOMContentLoaded',()=>{
   document.head.appendChild(tipStyle);
 
   // ── Tooltip DOM element ──────────────────────────────────────
-  const tipEl = document.createElement('div');
+    const tipEl = document.createElement('div');
   tipEl.id = 'apex-tip';
   document.body.appendChild(tipEl);
 
-  // ── Click handler (event delegation) ────────────────────────
+  // ── ΠΡΟΣΘΗΚΗ ΕΝΔΕΙΞΗΣ ΕΚΔΟΣΗΣ ──────────────────────────────
+  const versionBadge = document.createElement('div');
+  versionBadge.innerHTML = `<div style="position:fixed; bottom:12px; right:12px; background:rgba(16, 185, 129, 0.15); border:1px solid rgba(16, 185, 129, 0.4); color:var(--accent-green); padding:5px 12px; border-radius:12px; font-size:0.65rem; font-weight:800; font-family:var(--font-mono); z-index:99999; backdrop-filter:blur(4px); box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+    APEX OMEGA v5.2 MASTER · Ενημερώθηκε: 2 Μαΐου 2026
+  </div>`;
+  document.body.appendChild(versionBadge);
+
+   // ── Click handler (event delegation) ────────────────────────
   document.addEventListener('click', function(e) {
     const el = e.target.closest('.acr');
     if (!el) { tipEl.style.display = 'none'; return; }
