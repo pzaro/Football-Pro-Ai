@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.0 — OPS TERMINAL</title>
+  <title>APEX OMEGA v5.0 — AI Quant Terminal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -201,6 +201,43 @@
     <div id="advisorSection"></div>
     <div id="topSection"></div>
     <div id="summarySection"></div>
+
+    <!-- ── AUTO-CALIBRATION ─────────────────────────────────── -->
+    <div id="autoCalibContainer">
+      <div class="quant-panel" style="border-color:rgba(252,211,77,0.3);">
+        <div class="panel-title clickable" style="color:var(--gold);" onclick="togglePanel('autoCalibBody','autoCalibArrow')">
+          <span style="display:flex;align-items:center;gap:10px;">
+            🎯 Auto-Calibration Engine
+            <span style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono);">per-league · gradient descent</span>
+          </span>
+          <span id="autoCalibArrow" class="arrow">▼</span>
+        </div>
+        <div id="autoCalibBody" style="display:none;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:6px;margin-bottom:14px;">
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:7px 10px;font-size:0.68rem;color:var(--text-sub);">🏆 1X2 / AH ≥ <strong>75%</strong></div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:7px 10px;font-size:0.68rem;color:var(--text-sub);">🎯 BTTS ≥ <strong>80%</strong></div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:7px 10px;font-size:0.68rem;color:var(--text-sub);">🔥 Πάνω 2.5 ≥ <strong>75%</strong></div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:7px 10px;font-size:0.68rem;color:var(--text-sub);">🚀 Πάνω 3.5 ≥ <strong>75%</strong></div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:7px 10px;font-size:0.68rem;color:var(--text-sub);">🚩 Κόρνερ ≥ <strong>70%</strong></div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:7px 10px;font-size:0.68rem;color:var(--text-sub);">💣 Bombs ≥ <strong>60%</strong></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+            <button class="btn btn-outline" onclick="window.runAutoCalibration(window._lastAuditCalibRecs||[])" style="font-size:0.78rem;">🔄 Ανανέωση Ανάλυσης</button>
+            <button class="btn btn-outline" onclick="window.resetCalibration()" style="font-size:0.78rem;color:var(--accent-red);border-color:rgba(251,113,133,0.25);">↺ Reset Όλα</button>
+          </div>
+          <div id="autoCalibPanel">
+            <div style="text-align:center;color:var(--text-muted);padding:24px;font-size:0.8rem;">Εκτελέστε Audit για να εμφανιστεί η ανάλυση βαθμονόμησης.</div>
+          </div>
+          <div style="margin-top:14px;border-top:1px solid var(--border-light);padding-top:12px;">
+            <div class="panel-title clickable" style="font-size:0.7rem;" onclick="togglePanel('calibLogSection','calibLogArrow')">
+              <span>📋 Ιστορικό Βαθμονόμησης</span><span id="calibLogArrow" class="arrow">▼</span>
+            </div>
+            <div id="calibLogSection" style="display:none;margin-top:8px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="auditSection"></div>
 
   </div><!-- /container -->
