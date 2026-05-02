@@ -18,10 +18,10 @@
   --bg-base:    #0d1119;
 
   /* Text */
-  --text-main:  #f0f4ff;
-  --text-sub:   #b8c5dc;
-  --text-muted: #6a7d9e;
-  --text-dim:   #2e3d56;
+  --text-main:  #f4f7ff;
+  --text-sub:   #ccd6ed;
+  --text-muted: #8fa3c0;
+  --text-dim:   #5a7090;
 
   /* Accent palette */
   --blue:       #4db8ff;
@@ -71,9 +71,9 @@
   --accent-teal:   var(--teal);
   --border-light:  var(--border);
   --bg-dark:       var(--bg-void);
-  --text-main:     #e8edf5;
-  --text-muted:    #9baac2;
-  --text-dim:      #374259;
+  --text-main:     #f4f7ff;
+  --text-muted:    #8fa3c0;
+  --text-dim:      #5a7090;
   --font-sans:     var(--font-ui);
   --font-mono:     'JetBrains Mono', monospace;
   --radius-sm:     var(--r-sm);
