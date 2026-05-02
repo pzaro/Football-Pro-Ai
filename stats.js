@@ -966,6 +966,9 @@ async function analyzeMatchSafe(m,index,total){
     
     const lp=getLeagueParams(m.league.id);
     
+    // ── DIXON-COLES ΛΑΜΒΔΑ — blended με form-based xG ──────────────
+    const dcResult = computeDCLambdas(hS, aS, m.league.id);
+    
     // H2H Lambda Blend: αν υπάρχουν >= 4 H2H αγώνες, μεταθέτουμε 12% του λ προς το H2H avg goals
     const h2hSummary=summarizeH2H(h2hFix,m.teams.home.id,m.teams.away.id);
     const h2hGames=h2hSummary.homeWins+h2hSummary.awayWins+h2hSummary.draws;
@@ -979,6 +982,15 @@ async function analyzeMatchSafe(m,index,total){
         aXG=aXG*(1-blend)+(aXG*scale)*blend;
       }
     }
+
+    // Blend DC with form-based
+    const blended = blendLambdas(hXG, aXG, dcResult.dcH, dcResult.dcA, dcResult.trust);
+    hXG = blended.blendH; aXG = blended.blendA;
+
+    // ── SITUATIONAL CONTEXT ──────────────────────────────────────────
+    const sitCtx = computeSituationalContext(stand, m.teams.home.id, m.teams.away.id, m.league.id);
+    hXG *= sitCtx.hMot;
+    aXG *= sitCtx.aMot;
     
     const tXG=hXG+aXG; // base, pre-injury
 
@@ -1029,11 +1041,15 @@ async function analyzeMatchSafe(m,index,total){
       hInjAdj, aInjAdj,
       hPlayers, aPlayers,
       htAnalysis,
-      lineupData,                                       // 📋 Starting XI (raw parsed data)
+      lineupData,
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
-      lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,hS,aS,h2h:h2hSummary,
-      actStats, isBomb:false, hScorerProb, aScorerProb
+      lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,
+      hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,
+      hS,aS,h2h:h2hSummary,
+      actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
+      sitCtx,    // Situational context (motivation flags, derby)
+      dcResult,  // Dixon-Coles attack/defense strengths
     });
   }catch(err){
     window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:'Analysis error',strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
@@ -1060,6 +1076,9 @@ window.runScan=async function(){
     
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();updateAuditLeagueFilter();
+    renderBetJournal();
+    // Push to Google Sheets (non-blocking)
+    pushToSheets(window.scannedMatchesData).catch(()=>{});
     showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
@@ -2246,6 +2265,36 @@ function buildAccordionHTML(x) {
           ${renderVolatilityPanel(x.hS, x.aS, x.ht, x.at)}
         </div>
 
+        ${x.sitCtx || x.dcResult ? `
+        <div class="accordion-card" style="min-width:260px;border-color:rgba(251,191,36,0.25);">
+          <h4 style="color:var(--accent-gold);">🎯 Context & Strength Ratings</h4>
+          ${x.sitCtx ? `
+          <div style="margin-bottom:12px;">
+            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Situational Flags</div>
+            ${x.sitCtx.flags?.length
+              ? x.sitCtx.flags.map(f=>`<div style="font-size:0.75rem;padding:3px 8px;background:rgba(251,191,36,0.1);border-radius:4px;margin-bottom:3px;color:var(--accent-gold);">⚑ ${esc(f)}</div>`).join('')
+              : `<div style="font-size:0.72rem;color:var(--text-muted);">Κανένα ιδιαίτερο context.</div>`
+            }
+            <div style="display:flex;gap:8px;margin-top:8px;font-size:0.72rem;">
+              <div>🏠 Mot: <span style="font-family:var(--font-mono);color:${x.sitCtx.hMot>=1.05?'var(--accent-green)':x.sitCtx.hMot<=0.92?'var(--accent-red)':'var(--text-muted)'};">${x.sitCtx.hMot?.toFixed(2)}</span></div>
+              <div>✈️ Mot: <span style="font-family:var(--font-mono);color:${x.sitCtx.aMot>=1.05?'var(--accent-green)':x.sitCtx.aMot<=0.92?'var(--accent-red)':'var(--text-muted)'};">${x.sitCtx.aMot?.toFixed(2)}</span></div>
+              ${x.sitCtx.isDerby?`<span style="color:var(--accent-red);font-weight:700;">🔥 DERBY</span>`:''}
+            </div>
+          </div>` : ''}
+          ${x.dcResult ? `
+          <div>
+            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Dixon-Coles Ratings (trust: ${(x.dcResult.trust*100).toFixed(0)}%)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.72rem;">
+              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">🏠 Attack</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.hAtt>1.1?'var(--accent-green)':x.dcResult.hAtt<0.9?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.hAtt?.toFixed(2)}</div></div>
+              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">🏠 Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.hDef<0.9?'var(--accent-green)':x.dcResult.hDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.hDef?.toFixed(2)}</div></div>
+              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Attack</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aAtt>1.1?'var(--accent-green)':x.dcResult.aAtt<0.9?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aAtt?.toFixed(2)}</div></div>
+              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aDef<0.9?'var(--accent-green)':x.dcResult.aDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aDef?.toFixed(2)}</div></div>
+            </div>
+            <div style="margin-top:8px;font-size:0.68rem;color:var(--text-muted);">DC λ: 🏠 ${x.dcResult.dcH?.toFixed(2)} | ✈️ ${x.dcResult.dcA?.toFixed(2)} · League avg: ${x.dcResult.lgAvg?.toFixed(2)}</div>
+          </div>` : ''}
+          <button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Log Bet για αυτό το match</button>
+        </div>` : ''}
+
         <div class="accordion-card" style="min-width: 320px;">
           <h4 style="text-align:center;">📊 Poisson Score Matrix (${acr('D-C')})</h4>
           ${pHtml}
@@ -2636,6 +2685,443 @@ window.saveLeagueMods = function() {
 // ================================================================
 window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}try{const lm=JSON.parse(localStorage.getItem(LS_LGMODS));if(lm)leagueMods=lm;}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
 window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Global Settings!');};
+// ================================================================
+//  DIXON-COLES ATTACK/DEFENSE RATINGS
+//  Υπολογίζει attack strength / defense strength από season totals.
+//  att = goals_for / league_avg_for
+//  def = goals_against / league_avg_against (lower = better defense)
+//  λ_home = att_h × def_a × league_avg × HOME_ADV
+//  λ_away = att_a × def_h × league_avg
+// ================================================================
+const HOME_ADVANTAGE = 1.10; // ~10% boost για γηπεδούχους (διεθνής μέσος όρος)
+
+function computeDCLambdas(hS, aS, leagueId) {
+  const lgAvg = (typeof LEAGUE_AVG_GOALS !== 'undefined' && LEAGUE_AVG_GOALS[leagueId])
+    ? LEAGUE_AVG_GOALS[leagueId] : 2.65;
+  const lgAvgH = lgAvg * 0.54; // ~54% των γκολ σκοράρει η γηπεδούχος
+  const lgAvgA = lgAvg * 0.46;
+
+  // Attack / Defense strengths (regression to 1.0 αν δεν υπάρχουν season data)
+  const hAtt = hS.sea?.avgGoals        > 0 ? hS.sea.avgGoals        / lgAvgH : 1.0;
+  const hDef = hS.sea?.avgGoalsAgainst > 0 ? hS.sea.avgGoalsAgainst / lgAvgA : 1.0;
+  const aAtt = aS.sea?.avgGoals        > 0 ? aS.sea.avgGoals        / lgAvgA : 1.0;
+  const aDef = aS.sea?.avgGoalsAgainst > 0 ? aS.sea.avgGoalsAgainst / lgAvgH : 1.0;
+
+  const n = Math.min(hS.sea?.n || 0, aS.sea?.n || 0);
+  // Bayesian shrinkage: με λίγα παιχνίδια → blend προς 1.0
+  const trust = clamp(n / 20, 0.1, 1.0);
+  const shrink = (v) => trust * v + (1 - trust) * 1.0;
+
+  const dcH = clamp(shrink(hAtt) * shrink(aDef) * lgAvgH * HOME_ADVANTAGE, 0.30, 4.5);
+  const dcA = clamp(shrink(aAtt) * shrink(hDef) * lgAvgA,                   0.20, 4.0);
+  return { dcH, dcA, hAtt: shrink(hAtt), aDef: shrink(aDef), aAtt: shrink(aAtt), hDef: shrink(hDef), lgAvg, trust };
+}
+
+// Blends DC λ με form-based λ — αν trust χαμηλό, form κυριαρχεί
+function blendLambdas(formH, formA, dcH, dcA, trust) {
+  const dcW = clamp(trust * 0.55, 0.10, 0.55); // max 55% DC weight
+  const fmW = 1 - dcW;
+  return {
+    blendH: formH * fmW + dcH * dcW,
+    blendA: formA * fmW + dcA * dcW,
+  };
+}
+
+// ================================================================
+//  SITUATIONAL CONTEXT ENGINE
+//  Εντοπίζει ομάδες χωρίς κίνητρο (nothing-to-play-for) και derby.
+//  Επιστρέφει multiplier 0.75–1.25 που εφαρμόζεται στο lambda.
+// ================================================================
+function computeSituationalContext(stand, homeId, awayId, leagueId) {
+  if(!stand?.length) return { hMot: 1.0, aMot: 1.0, flags: [], isDerby: false };
+
+  const getEntry = (tId) => stand.find(x => String(x?.team?.id) === String(tId));
+  const hEntry = getEntry(homeId);
+  const aEntry = getEntry(awayId);
+  const total  = stand.length;
+  const flags  = [];
+  let hMot = 1.0, aMot = 1.0;
+
+  const assess = (entry, label) => {
+    if(!entry) return 1.0;
+    const rank = entry.rank ?? 99;
+    const pts  = entry.points ?? 0;
+    const gd   = entry.goalsDiff ?? 0;
+    const won  = entry.all?.win  ?? 0;
+    const played = entry.all?.played ?? 1;
+
+    // Τίτλος: top 3 και κοντά στην κορυφή → extra motivation
+    if(rank <= 3 && total >= 16) { flags.push(`${label}: τίτλος`); return 1.08; }
+
+    // Champions League: θέσεις 4-5 (ανάλογα league) — high motivation
+    if(rank <= 5 && rank >= 4)   { flags.push(`${label}: CL race`); return 1.05; }
+
+    // Υποβιβασμός: τελευταία 3 + κοντά στο όριο → must-win
+    if(rank >= total - 2)        { flags.push(`${label}: relegation`); return 1.12; }
+
+    // Nothing-to-play-for: μεσαία — ούτε τίτλο, ούτε CL, ούτε υποβιβασμό
+    // και > 70% της σεζόν έχει παιχτεί
+    if(rank > 5 && rank < total - 2 && played > 0.70 * 38) {
+      flags.push(`${label}: nothing-to-play-for`);
+      return 0.88;
+    }
+
+    return 1.0;
+  };
+
+  hMot = assess(hEntry, 'Home');
+  aMot = assess(aEntry, 'Away');
+
+  // Derby detection: αν και οι δύο στην κορυφή 6 → ανεβαίνει η ένταση
+  const isDerby = (hEntry?.rank <= 6 && aEntry?.rank <= 6) ||
+    (Math.abs((hEntry?.rank||10) - (aEntry?.rank||10)) <= 2 && total >= 14);
+  if(isDerby) { flags.push('Derby/Rivalry'); hMot *= 1.04; aMot *= 1.04; }
+
+  return {
+    hMot: clamp(hMot, 0.75, 1.20),
+    aMot: clamp(aMot, 0.75, 1.20),
+    flags,
+    isDerby,
+    hRank: hEntry?.rank, aRank: aEntry?.rank,
+    hPts:  hEntry?.points, aPts: aEntry?.points
+  };
+}
+
+// ================================================================
+//  VALUE MODEL — EV% + KELLY CRITERION
+//  Χρησιμοποιεί τις model probabilities για να υπολογίσει αν
+//  υπάρχει θετικό Expected Value σε δεδομένες αποδόσεις bookmaker.
+//
+//  EV% = (model_prob × decimal_odds) − 1
+//  Kelly fraction = EV / (decimal_odds − 1)
+//  Fractional Kelly (25%) για μείωση variance
+// ================================================================
+const KELLY_FRACTION = 0.25; // 25% Kelly — συντηρητικό
+const MIN_EV_PCT     = 0.02; // Minimum 2% EV για signal
+const LS_BETJOURNAL  = 'omega_betjournal_v5.0';
+
+let betJournalData = [];
+
+function computeEV(modelProb, decimalOdds) {
+  if(!decimalOdds || decimalOdds <= 1.0) return null;
+  const ev = modelProb * decimalOdds - 1;
+  return parseFloat(ev.toFixed(4));
+}
+
+function computeKellyStake(modelProb, decimalOdds, bankroll) {
+  const b = decimalOdds - 1; // net odds
+  if(b <= 0 || modelProb <= 0 || modelProb >= 1) return 0;
+  const f = (modelProb * b - (1 - modelProb)) / b; // full Kelly
+  const frac = Math.max(f * KELLY_FRACTION, 0); // fractional Kelly
+  return parseFloat((frac * bankroll).toFixed(2));
+}
+
+// Δίνει το implied probability αφαιρώντας το margin (overround removal)
+function removeMargin(impliedProbs) {
+  const total = impliedProbs.reduce((s, p) => s + p, 0);
+  if(total <= 0) return impliedProbs;
+  return impliedProbs.map(p => p / total);
+}
+
+// Κύρια συνάρτηση: για ένα record (post-computePick) δίνει EV, Kelly, recommended
+function enrichWithValue(rec, manualOdds) {
+  if(!manualOdds || !rec.pp) return rec;
+  const { omegaPick, pp, hExp, aExp } = rec;
+  const bankroll = bankrollData.current || 0;
+
+  let marketProb = 0, impliedProb = 0, odds = 0;
+
+  if(omegaPick.includes('OVER 2.5') || omegaPick.includes('OVER 3')) {
+    marketProb  = omegaPick.includes('OVER 3') ? pp.pO35 : pp.pO25;
+    odds        = manualOdds.over || 0;
+    impliedProb = odds > 1 ? 1 / odds : 0;
+  } else if(omegaPick.includes('UNDER 2.5')) {
+    marketProb  = pp.pU25;
+    odds        = manualOdds.under || 0;
+    impliedProb = odds > 1 ? 1 / odds : 0;
+  } else if(omegaPick.includes('BTTS') || omegaPick.includes('GOAL')) {
+    marketProb  = pp.pBTTS;
+    odds        = manualOdds.btts || 0;
+    impliedProb = odds > 1 ? 1 / odds : 0;
+  } else if(omegaPick.includes('ΑΣΟΣ') || omegaPick.includes('1 ΗΜΙΧΡΟΝΟ')) {
+    marketProb  = pp.pHome;
+    odds        = manualOdds.home || 0;
+    impliedProb = odds > 1 ? 1 / odds : 0;
+  } else if(omegaPick.includes('ΔΙΠΛΟ') || omegaPick.includes('2 ΗΜΙΧΡΟΝΟ')) {
+    marketProb  = pp.pAway;
+    odds        = manualOdds.away || 0;
+    impliedProb = odds > 1 ? 1 / odds : 0;
+  }
+
+  if(!odds || odds <= 1.0 || marketProb <= 0) return rec;
+
+  const ev     = computeEV(marketProb, odds);
+  const kelly  = bankroll > 0 ? computeKellyStake(marketProb, odds, bankroll) : 0;
+  const hasValue = ev >= MIN_EV_PCT;
+  const edge   = (marketProb - impliedProb) * 100;
+
+  return { ...rec, ev, kelly, hasValue, odds, marketProb, impliedProb, edge: parseFloat(edge.toFixed(1)) };
+}
+
+// ================================================================
+//  BET JOURNAL — καταγραφή, P&L, ROI%
+// ================================================================
+window.loadBetJournal = function() {
+  try { const j = JSON.parse(localStorage.getItem(LS_BETJOURNAL)); if(Array.isArray(j)) betJournalData = j; } catch {}
+};
+
+window.logBet = function(fixId, pick, odds, stake, result) {
+  // result: 'pending' | 'won' | 'lost' | 'void'
+  const rec = (window.scannedMatchesData||[]).find(r=>r.fixId===fixId);
+  const entry = {
+    id:       Date.now(),
+    date:     todayISO(),
+    fixId,
+    match:    rec ? `${rec.ht} vs ${rec.at}` : String(fixId),
+    league:   rec?.lg || '',
+    pick,
+    odds:     parseFloat(odds),
+    stake:    parseFloat(stake),
+    result:   result || 'pending',
+    pnl:      result === 'won'  ? parseFloat(((odds-1)*stake).toFixed(2))
+             : result === 'lost' ? -parseFloat(stake)
+             : 0,
+    ev:       rec?.ev ?? null,
+    kelly:    rec?.kelly ?? null,
+    closingOdds: null, // υπολογίζεται αργότερα → CLV
+    clv:      null,
+  };
+  betJournalData.unshift(entry);
+  if(betJournalData.length > 500) betJournalData = betJournalData.slice(0, 500);
+  try { localStorage.setItem(LS_BETJOURNAL, JSON.stringify(betJournalData)); } catch {}
+  return entry;
+};
+
+window.updateBetResult = function(betId, result, closingOdds) {
+  const b = betJournalData.find(x => x.id === betId);
+  if(!b) return;
+  b.result = result;
+  b.pnl    = result === 'won'  ? parseFloat(((b.odds-1)*b.stake).toFixed(2))
+           : result === 'lost' ? -b.stake : 0;
+  if(closingOdds) {
+    b.closingOdds = parseFloat(closingOdds);
+    b.clv = parseFloat(((b.odds / closingOdds - 1) * 100).toFixed(2)); // CLV%
+  }
+  try { localStorage.setItem(LS_BETJOURNAL, JSON.stringify(betJournalData)); } catch {}
+  renderBetJournal();
+};
+
+function getBetJournalStats() {
+  const settled = betJournalData.filter(b => b.result !== 'pending' && b.result !== 'void');
+  const won     = settled.filter(b => b.result === 'won').length;
+  const totalStaked = settled.reduce((s,b) => s + b.stake, 0);
+  const totalPnl    = settled.reduce((s,b) => s + b.pnl,   0);
+  const roi         = totalStaked > 0 ? (totalPnl / totalStaked) * 100 : 0;
+  const clvBets     = settled.filter(b => b.clv !== null);
+  const avgClv      = clvBets.length > 0 ? clvBets.reduce((s,b) => s + b.clv, 0) / clvBets.length : null;
+  // Drawdown: running max PnL minus current PnL
+  let runningPnl = 0, peak = 0, maxDD = 0;
+  [...settled].reverse().forEach(b => { runningPnl += b.pnl; if(runningPnl > peak) peak = runningPnl; const dd = peak - runningPnl; if(dd > maxDD) maxDD = dd; });
+  return { total: settled.length, won, hitRate: settled.length > 0 ? (won/settled.length*100) : 0, totalStaked, totalPnl, roi, avgClv, maxDD };
+}
+
+function renderBetJournal() {
+  const el = document.getElementById('betJournalSection');
+  if(!el) return;
+  const stats = getBetJournalStats();
+  const pnlColor = stats.totalPnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+  const roiColor = stats.roi >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+
+  const rows = betJournalData.slice(0, 50).map(b => {
+    const pnlCol = b.pnl > 0 ? 'var(--accent-green)' : b.pnl < 0 ? 'var(--accent-red)' : 'var(--text-muted)';
+    const resultBadge = b.result === 'won'    ? `<span style="color:var(--accent-green);font-weight:800;">✅ WON</span>`
+                      : b.result === 'lost'   ? `<span style="color:var(--accent-red);font-weight:800;">❌ LOST</span>`
+                      : b.result === 'void'   ? `<span style="color:var(--text-muted);">VOID</span>`
+                      : `<span style="color:var(--accent-gold);">⏳ Pending</span>`;
+    const clvBadge = b.clv !== null ? `<span style="font-size:0.65rem;color:${b.clv>0?'var(--accent-green)':'var(--accent-red)'};">${b.clv>0?'+':''}${b.clv}%</span>` : '';
+    const evBadge  = b.ev !== null  ? `<span style="font-size:0.65rem;color:${b.ev>0?'var(--accent-teal)':'var(--text-muted)'};">EV:${b.ev>0?'+':''}${(b.ev*100).toFixed(1)}%</span>` : '';
+    return `<tr>
+      <td style="font-size:0.72rem;color:var(--text-muted);">${b.date}</td>
+      <td class="left-align" style="font-size:0.82rem;font-weight:600;">${esc(b.match)}<div style="font-size:0.65rem;color:var(--text-muted);">${esc(b.league)}</div></td>
+      <td style="font-size:0.78rem;color:var(--accent-blue);font-weight:700;">${esc(b.pick)}</td>
+      <td class="data-num" style="font-family:var(--font-mono);">${b.odds.toFixed(2)}</td>
+      <td class="data-num" style="font-family:var(--font-mono);">€${b.stake.toFixed(0)}</td>
+      <td>${resultBadge} ${clvBadge} ${evBadge}</td>
+      <td class="data-num" style="font-family:var(--font-mono);color:${pnlCol};font-weight:800;">${b.pnl>=0?'+':''}€${b.pnl.toFixed(2)}</td>
+      <td><button onclick="openUpdateBetModal(${b.id})" style="font-size:0.65rem;padding:2px 6px;border:1px solid var(--border-light);background:var(--bg-surface);color:var(--text-muted);border-radius:4px;cursor:pointer;">Edit</button></td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+  <div class="quant-panel" style="border-color:rgba(56,189,248,0.3);">
+    <div class="panel-title clickable" style="color:var(--accent-blue);" onclick="togglePanel('betJournalBody','betJournalArrow')">
+      <span>📒 Bet Journal & P&L Tracker <span style="font-size:0.7rem;color:var(--text-muted);">(${betJournalData.length} bets)</span></span>
+      <span id="betJournalArrow" class="arrow">▼</span>
+    </div>
+    <div id="betJournalBody" style="display:none;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:18px;">
+        ${[
+          {lbl:'Total P&L',   val:`${stats.totalPnl>=0?'+':''}€${stats.totalPnl.toFixed(2)}`,  col:pnlColor},
+          {lbl:'ROI%',        val:`${stats.roi>=0?'+':''}${stats.roi.toFixed(1)}%`,              col:roiColor},
+          {lbl:'Hit Rate',    val:`${stats.hitRate.toFixed(1)}%`,                                col:'var(--text-main)'},
+          {lbl:'Settled',     val:`${stats.won}/${stats.total}`,                                 col:'var(--text-main)'},
+          {lbl:'Avg CLV',     val:stats.avgClv!==null?`${stats.avgClv>0?'+':''}${stats.avgClv.toFixed(1)}%`:'N/A', col:stats.avgClv>0?'var(--accent-green)':'var(--accent-red)'},
+          {lbl:'Max Drawdown',val:`€${stats.maxDD.toFixed(0)}`,                                  col:'var(--accent-red)'},
+        ].map(m=>`<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:12px;text-align:center;">
+          <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:4px;">${m.lbl}</div>
+          <div style="font-size:1.2rem;font-weight:900;font-family:var(--font-mono);color:${m.col};">${m.val}</div>
+        </div>`).join('')}
+      </div>
+      ${betJournalData.length ? `
+      <div class="data-table-wrapper">
+        <table class="summary-table" style="font-size:0.82rem;">
+          <thead><tr><th>Ημ/νία</th><th class="left-align">Match</th><th>Pick</th><th>Odds</th><th>Stake</th><th>Αποτ.</th><th>P&L</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>` : `<div style="text-align:center;color:var(--text-muted);padding:24px;">Δεν υπάρχουν bets ακόμα. Πάτα "Log Bet" σε οποιοδήποτε signal.</div>`}
+    </div>
+  </div>
+  <div id="betUpdateModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;"></div>`;
+}
+
+window.openUpdateBetModal = function(betId) {
+  const b = betJournalData.find(x => x.id === betId);
+  if(!b) return;
+  const modal = document.getElementById('betUpdateModal');
+  if(!modal) return;
+  modal.style.display = 'flex';
+  modal.innerHTML = `<div style="background:var(--bg-panel);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:24px;min-width:320px;max-width:420px;">
+    <div style="font-size:1rem;font-weight:800;color:var(--text-main);margin-bottom:16px;">📝 Update Bet</div>
+    <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px;">${esc(b.match)} · ${esc(b.pick)}</div>
+    <div style="margin-bottom:12px;"><label class="input-label">Αποτέλεσμα</label>
+      <select id="betResultSel" class="quant-input">
+        <option value="pending" ${b.result==='pending'?'selected':''}>⏳ Pending</option>
+        <option value="won"     ${b.result==='won'?'selected':''}>✅ Won</option>
+        <option value="lost"    ${b.result==='lost'?'selected':''}>❌ Lost</option>
+        <option value="void"    ${b.result==='void'?'selected':''}>Void</option>
+      </select></div>
+    <div style="margin-bottom:16px;"><label class="input-label">Closing Odds (για CLV)</label>
+      <input type="number" id="betCloseOdds" class="quant-input" step="0.01" placeholder="π.χ. 1.85" value="${b.closingOdds||''}"></div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-primary" style="flex:1;" onclick="window.updateBetResult(${betId},document.getElementById('betResultSel').value,document.getElementById('betCloseOdds').value||null);document.getElementById('betUpdateModal').style.display='none';">Αποθήκευση</button>
+      <button class="btn btn-outline" onclick="document.getElementById('betUpdateModal').style.display='none';">Κλείσιμο</button>
+    </div>
+  </div>`;
+};
+
+// Log Bet button — εμφανίζεται inline στα match cards
+window.openLogBetModal = function(fixId) {
+  const rec = (window.scannedMatchesData||[]).find(r=>r.fixId==fixId);
+  if(!rec) return;
+  const existing = document.getElementById('quickLogModal');
+  if(existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'quickLogModal';
+  modal.style.cssText = 'display:flex;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;';
+  const kelly = rec.kelly || 0;
+  const ev = rec.ev != null ? `EV: ${rec.ev>0?'+':''}${(rec.ev*100).toFixed(1)}%` : '';
+  modal.innerHTML = `<div style="background:var(--bg-panel);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:24px;min-width:340px;max-width:440px;">
+    <div style="font-size:1rem;font-weight:800;color:var(--text-main);margin-bottom:4px;">📒 Log Bet</div>
+    <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:16px;">${esc(rec.ht)} vs ${esc(rec.at)}</div>
+    <div style="margin-bottom:10px;"><label class="input-label">Pick</label>
+      <input id="logPick" class="quant-input" value="${esc(rec.omegaPick)}"></div>
+    <div style="margin-bottom:10px;"><label class="input-label">Decimal Odds</label>
+      <input type="number" id="logOdds" class="quant-input" step="0.01" placeholder="π.χ. 1.85"></div>
+    <div style="margin-bottom:10px;"><label class="input-label">Stake (€) ${kelly>0?`<span style="color:var(--accent-green);font-size:0.7rem;">Kelly suggest: €${kelly}</span>`:''}</label>
+      <input type="number" id="logStake" class="quant-input" step="1" value="${kelly>0?kelly:''}" placeholder="€"></div>
+    ${ev?`<div style="font-size:0.75rem;color:var(--accent-teal);margin-bottom:12px;">${ev}</div>`:''}
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-primary" style="flex:1;" onclick="(()=>{const o=parseFloat(document.getElementById('logOdds').value),s=parseFloat(document.getElementById('logStake').value),p=document.getElementById('logPick').value;if(!o||!s){showErr('Συμπλήρωσε odds και stake');return;}window.logBet(${fixId},p,o,s,'pending');renderBetJournal();document.getElementById('quickLogModal').remove();showOk('Bet logged!');})()">✅ Log</button>
+      <button class="btn btn-outline" onclick="document.getElementById('quickLogModal').remove()">Άκυρο</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+};
+
+// ================================================================
+//  GOOGLE SHEETS PUSH
+//  Αποστέλλει δεδομένα στο Apps Script webhook μετά κάθε scan.
+//  Endpoint: ορίζεται από τον χρήστη στο UI (αποθηκεύεται localStorage)
+// ================================================================
+const LS_SHEETS_URL = 'omega_sheets_url_v5.0';
+
+async function pushToSheets(data) {
+  const url = localStorage.getItem(LS_SHEETS_URL);
+  if(!url || !data?.length) return;
+
+  // Batch rows για team stats + predictions
+  const teamRows = [];
+  const predRows = [];
+
+  data.forEach(d => {
+    if(!d.hS || !d.aS) return;
+
+    // Team stats rows (home & away)
+    [[d.ht, d.hS, true], [d.at, d.aS, false]].forEach(([name, s, isHome]) => {
+      teamRows.push({
+        date:         todayISO(),
+        team:         name,
+        league:       d.lg,
+        leagueId:     d.leagueId,
+        isHome:       isHome ? 1 : 0,
+        fXG:          parseFloat(Number(s.fXG).toFixed(3)),
+        fXGA:         parseFloat(Number(s.fXGA).toFixed(3)),
+        sXG:          parseFloat(Number(s.sXG).toFixed(3)),
+        formRating:   s.formRating || 0,
+        avgCorners:   parseFloat(Number(s.cor).toFixed(2)),
+        avgCards:     parseFloat(Number(s.crd).toFixed(2)),
+        shotsOn:      parseFloat(Number(s.shotsOn||0).toFixed(2)),
+        shotsOff:     parseFloat(Number(s.shotsOff||0).toFixed(2)),
+        sdGoals_6:    s.r6?.sdGoals   != null ? parseFloat(s.r6.sdGoals.toFixed(3))   : '',
+        sdCorners_6:  s.r6?.sdCorners != null ? parseFloat(s.r6.sdCorners.toFixed(3)) : '',
+        sdCards_6:    s.r6?.sdCards   != null ? parseFloat(s.r6.sdCards.toFixed(3))   : '',
+        sdGoals_sea:  s.sea?.sdGoals  != null ? parseFloat(s.sea.sdGoals.toFixed(3))  : '',
+        seaPlayed:    s.sea?.n || 0,
+      });
+    });
+
+    // Prediction rows
+    predRows.push({
+      date:         todayISO(),
+      fixtureId:    d.fixId,
+      home:         d.ht,
+      away:         d.at,
+      league:       d.lg,
+      leagueId:     d.leagueId,
+      omegaPick:    d.omegaPick,
+      confidence:   parseFloat(Number(d.strength||0).toFixed(1)),
+      tXG:          parseFloat(Number(d.tXG||0).toFixed(3)),
+      hXG:          parseFloat(Number(d.hXGfinal||d.hExp||0).toFixed(3)),
+      aXG:          parseFloat(Number(d.aXGfinal||d.aExp||0).toFixed(3)),
+      xgDiff:       parseFloat(Number(d.xgDiff||0).toFixed(3)),
+      exactScore:   d.exact || '',
+      htScore:      d.htAnalysis ? `${d.htAnalysis.htBest.h}-${d.htAnalysis.htBest.a}` : '',
+      pO25:         d.pp ? parseFloat((d.pp.pO25*100).toFixed(1)) : '',
+      pO35:         d.pp ? parseFloat((d.pp.pO35*100).toFixed(1)) : '',
+      pU25:         d.pp ? parseFloat((d.pp.pU25*100).toFixed(1)) : '',
+      pBTTS:        d.pp ? parseFloat((d.pp.pBTTS*100).toFixed(1)) : '',
+      cornerConf:   parseFloat(Number(d.cornerConf||0).toFixed(1)),
+      ev:           d.ev != null ? parseFloat((d.ev*100).toFixed(2)) : '',
+      kelly:        d.kelly || '',
+      sitFlags:     d.sitCtx?.flags?.join(', ') || '',
+      hasLineup:    d.lineupData?.available ? 1 : 0,
+      hasInjury:    (d.hInjAdj?.delta < -0.05 || d.aInjAdj?.delta < -0.05) ? 1 : 0,
+    });
+  });
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teamRows, predRows, sentAt: new Date().toISOString() }),
+    });
+    if(resp.ok) showOk(`📊 Sheets: ${predRows.length} predictions + ${teamRows.length} team rows pushed.`);
+    else showErr('Sheets push failed: ' + resp.status);
+  } catch(e) {
+    showErr('Sheets push error: ' + e.message);
+  }
+}
+
 window.resimulateMatches=function(){
   if(!window.scannedMatchesData.length)return;
   window.scannedMatchesData.forEach(d=>{
@@ -2791,11 +3277,58 @@ window.addEventListener('DOMContentLoaded',()=>{
       document.getElementById('auth').style.display='none';document.getElementById('app').style.display='block';
       loadSettings();loadBankroll();initCredits();updateAuditLeagueFilter();
       renderLeagueMods();
+      window.loadBetJournal();
+      // Bet Journal + Sheets config section
+      const advSec=document.getElementById('advisorSection');
+      if(advSec){
+        // Sheets URL config panel
+        const sheetsPanel=document.createElement('div');
+        sheetsPanel.className='quant-panel';sheetsPanel.style.borderColor='rgba(52,211,153,0.3)';
+        const savedUrl=localStorage.getItem(LS_SHEETS_URL)||'';
+        sheetsPanel.innerHTML=`<div class="panel-title clickable" style="color:var(--accent-green);" onclick="togglePanel('sheetsCfgBody','sheetsCfgArrow')">
+          <span>📊 Google Sheets Integration</span><span id="sheetsCfgArrow" class="arrow">▼</span>
+        </div>
+        <div id="sheetsCfgBody" style="display:none;">
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
+            Εισάγετε το Apps Script Web App URL για αυτόματο push στατιστικών μετά κάθε scan.<br>
+            <a href="https://script.google.com" target="_blank" style="color:var(--accent-blue);font-size:0.75rem;">→ Google Apps Script</a>
+          </div>
+          <div class="toolbar">
+            <div class="input-group" style="flex:3;"><label class="input-label">Apps Script URL</label>
+              <input type="url" id="sheetsUrlInput" class="quant-input" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(savedUrl)}"></div>
+            <button class="btn btn-primary" onclick="(()=>{const u=document.getElementById('sheetsUrlInput').value.trim();if(u){localStorage.setItem(LS_SHEETS_URL,u);showOk('Sheets URL αποθηκεύτηκε.');}else{localStorage.removeItem(LS_SHEETS_URL);showOk('Sheets URL αφαιρέθηκε.');}})()">💾 Αποθήκευση</button>
+            <button class="btn btn-outline" onclick="pushToSheets(window.scannedMatchesData)" style="color:var(--accent-green);border-color:rgba(52,211,153,0.4);">▶ Push Now</button>
+          </div>
+          <div style="margin-top:14px;font-size:0.72rem;color:var(--text-muted);">
+            <strong style="color:var(--text-main);">Apps Script (αντίγραψε στο Google Drive):</strong><br>
+            <pre style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:10px;font-size:0.65rem;overflow-x:auto;white-space:pre-wrap;line-height:1.5;">function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Sheet: Predictions
+  var pred = ss.getSheetByName('predictions') || ss.insertSheet('predictions');
+  if(pred.getLastRow()===0) pred.appendRow(['date','fixtureId','home','away','league','leagueId','pick','conf%','tXG','hXG','aXG','xgDiff','exact','htScore','pO25','pO35','pU25','pBTTS','cornerConf','ev%','kelly','sitFlags','hasLineup','hasInjury']);
+  (data.predRows||[]).forEach(function(r){ pred.appendRow([r.date,r.fixtureId,r.home,r.away,r.league,r.leagueId,r.omegaPick,r.confidence,r.tXG,r.hXG,r.aXG,r.xgDiff,r.exactScore,r.htScore,r.pO25,r.pO35,r.pU25,r.pBTTS,r.cornerConf,r.ev,r.kelly,r.sitFlags,r.hasLineup,r.hasInjury]); });
+
+  // Sheet: Team Stats
+  var ts = ss.getSheetByName('team_stats') || ss.insertSheet('team_stats');
+  if(ts.getLastRow()===0) ts.appendRow(['date','team','league','leagueId','isHome','fXG','fXGA','sXG','formRating','avgCorners','avgCards','shotsOn','shotsOff','sdGoals_6','sdCorners_6','sdCards_6','sdGoals_sea','seaPlayed']);
+  (data.teamRows||[]).forEach(function(r){ ts.appendRow([r.date,r.team,r.league,r.leagueId,r.isHome,r.fXG,r.fXGA,r.sXG,r.formRating,r.avgCorners,r.avgCards,r.shotsOn,r.shotsOff,r.sdGoals_6,r.sdCorners_6,r.sdCards_6,r.sdGoals_sea,r.seaPlayed]); });
+
+  return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);
+}</pre>
+          </div>
+        </div>`;
+        advSec.appendChild(sheetsPanel);
+        // Bet Journal section
+        const bjSection=document.createElement('div');bjSection.id='betJournalSection';
+        advSec.appendChild(bjSection);
+        renderBetJournal();
+      }
       // League filter with country
       const sel=document.getElementById('leagueFilter');
       if(sel&&typeof LEAGUES_DATA!=='undefined'){LEAGUES_DATA.forEach(l=>{if(![...sel.options].some(o=>o.value==l.id))sel.innerHTML+=`<option value="${l.id}">${l.name}</option>`;});}
-      // Build Live Tracker Panel in advisorSection
-      const advSec=document.getElementById('advisorSection');
+      // Build Live Tracker Panel in advisorSection (reuse advSec from above)
       if(advSec&&!document.getElementById('liveTrackerBody')){
         const ltPanel=document.createElement('div');
         ltPanel.className='quant-panel';ltPanel.style.borderColor='rgba(16,185,129,0.5)';
