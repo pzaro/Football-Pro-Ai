@@ -15,29 +15,48 @@ const LS_BANKROLL = "omega_bankroll_v5.0";
 //  ACRONYM DICTIONARY — κλικ πάνω σε ακρώνυμο → tooltip
 // ================================================================
 const ACRONYM_DICT = {
-  '1X2':      '1X2 — Αγορά αποτελέσματος: 1 = νίκη γηπεδούχου, Χ = ισοπαλία, 2 = νίκη φιλοξενούμενου',
-  'AH':       'Asian Handicap — Χάντικαπ αγορά: η ομάδα ξεκινά με εικονικό μειονέκτημα γκολ. AH -1.5 = νίκη με ≥2 γκολ',
-  'BTTS':     'Both Teams To Score — Και οι δύο ομάδες να σκοράρουν τουλάχιστον 1 γκολ (= Γκολ/Γκολ)',
+  // ── Βασικοί δείκτες xG ────────────────────────────────────────
+  '1X2':      '1X2 — Αγορά αποτελέσματος: 1=νίκη γηπεδούχου, X=ισοπαλία, 2=νίκη φιλοξενούμενου',
+  'AH':       'Asian Handicap — Χάντικαπ: η ομάδα ξεκινά με εικονικό μειονέκτημα. AH -1.5 = νίκη με ≥2 γκολ',
+  'BTTS':     'Both Teams To Score — Και οι δύο ομάδες να σκοράρουν ≥1 γκολ (= Γκολ/Γκολ)',
   'O2.5':     'Over 2.5 — Σύνολο γκολ αγώνα ≥ 3',
   'O3.5':     'Over 3.5 — Σύνολο γκολ αγώνα ≥ 4',
   'U2.5':     'Under 2.5 — Σύνολο γκολ αγώνα ≤ 2',
-  'HT':       'Half-Time — Πρόβλεψη αποτελέσματος & σκορ 1ου ημιχρόνου. Χρησιμοποιεί league-specific λ factor + home advantage +2.5%',
+  'HT':       'Half-Time — Πρόβλεψη 1ου ημιχρόνου. Χρησιμοποιεί league-specific λ factor + home advantage +2.5%',
   'FT':       'Full-Time — Τελικό αποτέλεσμα (90 λεπτά)',
-  'xG':       'Expected Goals — Αναμενόμενα γκολ βάσει ποιότητας ευκαιριών. Πιο αξιόπιστο από πραγματικά γκολ για πρόβλεψη',
-  'tXG':      'Total xG — Άθροισμα xG και των δύο ομάδων. Βάση για Over/Under αγορές',
-  'xGA':      'xG Against — Αναμενόμενα γκολ που δέχεται η ομάδα. Μετράει αδυναμία άμυνας',
-  'xG%':      'xG Contribution % — Ποσοστό συνεισφοράς παίκτη στο team xG βάσει GAP (Γκολ + 0.4 × Ασίστ)',
-  'xG Adj':   'xG Adjusted — Διορθωμένο xG μετά αφαίρεση τραυματισμένων παικτών. Εμφανίζεται σε χρυσό χρώμα',
-  'xG Diff':  'xG Difference — Διαφορά αναμενόμενων γκολ μεταξύ γηπεδούχου/φιλοξενούμενου. Κατώφλι για σήματα 1Χ2 (default: 0.48). Όσο μεγαλύτερο, τόσο πιο ξεκάθαρο το φαβορί.',
-  'GAP':      'Goal-Assist Points — Γκολ + 0.4 × Ασίστ. Composite δείκτης επιθετικής συνεισφοράς παίκτη',
-  'H2H':      'Head-to-Head — Ιστορικές απευθείας αναμετρήσεις. Χρησιμοποιείται για 12% blend στο λ',
-  'D-C':      'Dixon-Coles — Στατιστική διόρθωση Poisson για χαμηλά σκορ (0-0, 1-0, 0-1, 1-1) με ρ = −0.13',
+
+  // ── xG οικογένεια ─────────────────────────────────────────────
+  'xG':       'Expected Goals (Αναμενόμενα Γκολ) — Πιθανότητα (0-1) κάθε σουτ να γίνει γκολ, βάσει θέσης, γωνίας, είδους πάσας. Πιο αξιόπιστο από πραγματικά γκολ για πρόβλεψη επόμενου ματς.',
+  'tXG':      'Total xG (Συνολικά Αναμενόμενα Γκολ) — hXG + aXG. Ο "Βασιλιάς" για Over/Under.\n• tXG <2.20 → Under 2.5\n• tXG >2.80 → Over 2.5\n• tXG >3.40 → Over 3.5',
+  'xGA':      'xG Against (Αναμενόμενα Γκολ Κατά) — Πόσο επικίνδυνες ευκαιρίες επιτρέπει η ομάδα. Χαμηλό xGA = εξαιρετική άμυνα, ακόμα κι αν έχει δεχτεί γκολ από τύχη.',
+  'xG%':      'xG Contribution % — Ποσοστό συνεισφοράς παίκτη στο team xG βάσει GAP (Γκολ + 0.4×Ασίστ)',
+  'xG Adj':   'xG Adjusted — Διορθωμένο xG μετά αφαίρεση τραυματισμένων παικτών. Εμφανίζεται σε χρυσό',
+  'xG Diff':  'xG Difference (Διαφορά xG) — hXG minus aXG.\n• Θετικό (+0.85): φαβορί η γηπεδούχος\n• Αρνητικό (-1.10): φαβορί η φιλοξενούμενη\n• Κοντά στο 0 (±0.15): ισορροπημένο, μυρίζει X ή GG\nΤο calibration βρίσκει το ελάχιστο xG Diff ανά πρωτάθλημα για ασφαλές σήμα.',
+
+  // ── Στατιστικοί δείκτες ───────────────────────────────────────
+  'Conf%':    'Confidence % (Βεβαιότητα Μοντέλου) — Βαθμολογία 0-99% από τις Poisson πιθανότητες.\n• <70%: "ΧΩΡΙΣ ΣΥΣΤΑΣΗ"\n• 70-75%: καλό σήμα\n• >75%: ισχυρό σήμα ("Διαμάντι")',
+  'D-C':      'Dixon-Coles Correction — Στατιστική διόρθωση Poisson για χαμηλά σκορ (0-0, 1-0, 0-1, 1-1) με ρ=-0.13. Κάνει τις προβλέψεις Under/Ισοπαλία πιο ρεαλιστικές.',
+  'GAP':      'Goal-Assist Points — Γκολ + 0.4×Ασίστ. Composite δείκτης επιθετικής συνεισφοράς παίκτη',
+  'H2H':      'Head-to-Head — Ιστορικές απευθείας αναμετρήσεις. 12% blend στο λ του μοντέλου',
   'INJ':      'Injury flag — Τραυματισμένοι παίκτες με σημαντική επίπτωση στο xG (delta < −0.05)',
-  'Conf%':    'Confidence % — Εσωτερική βαθμολογία εμπιστοσύνης σήματος (0–99%). Βάσει Poisson πιθανοτήτων',
-  'Card%':    'Card Probability % — Πιθανότητα κίτρινης κάρτας: 1 − e^(−κάρτες/εμφανίσεις). Poisson μοντέλο',
-  'Adj🟨%':   'Adjusted Card % — Διορθωμένη πιθανότητα κάρτας που συνυπολογίζει: (1) επιθετικότητα αντιπάλου, (2) αγωνιστική ένταση (Διαφορά xG), (3) league type. ▲ = αυξημένος κίνδυνος, ▼ = μειωμένος',
-  'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit',
-  'Kelly':    'Kelly Criterion — Μαθηματικός τύπος βέλτιστου ποσού στοιχήματος βάσει bankroll & πλεονεκτήματος',
+  'Card%':    'Card Probability % — Πιθανότητα κίτρινης κάρτας: 1−e^(−κάρτες/εμφανίσεις). Poisson μοντέλο',
+  'Adj🟨%':   'Adjusted Card % — Διορθωμένη πιθανότητα κάρτας: συνυπολογίζει επιθετικότητα αντιπάλου, αγωνιστική ένταση (xG Diff), league type. ▲=αυξημένος, ▼=μειωμένος κίνδυνος',
+
+  // ── Volatility ────────────────────────────────────────────────
+  'Volatility': 'Volatility (Αστάθεια σ) — Τυπική Απόκλιση επιδόσεων τελευταίων αγώνων.\n• STABLE ▼: ομαδα με σταθερή απόδοση → αξιόπιστη πρόβλεψη\n• VOLATILE ▲: μεγάλη διακύμανση (6 γκολ, μετά 0) → αποφυγή σε 1X2\n• HIGH VOL ⚡: επικίνδυνο για στοιχηματισμό',
+
+  // ── Live δείκτες ─────────────────────────────────────────────
+  'SQD':      'Shot Quality Differential (Διαφορά Ποιότητας Ευκαιριών) — (Live xG_H/Shots_H) - (Live xG_A/Shots_A).\nΑποκαλύπτει τη "φλύαρη" πίεση:\n• Ομάδα Α: 10 shots, 0.50 xG = 0.05 ανά shot\n• Ομάδα Β: 3 shots, 0.60 xG = 0.20 ανά shot\n→ Ομάδα Β είναι 4× πιο επικίνδυνη!\nSQD >+0.06 = καθαρές φάσεις (τετ-α-τετ). Ποντάρουμε ΠΑΝΤΑτην ομάδα με καλύτερο SQD.',
+  'MSI':      'Momentum Shift Index (Δείκτης Μετατόπισης Κυριαρχίας) — Συγκρίνει Live xG share με Pre-match expected share.\nΑν περιμέναμε η HOME να έχει 60% και live έχει 35% → MSI=-25%. Τεράστιο σήμα κινδύνου! Προτείνει στοίχημα κόντρα στο φαβορί ή Cash Out.',
+  'Edge':     'Live Edge Score — Composite δείκτης live πλεονεκτήματος: SoT ratio×50% + SQD×30% + GK pressure×20%. >58%=HOME κυριαρχεί, <42%=AWAY κυριαρχεί.',
+
+  // ── Value & Money management ──────────────────────────────────
+  'EV%':      'Expected Value % (Αναμενόμενη Αξία) — (Πιθανότητα μοντέλου × Απόδοση book) − 1.\nΠ.χ. μοντέλο δίνει 60%, book δίνει 1.90 → EV% = (0.60×1.90)−1 = +14%.\nΠαίζουμε ΜΟΝΟ θετικό EV (πράσινο). Μακροπρόθεσμα κερδοφόρο.',
+  'Kelly':    'Kelly Criterion (Κριτήριο Kelly) — Μαθηματικός τύπος: ποντάρεις ακριβώς το σωστό ποσό βάσει bankroll & EV%.\nΤο APEX χρησιμοποιεί Fractional Kelly 25% — χρυσή τομή: μεγιστοποιείς κέρδη χωρίς χρεοκοπία σε κακό σερί.',
+  'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit & Auto-Calibration',
+
+  // ── Engine παράμετροι ─────────────────────────────────────────
+  'xG Mult':  'xG Multiplier (Πολλαπλασιαστής) — Συντελεστής ανά πρωτάθλημα που βαθμονομεί τα "ωμά" xG.\n• Mult >1.0 (π.χ. Bundesliga 1.12): επιθετικό πρωτάθλημα, τα xG υποεκτιμούν\n• Mult <1.0 (π.χ. Serie A 0.95): αμυντικό, τα xG υπερεκτιμούν\nΡυθμίζεται αυτόματα από το Grid Search Auto-Calibration.',
   'LRU':      'Least Recently Used — Στρατηγική cache: αφαιρείται πρώτο το παλαιότερο/ανενεργό entry',
 };
 
@@ -150,10 +169,10 @@ const SETTINGS_MAP = {
 };
 
 const _apiQueue = []; let _apiActive = 0;
-// api-sports.io: free plan = 10 req/sec, pro = 30 req/sec
-// MAX_CONCURRENT=10 + GAP=80ms → ~10 req/sec (safe για free plan)
-// Από 5 concurrent + 300ms gap → 3-4x speedup
-const MAX_CONCURRENT = 10, REQUEST_GAP_MS = 80;
+// api-sports.io: free plan = 10 req/sec
+// GAP=50ms: ασφαλές (10 concurrent × 50ms = 500ms/batch > 100ms min interval)
+// Το κύριο bottleneck είναι το network latency (~180ms), όχι το gap
+const MAX_CONCURRENT = 10, REQUEST_GAP_MS = 50;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -161,12 +180,60 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '14:33 EET';
+const BUILD_TIME    = '14:46 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
   if(el && ts) { el.textContent = `⚡ Τελ. Βαθμονόμηση: ${ts}`; el.style.display = 'inline-block'; }
 }
+
+// ── Glossary Modal ────────────────────────────────────────────────
+const GLOSSARY_GROUPS = [
+  { label:'Βασικοί Δείκτες xG', badge:null,      keys:['xG','tXG','xGA','xG%','xG Adj','xG Diff'] },
+  { label:'Αγορές & Αποτελέσματα', badge:null,   keys:['1X2','AH','BTTS','O2.5','O3.5','U2.5','HT','FT'] },
+  { label:'Στατιστικοί Δείκτες', badge:null,     keys:['Conf%','D-C','GAP','H2H','INJ','Card%','Adj🟨%'] },
+  { label:'Live Δείκτες', badge:'live',           keys:['SQD','MSI','Edge','Volatility'] },
+  { label:'Engine & Calibration', badge:'engine', keys:['xG Mult','Vault','LRU'] },
+  { label:'Value & Χρήματα', badge:'money',       keys:['EV%','Kelly'] },
+];
+
+window.openGlossary = function() {
+  const modal = document.getElementById('glossaryModal');
+  const content = document.getElementById('glossaryContent');
+  if(!modal || !content) return;
+
+  content.innerHTML = GLOSSARY_GROUPS.map(group => {
+    const badgeHtml = group.badge
+      ? `<span class="gloss-badge ${group.badge}">${group.badge==='live'?'🟢 LIVE':group.badge==='engine'?'⚙️ ENGINE':'💰 VALUE'}</span>`
+      : '';
+    const items = group.keys.map(key => {
+      const desc = ACRONYM_DICT[key];
+      if(!desc) return '';
+      return `<div class="gloss-item">
+        <div class="gloss-term">${key}</div>
+        <div class="gloss-desc">${desc.replace(/\\n/g,'\n')}</div>
+      </div>`;
+    }).filter(Boolean).join('');
+
+    return `<div style="margin-bottom:16px;">
+      <div style="font-size:0.65rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,0.06);">
+        ${group.label}${badgeHtml}
+      </div>
+      ${items}
+    </div>`;
+  }).join('');
+
+  modal.classList.add('open');
+};
+
+window.closeGlossary = function() {
+  document.getElementById('glossaryModal')?.classList.remove('open');
+};
+
+// Κλείσιμο με Escape
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape') window.closeGlossary();
+});
 
 const safeNum  = (x,d=0) => Number.isFinite(Number(x))?Number(x):d;
 const clamp    = (n,mn,mx) => Math.max(mn,Math.min(mx,n));
@@ -537,7 +604,36 @@ async function batchCalc(fixtures,tId){
 function getFormHistory(fixtures,teamId){return fixtures.map(f=>{const my=getTeamGoals(f,teamId),op=getOppGoals(f,teamId);return my>op?{res:'W',cls:'W'}:my<op?{res:'L',cls:'L'}:{res:'D',cls:'D'};}).reverse();}
 function getFormRating(hist){if(!hist?.length)return 50;const w=[1,0.8,0.6,0.4,0.2];let score=0,tw=0;hist.slice(0,5).forEach((h,i)=>{const wi=w[i]||0.1,pts=h.res==='W'?100:h.res==='D'?33:0;score+=pts*wi;tw+=wi;});return tw>0?Math.round(score/tw):50;}
 
+// ── buildIntel cache — αποφεύγει duplicate calls για ίδια ομάδα ──
+// Key: `${tId}_${lg}_${s}` — αποθηκεύει το Promise (όχι το result)
+// ώστε παράλληλα requests για την ίδια ομάδα να μοιραστούν ένα call
+const _buildIntelCache = new BoundedCache(80);
+const _buildIntelPromises = new Map(); // dedup in-flight requests
+
 async function buildIntel(tId,lg,s,isHome){
+  const cacheKey = `${tId}_${lg}_${s}`;
+
+  // Hit: έχουμε ήδη το result
+  if(_buildIntelCache.has(cacheKey)) return _buildIntelCache.get(cacheKey);
+
+  // In-flight dedup: αν τρέχει ήδη το ίδιο request, περίμενε το
+  if(_buildIntelPromises.has(cacheKey)) return _buildIntelPromises.get(cacheKey);
+
+  // Miss: νέο request
+  const promise = _buildIntelImpl(tId, lg, s, isHome).then(result => {
+    _buildIntelCache.set(cacheKey, result);
+    _buildIntelPromises.delete(cacheKey);
+    return result;
+  }).catch(err => {
+    _buildIntelPromises.delete(cacheKey);
+    throw err;
+  });
+
+  _buildIntelPromises.set(cacheKey, promise);
+  return promise;
+}
+
+async function _buildIntelImpl(tId,lg,s,isHome){
   try{
     const[ss,allFix]=await Promise.all([getTStats(tId,lg,s),getLFix(tId,lg,s)]);
     const gen=allFix.slice(0,8);
@@ -1283,6 +1379,8 @@ window.runScan=async function(){
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
+  // Clear team intel cache — fresh data για κάθε scan
+  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); } catch {}
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();scorersCache.clear();assistsCache.clear();cardsCache.clear();injuryCache.clear();
   try{
@@ -1307,11 +1405,10 @@ window.runScan=async function(){
       getLeagueTopCards(lid, season),
     ])));
 
-    // ── Parallel batch processing ─────────────────────────────────
-    // Παράλληλα ανά BATCH αγώνες — αντί για σειριακό
-    // BATCH=4: 4 concurrent analyzeMatchSafe (κάθε ένα κάνει ~8 API calls)
-    // = ~32 concurrent API calls → χρησιμοποιεί πλήρως MAX_CONCURRENT=10
-    const SCAN_BATCH = 4;
+    // ── Parallel batch processing: 6 matches ταυτόχρονα ─────────
+    // buildIntel cache → ίδια ομάδα = 0 extra calls
+    // 6 × ~10 calls = 60 concurrent → χρησιμοποιεί πλήρως τα 10 slots
+    const SCAN_BATCH = 6;
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));

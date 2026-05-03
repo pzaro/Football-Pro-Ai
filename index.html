@@ -21,6 +21,7 @@
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
       <span id="lastUpdatedText">—</span>
     </div>
+    <button onclick="openGlossary()" style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);color:var(--blue);border-radius:8px;padding:4px 10px;font-size:0.72rem;font-weight:700;cursor:pointer;font-family:var(--font-cond);letter-spacing:0.05em;" title="Γλωσσάριο Δεικτών">? Γλωσσάριο</button>
   </div>
   <div class="header-right">
     <div class="bankroll-widget" onclick="openBankroll()" title="Bankroll Manager">
@@ -62,7 +63,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.0 · 03/05/2026 14:14 EET</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.0 · 03/05/2026 14:46 EET</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -273,6 +274,20 @@
 
   </div><!-- /container -->
 </div><!-- /app -->
+
+<!-- ── GLOSSARY MODAL ────────────────────────────────────── -->
+<div id="glossaryModal" onclick="if(event.target===this)closeGlossary()">
+  <div class="gloss-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+      <div>
+        <div style="font-size:1rem;font-weight:800;color:var(--blue);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.1em;">📚 Γλωσσάριο Δεικτών</div>
+        <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">Hover σε οποιοδήποτε μπλε ακρώνυμο για γρήγορη εξήγηση</div>
+      </div>
+      <button onclick="closeGlossary()" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:6px 12px;cursor:pointer;font-size:0.78rem;">✕ Κλείσιμο</button>
+    </div>
+    <div id="glossaryContent"></div>
+  </div>
+</div>
 
 <script src="leagues.js"></script>
 <script src="stats.js"></script>
