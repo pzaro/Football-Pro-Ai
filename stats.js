@@ -158,7 +158,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '09:32 EET';
+const BUILD_TIME    = '09:46 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -2837,20 +2837,20 @@ function buildAccordionHTML(x) {
           <div style="width:${Math.round(li.pNextAway*100)}%;background:var(--accent-blue);"></div>
         </div>
      </div>
-    </div>` : '';
+    </div>` : '';
 
-  // ─── ⚡ AI FINAL VERDICT PANEL ───────────────────────────────────
-  const hCrdExp = x.hS?.crd || 2.1;
-  const aCrdExp = x.aS?.crd || 2.1;
-  const totalCrd = hCrdExp + aCrdExp;
-  
-  const hCorExpBase = x.hS?.cor || 4.8;
-  const aCorExpBase = x.aS?.cor || 4.8;
-  const hCorShare = hCorExpBase / (hCorExpBase + aCorExpBase);
-  const hProjCor = (x.expCor || 0) * hCorShare;
-  const aProjCor = (x.expCor || 0) * (1 - hCorShare);
+  // ─── ⚡ AI FINAL VERDICT PANEL ───────────────────────────────────
+  const hCrdExp = x.hS?.crd || 2.1;
+  const aCrdExp = x.aS?.crd || 2.1;
+  const totalCrd = hCrdExp + aCrdExp;
+  
+  const hCorExpBase = x.hS?.cor || 4.8;
+  const aCorExpBase = x.aS?.cor || 4.8;
+  const hCorShare = hCorExpBase / (hCorExpBase + aCorExpBase);
+  const hProjCor = (x.expCor || 0) * hCorShare;
+  const aProjCor = (x.expCor || 0) * (1 - hCorShare);
 
-  const finalVerdictCard = `
+  const finalVerdictCard = `
     <div class="accordion-card" style="grid-column:1/-1;border-color:rgba(77,184,255,0.35);background:linear-gradient(135deg,rgba(77,184,255,0.06),transparent);box-shadow:0 4px 20px rgba(0,0,0,0.25);">
 
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
@@ -2903,13 +2903,13 @@ function buildAccordionHTML(x) {
     </div>`;
 
   return `
-    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
-      <div class="accordion-grid">
-      
-        ${finalVerdictCard}
+    <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
+      <div class="accordion-grid">
+      
+        ${finalVerdictCard}
 
-        <div class="accordion-card">
-          <h4>Home vs Away Breakdown</h4>
+        <div class="accordion-card">
+          <h4>Home vs Away Breakdown</h4>
           <div class="accordion-row"><span>Form ${acr('xG')}</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
           <div class="accordion-row"><span>Form ${acr('xGA')}</span><span class="data-num" style="color:var(--text-muted)">${x.hS?.uiXGA||'0.00'} vs ${x.aS?.uiXGA||'0.00'}</span></div>
           <div class="accordion-row"><span>Split ${acr('xG')}</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
@@ -2920,128 +2920,6 @@ function buildAccordionHTML(x) {
 
         ${liveIntelCard}
 
-        ${(()=>{
-          const ld = x.lineupData;
-          const confirmed = ld?.available === true;
-
-          // ── projected XI από players όταν δεν υπάρχει lineup ──
-          const estimatePos = p => p.xGContrib>0.14?'F':p.xGContrib>0.07?'M':p.xGContrib>0.02?'D':'G';
-          const projectedXI = (players, adj) => {
-            if(!players?.length) return {xi:[], formation:'', xiIds:new Set()};
-            const injIds = new Set((adj?.injured||[]).map(p=>p.id));
-            const avail = [...players].filter(p=>!injIds.has(p.id)).sort((a,b)=>b.xGContrib-a.xGContrib);
-            const xi = avail.slice(0,11).map(p=>({id:p.id,name:p.name,pos:p.pos||estimatePos(p),number:''}));
-            return {xi, formation:'', xiIds:new Set(xi.map(p=>p.id))};
-          };
-
-          const hTeam = confirmed ? ld.home : projectedXI(x.hPlayers, x.hInjAdj);
-          const aTeam = confirmed ? ld.away : projectedXI(x.aPlayers, x.aInjAdj);
-
-          // ── pitch-style column: groups players by position ──────
-          const pitchCol = (team, adj, sideColor) => {
-            const xi = team?.xi || [];
-            if(!xi.length) return `<div style="text-align:center;padding:20px 0;color:var(--text-dim);font-size:0.8rem;">Δεν υπάρχουν δεδομένα</div>`;
-
-            const posOrder = {G:0,D:1,M:2,F:3};
-            const groups = {G:[],D:[],M:[],F:[]};
-            [...xi].sort((a,b)=>(posOrder[a.pos]??2)-(posOrder[b.pos]??2))
-                   .forEach(p => (groups[p.pos in groups ? p.pos : 'M']).push(p));
-
-            const posLabel = {G:'Τερ.',D:'Αμυν.',M:'Μεσ.',F:'Επιθ.'};
-            const posColor = {G:'var(--text-dim)',D:'var(--accent-blue)',M:'var(--accent-teal)',F:'var(--accent-gold)'};
-
-            const playerChip = (p) => {
-              const prof = (adj?.xiPlayers||[]).find(pp=>pp.id===p.id);
-              const cProb = prof?.adjCardProb ?? prof?.cardProb ?? 0;
-              const xgW = prof ? Math.min(Math.round(prof.xGContrib*100*2.5),100) : 0;
-              const cCol = cProb>=40?'var(--accent-red)':cProb>=20?'var(--accent-gold)':'var(--text-dim)';
-              const surname = (p.name||'?').split(' ').pop();
-              const isOut = (adj?.outPlayers||[]).some(op=>op.id===p.id);
-              return `<div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:5px;background:var(--bg-surface);border:1px solid ${isOut?'rgba(248,113,113,0.25)':'var(--border)'};margin-bottom:3px;${isOut?'opacity:0.6':''};">
-                <span style="font-size:0.72rem;font-weight:700;color:${posColor[p.pos]||'var(--text-muted)'};min-width:12px;">${p.pos||'?'}</span>
-                <span style="flex:1;font-size:0.83rem;font-weight:600;color:${isOut?'var(--accent-red)':'var(--text-main)'};${isOut?'text-decoration:line-through;':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(surname)}</span>
-                ${xgW>0?`<div style="width:28px;height:3px;background:var(--bg-raised);border-radius:2px;flex-shrink:0;"><div style="width:${xgW}%;height:100%;background:var(--accent-blue);border-radius:2px;"></div></div>`:''}
-                ${cProb>=5?`<span style="font-size:0.68rem;color:${cCol};font-weight:700;min-width:26px;text-align:right;">${cProb.toFixed(0)}%</span>`:''}
-              </div>`;
-            };
-
-            return Object.entries(groups)
-              .filter(([,arr])=>arr.length>0)
-              .map(([pos,arr])=>`
-                <div style="margin-bottom:8px;">
-                  <div style="font-size:0.62rem;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:${posColor[pos]};margin-bottom:4px;padding-left:2px;">${posLabel[pos]}</div>
-                  ${arr.map(playerChip).join('')}
-                </div>`).join('');
-          };
-
-          // ── Coverage badge ───────────────────────────────────────
-          const covBadge = (adj) => {
-            if(adj?.coverage == null) return '';
-            const pct = Math.round(adj.coverage*100);
-            const col = pct>=90?'var(--accent-green)':pct>=72?'var(--accent-gold)':'var(--accent-red)';
-            const bg  = pct>=90?'rgba(52,211,153,0.1)':pct>=72?'rgba(251,191,36,0.1)':'rgba(248,113,113,0.1)';
-            return `<div style="font-size:0.68rem;font-weight:700;color:${col};background:${bg};padding:1px 7px;border-radius:10px;border:1px solid ${col}33;margin-top:4px;">GAP ${pct}%</div>`;
-          };
-
-          // ── Status bar ───────────────────────────────────────────
-          const statusBar = confirmed
-            ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.2);border-radius:8px;">
-                <span style="width:7px;height:7px;background:var(--accent-teal);border-radius:50%;flex-shrink:0;box-shadow:0 0 6px var(--accent-teal);"></span>
-                <span style="font-size:0.72rem;font-weight:700;color:var(--accent-teal);">Επιβεβαιωμένη Ενδεκάδα</span>
-                <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);margin-left:auto;">${ld.home?.formation||''} vs ${ld.away?.formation||''}</span>
-              </div>`
-            : `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px dashed var(--border-md);border-radius:8px;">
-                <span style="width:7px;height:7px;background:var(--text-dim);border-radius:50%;flex-shrink:0;animation:pulseRed 2.5s infinite;"></span>
-                <span style="font-size:0.72rem;font-weight:600;color:var(--text-muted);">Εκτιμώμενη σύνθεση · Αναμονή επίσημης ανακοίνωσης (~60' πριν)</span>
-                <button onclick="window.fetchLineupForMatch('${x.fixId}')" style="margin-left:auto;font-size:0.68rem;font-weight:700;padding:3px 10px;background:var(--bg-raised);color:var(--text-sub);border:1px solid var(--border-md);border-radius:8px;cursor:pointer;white-space:nowrap;transition:all 0.15s;" onmouseover="this.style.borderColor='var(--accent-teal)';this.style.color='var(--accent-teal)'" onmouseout="this.style.borderColor='var(--border-md)';this.style.color='var(--text-sub)'">↻ Fetch XI</button>
-              </div>`;
-
-          // ── Substitution log ─────────────────────────────────────
-          const subLog = (x.lastSubEvents||[]).length ? `
-            <div style="margin-top:12px;padding:8px 10px;background:rgba(251,191,36,0.04);border-left:2px solid var(--accent-gold);border-radius:0 6px 6px 0;">
-              <div style="font-size:0.65rem;font-weight:800;color:var(--accent-gold);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.08em;">🔄 Αντικαταστάσεις</div>
-              ${x.lastSubEvents.map(s=>`
-                <div style="display:flex;align-items:center;gap:6px;font-size:0.8rem;padding:2px 0;">
-                  <span style="font-size:0.75rem;">${s.team==='home'?'🏠':'✈️'}</span>
-                  <span style="color:var(--accent-red);opacity:0.75;text-decoration:line-through;">${esc((s.out||'').split(' ').pop())}</span>
-                  <span style="color:var(--text-dim);font-size:0.7rem;">→</span>
-                  <span style="color:var(--accent-green);font-weight:700;">${esc((s.in||'').split(' ').pop())}</span>
-                </div>`).join('')}
-            </div>` : '';
-
-          return `<div class="accordion-card" style="border-color:${confirmed?'rgba(45,212,191,0.28)':'rgba(255,255,255,0.06)'};">
-            <h4 style="color:${confirmed?'var(--accent-teal)':'var(--text-muted)'};margin-bottom:10px;">
-              📋 ${confirmed?'Starting XI':'XI'}
-            </h4>
-            ${statusBar}
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-              <div>
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                  <span style="font-size:0.72rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.04em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
-                  ${covBadge(x.hInjAdj)}
-                </div>
-                ${pitchCol(hTeam, x.hInjAdj, 'var(--accent-gold)')}
-              </div>
-              <div>
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                  <span style="font-size:0.72rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.04em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
-                  ${covBadge(x.aInjAdj)}
-                </div>
-                ${pitchCol(aTeam, x.aInjAdj, 'var(--accent-blue)')}
-              </div>
-            </div>
-            ${subLog}
-            <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;font-size:0.63rem;color:var(--text-dim);">
-              <span><b style="color:var(--accent-gold)">F</b> Επίθ.</span>
-              <span><b style="color:var(--accent-teal)">M</b> Μεσ.</span>
-              <span><b style="color:var(--accent-blue)">D</b> Αμυν.</span>
-              <span><b style="color:var(--text-dim)">G</b> Τερ.</span>
-              <span>bar = xG%</span>
-              <span>% = 🟨 prob</span>
-              ${confirmed?'':'<span style="color:var(--text-dim)">~ = εκτίμηση</span>'}
-            </div>
-          </div>`;
-        })()}
 
         ${x.htAnalysis ? (() => {
           const ht=x.htAnalysis;
