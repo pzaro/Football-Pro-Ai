@@ -3680,51 +3680,110 @@ function renderSummaryTable() {
   if (finishedMatches.length > 0) {
     let fRows = '';
     finishedMatches.forEach(x => {
-      const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0, aTot = ah+aa, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
-      const hXGAct = Number(x.actStats?.hXg||0).toFixed(2), aXGAct = Number(x.actStats?.aXg||0).toFixed(2);
-      const hPoss = x.actStats?.hPoss||'-', aPoss = x.actStats?.aPoss||'-';
-      const hCor = x.actStats?.hCor||0, aCor = x.actStats?.aCor||0;
-      const hCrd = x.actStats?.hCrd||0, aCrd = x.actStats?.aCrd||0;
-      
-      let hitHtml = `<span style="color:var(--text-muted)">-</span>`;
-      if(x.omegaPick && !x.omegaPick.includes('NO BET')) {
-          let hit = false;
-          if(x.omegaPick.includes('OVER 2.5')||x.omegaPick.includes('OVER 3')) hit = aTot > 2.5;
-          else if(x.omegaPick.includes('UNDER 2.5')) hit = aTot < 2.5;
-          else if(x.omegaPick.includes('GOAL')) hit = aBtts;
-          else if(x.omegaPick.includes('ΑΣΟΣ') && !x.omegaPick.includes('AH')) hit = aOut === '1';
-          else if(x.omegaPick.includes('ΔΙΠΛΟ') && !x.omegaPick.includes('AH')) hit = aOut === '2';
-          else if(x.omegaPick.includes('ΚΟΡΝΕΡ')) hit = (hCor+aCor) > 8.5;
-          else if(x.omegaPick.includes('ΚΑΡΤΕΣ')) hit = (hCrd+aCrd) > 5.5;
-          else if(x.omegaPick.includes('AH')) { 
-            if(x.omegaPick.includes('ΑΣΟΣ')) hit = (ah - aa) >= 2;
-            if(x.omegaPick.includes('ΔΙΠΛΟ')) hit = (aa - ah) >= 2;
-          }
-          hitHtml = hit ? `<span style="background:rgba(16,185,129,0.15);color:var(--accent-green);padding:4px 8px;border-radius:4px;font-weight:800;font-size:0.75rem;">✅ WON</span>` : `<span style="background:rgba(244,63,94,0.15);color:var(--accent-red);padding:4px 8px;border-radius:4px;font-weight:800;font-size:0.75rem;">❌ LOST</span>`;
+      const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0;
+      const aTot = ah+aa, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
+
+      // ── Πραγματικά στατιστικά (από actStats API)
+      const hXGAct  = Number(x.actStats?.hXg||0).toFixed(2);
+      const aXGAct  = Number(x.actStats?.aXg||0).toFixed(2);
+      const hPoss   = x.actStats?.hPoss||'—';
+      const aPoss   = x.actStats?.aPoss||'—';
+      const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
+      const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
+
+      // ── Προβλέψεις μοντέλου
+      const hXGPred  = Number(x.hXGfinal||0).toFixed(2);
+      const aXGPred  = Number(x.aXGfinal||0).toFixed(2);
+      const tXGPred  = (Number(x.hXGfinal||0)+Number(x.aXGfinal||0)).toFixed(2);
+      const hCorPred = Number(x.hProjCor||x.expCor/2||0).toFixed(1);
+      const aCorPred = Number(x.aProjCor||x.expCor/2||0).toFixed(1);
+      const expCorPred = Number(x.expCor||0).toFixed(1);
+
+      // ── Σύγκριση: πράσινο αν η πρόβλεψη ήταν εντός ±20%, κόκκινο αν πολύ έξω
+      const xgDev = Math.abs((Number(hXGAct)+Number(aXGAct)) - Number(tXGPred));
+      const xgCol = xgDev < 0.5 ? 'var(--accent-green)' : xgDev < 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)';
+      const corDev = Math.abs((hCorAct+aCorAct) - Number(expCorPred));
+      const corCol = corDev < 2 ? 'var(--accent-green)' : corDev < 4 ? 'var(--accent-gold)' : 'var(--accent-red)';
+
+      // ── Result badge
+      let hitHtml = `<span style="color:var(--text-muted)">—</span>`;
+      const pick = x.omegaPick||'';
+      if(pick && !pick.includes('ΧΩΡΙΣ') && !pick.includes('NO BET')) {
+        let hit = false;
+        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5'))                          hit = aTot > 3.5;
+        else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')||pick.includes('OVER 2')) hit = aTot > 2.5;
+        else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')||pick.includes('UNDER')) hit = aTot < 2.5;
+        else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG'))   hit = aBtts;
+        else if(pick.includes('ΑΣΟΣ')&&!pick.includes('AH'))        hit = aOut==='1';
+        else if(pick.includes('ΔΙΠΛΟ')&&!pick.includes('AH'))       hit = aOut==='2';
+        else if(pick.includes('ΝΙΚΗ ΓΗΠΕΔ'))                        hit = aOut==='1';
+        else if(pick.includes('ΝΙΚΗ ΦΙΛΟΞ'))                        hit = aOut==='2';
+        else if(pick.includes('ΚΟΡΝΕΡ'))                            hit = (hCorAct+aCorAct)>8.5;
+        else if(pick.includes('ΚΑΡΤΕΣ'))                            hit = (hCrdAct+aCrdAct)>5.5;
+        else if(pick.includes('AH')){
+          if(pick.includes('ΑΣΟΣ'))  hit = (ah-aa)>=2;
+          if(pick.includes('ΔΙΠΛΟ')) hit = (aa-ah)>=2;
+        }
+        hitHtml = hit
+          ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">✅ WON</span>`
+          : `<span style="background:rgba(251,113,133,0.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">❌ LOST</span>`;
       }
 
-      fRows += `<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;">
-        <td class="left-align" style="font-weight:700; font-size:1.05rem;">${esc(x.ht)} - ${esc(x.at)}</td>
-        <td class="data-num" style="color:var(--text-main); font-size:1.1rem;">${ah}-${aa}</td>
-        <td class="data-num" style="font-size:1.1rem;">${hXGAct} - ${aXGAct}</td>
-        <td class="data-num" style="font-size:1.1rem;">${hPoss}% - ${aPoss}%</td>
-        <td class="data-num" style="font-size:1.1rem;">${hCor} - ${aCor}</td>
-        <td class="data-num" style="font-size:1.1rem;">${hCrd} - ${aCrd}</td>
-        <td style="font-size:0.85rem;font-weight:800;color:var(--text-main);">${(x.omegaPick||'—').split(' ').slice(0,3).join(' ')}</td>
-        <td>${hitHtml}</td>
-      </tr>
-      <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
-        ${buildAccordionHTML(x)}
-      </tr>`;
+      // ── Pred vs Actual cell helper
+      const pvA = (pred, actual, col='var(--text-main)') =>
+        `<div style="font-family:var(--font-mono);line-height:1.4;">
+           <div style="font-size:0.72rem;color:var(--text-muted);">📐 ${pred}</div>
+           <div style="font-size:0.92rem;font-weight:800;color:${col};">✔ ${actual}</div>
+         </div>`;
+
+      fRows += `
+        <tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;" onmouseover="this.style.background='rgba(77,184,255,0.04)'" onmouseout="this.style.background=''">
+          <td class="left-align" style="font-weight:700;font-size:0.95rem;min-width:140px;">
+            ${esc(x.ht)}<span style="color:var(--text-dim);"> vs </span>${esc(x.at)}
+            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:1px;">${esc(x.lg||'')}</div>
+          </td>
+          <td style="text-align:center;">
+            <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--text-main);">${ah}-${aa}</div>
+            <div style="font-size:0.6rem;color:var(--text-muted);">${aTot} γκολ</div>
+          </td>
+          <td>${pvA(`${hXGPred}–${aXGPred} (${tXGPred})`, `${hXGAct}–${aXGAct}`, xgCol)}</td>
+          <td style="text-align:center;font-family:var(--font-mono);">
+            <div style="font-size:0.72rem;color:var(--text-muted);">—</div>
+            <div style="font-size:0.9rem;font-weight:700;">${hPoss}%–${aPoss}%</div>
+          </td>
+          <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${hCorAct}–${aCorAct} (${hCorAct+aCorAct})`, corCol)}</td>
+          <td style="text-align:center;font-family:var(--font-mono);">
+            <div style="font-size:0.72rem;color:var(--text-muted);">—</div>
+            <div style="font-size:0.9rem;font-weight:700;color:var(--accent-gold);">${hCrdAct}–${aCrdAct}</div>
+          </td>
+          <td style="font-size:0.78rem;font-weight:700;color:${x.strength>=70?'var(--accent-green)':'var(--text-muted)'};max-width:140px;">
+            ${esc(pick.split(' ').slice(0,4).join(' ')||'—')}
+            ${x.strength>=70?`<div style="font-size:0.6rem;color:var(--text-muted);">${x.strength?.toFixed(0)}% conf</div>`:''}
+          </td>
+          <td>${hitHtml}</td>
+        </tr>
+        <tr id="details-${x.fixId}" style="display:none;background:var(--bg-surface);">
+          ${buildAccordionHTML(x)}
+        </tr>`;
     });
 
-    finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:30px;border-color:rgba(16,185,129,0.5);">
-      <div style="background:rgba(16,185,129,0.1);padding:15px 20px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;">🏁 Post-Match Evolution (Finished) — ${finishedMatches.length} αγώνες</span>
+    finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(74,222,128,0.35);">
+      <div style="background:rgba(74,222,128,0.07);padding:12px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.82rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-cond);">🏁 Post-Match Evolution — ${finishedMatches.length} αγώνες</span>
+        <span style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono);">📐 = Πρόβλεψη · ✔ = Πραγματικό</span>
       </div>
       <div class="data-table-wrapper" style="border:none;margin:0;">
         <table class="summary-table">
-          <thead><tr><th class="left-align">Match</th><th>Score</th><th>Act. xG</th><th>Possession</th><th>Corners</th><th>Cards</th><th>Signal</th><th>Result</th></tr></thead>
+          <thead><tr>
+            <th class="left-align">Αγώνας</th>
+            <th>Σκορ</th>
+            <th>xG (Π→Α)</th>
+            <th>Possession</th>
+            <th>Κόρνερ (Π→Α)</th>
+            <th>Κάρτες</th>
+            <th>Signal</th>
+            <th>Result</th>
+          </tr></thead>
           <tbody>${fRows}</tbody>
         </table>
       </div>
