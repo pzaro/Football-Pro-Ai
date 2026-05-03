@@ -170,8 +170,9 @@ const SETTINGS_MAP = {
 
 const _apiQueue = []; let _apiActive = 0;
 // 🚀 Paid Plan (30 req/sec limit)
-const MAX_CONCURRENT = 30; // 10 → 30
-const REQUEST_GAP_MS = 10; // 50ms → 10ms
+// Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
+const MAX_CONCURRENT = 15;
+const REQUEST_GAP_MS = 35;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -179,7 +180,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '15:05 EET';
+const BUILD_TIME    = '15:14 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1406,7 +1407,7 @@ window.runScan=async function(){
 
     // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
     // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
-    const SCAN_BATCH = 15;
+    const SCAN_BATCH = 8; // Paid: 8 ταυτόχρονα (ισορροπία ταχύτητας/αξιοπιστίας)
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
@@ -3735,8 +3736,27 @@ function renderSummaryTable() {
         })() : (li ? `<div style="font-size:0.58rem;color:var(--text-dim);margin-top:2px;">Αναμονή shots...</div>` : '');
 
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
-          <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}${lineupSrcBadge}${subFlash}</td>
-          <td class="col-score data-num" style="color:${scoreCol};">${minuteBadge}${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
+          <td class="col-match left-align" style="font-weight:700;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${live ? `<span class="live-dot" style="width:7px;height:7px;flex-shrink:0;display:inline-block;"></span>` : ''}
+              ${live && elapsed ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);font-family:var(--font-mono);font-size:0.72rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(74,222,128,0.3);flex-shrink:0;">${elapsed}'</span>` : ''}
+              <span style="font-size:0.95rem;">${esc(x.ht)}</span>
+              <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
+              <span style="font-size:0.95rem;">${esc(x.at)}</span>
+              ${injBadge}${lineupSrcBadge}${subFlash}
+            </div>
+            ${(() => {
+              const hPos = x.hr, aPos = x.ar;
+              if(!hPos || hPos >= 99) return '';
+              const posCol = p => p <= 4 ? 'var(--accent-green)' : p >= 17 ? 'var(--accent-red)' : 'var(--text-muted)';
+              return `<div style="display:flex;gap:6px;margin-top:3px;font-size:0.65rem;font-family:var(--font-mono);">
+                <span style="color:${posCol(hPos)};">#${hPos}</span>
+                <span style="color:var(--text-dim);">vs</span>
+                <span style="color:${posCol(aPos)};">#${aPos}</span>
+              </div>`;
+            })()}
+          </td>
+          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
