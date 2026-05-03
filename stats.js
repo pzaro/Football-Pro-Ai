@@ -3220,58 +3220,6 @@ function buildAccordionHTML(x) {
           <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">🟨 Adj. card% (Poisson · αντίπαλος · league) · 🟥 Red card% · 🔴 κίνδυνος αποβολής · ▲▼ διόρθωση</div>
         </div>
 
-        <div class="accordion-card">
-          <h4>🎯 Σίγουρη Πεντάδα Ακριβούς Σκορ <span style="font-size:0.6rem;color:var(--text-dim);font-weight:500;">(Poisson D-C · φθίνουσα πιθανότητα)</span></h4>
-          ${(()=>{
-            if(!x.pp?.scoreMatrix) return `<div style="color:var(--text-muted);font-size:0.8rem;">Δεν υπάρχουν δεδομένα Poisson.</div>`;
-            // Collect all scores with their probabilities from the matrix
-            const scores = [];
-            const mat = x.pp.scoreMatrix;
-            if(Array.isArray(mat)) {
-              mat.forEach((row,h) => row.forEach((prob,a) => {
-                if(prob > 0.005) scores.push({h,a,prob});
-              }));
-            } else {
-              // Fallback: generate from lambdas
-              for(let h=0;h<=5;h++) for(let a=0;a<=5;a++) {
-                const prob = poissonProb(x.hExp||1.2,h) * poissonProb(x.aExp||1.0,a);
-                if(prob > 0.005) scores.push({h,a,prob});
-              }
-            }
-            const top5 = scores.sort((a,b)=>b.prob-a.prob).slice(0,5);
-            const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
-            const bgColors = [
-              'rgba(56,189,248,0.10)','rgba(168,85,247,0.08)',
-              'rgba(16,185,129,0.06)','rgba(255,255,255,0.03)','rgba(255,255,255,0.02)'
-            ];
-            const bdColors = [
-              'rgba(56,189,248,0.35)','rgba(168,85,247,0.3)',
-              'rgba(16,185,129,0.25)','var(--border-light)','var(--border-light)'
-            ];
-            const txColors = ['var(--accent-blue)','var(--accent-purple)','var(--accent-green)','var(--text-main)','var(--text-muted)'];
-            return `<div style="display:flex;flex-direction:column;gap:8px;">
-              ${top5.map((s,i)=>`
-              <div style="display:flex;align-items:center;gap:10px;background:${bgColors[i]};border:1px solid ${bdColors[i]};border-radius:8px;padding:10px 14px;">
-                <span style="font-size:1.1rem;flex-shrink:0;">${medals[i]}</span>
-                <div style="font-family:var(--font-mono);font-size:1.5rem;font-weight:900;color:${txColors[i]};min-width:52px;">${s.h}-${s.a}</div>
-                <div style="flex:1;">
-                  <div style="background:var(--border-light);border-radius:3px;height:6px;overflow:hidden;">
-                    <div style="height:6px;width:${Math.round(s.prob*100*4)}%;background:${txColors[i]};border-radius:3px;max-width:100%;"></div>
-                  </div>
-                </div>
-                <div style="text-align:right;min-width:44px;">
-                  <div style="font-family:var(--font-mono);font-weight:800;font-size:0.95rem;color:${txColors[i]};">${(s.prob*100).toFixed(1)}%</div>
-                </div>
-              </div>`).join('')}
-            </div>
-            <div style="margin-top:10px;text-align:center;background:var(--bg-dark);border-radius:6px;padding:8px;">
-              <span style="font-size:0.72rem;color:var(--text-muted);">Συνδυαστική πιθ. top-5:</span>
-              <span style="font-family:var(--font-mono);font-weight:800;color:var(--accent-blue);margin-left:6px;">${(top5.reduce((s,v)=>s+v.prob,0)*100).toFixed(1)}%</span>
-              <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;">· Combined Conf: <span style="color:${(x.exactConf||0)>=50?'var(--accent-green)':(x.exactConf||0)>=30?'var(--accent-gold)':'var(--text-muted)'};">${x.exactConf||0}%</span></span>
-            </div>`;
-          })()}
-        </div>
-
         <div class="accordion-card" style="min-width:280px;">
           <h4>📉 Volatility Analysis</h4>
           ${renderVolatilityPanel(x.hS, x.aS, x.ht, x.at)}
@@ -3308,10 +3256,6 @@ function buildAccordionHTML(x) {
           ${renderStabilitySignals(x)}
         </div>` : ''}
 
-        <div class="accordion-card" style="min-width: 320px;">
-          <h4 style="text-align:center;">📊 Poisson Score Matrix (${acr('D-C')})</h4>
-          ${pHtml}
-        </div>
       </div>
     </td>
   `;
