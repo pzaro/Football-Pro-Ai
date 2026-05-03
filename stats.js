@@ -180,7 +180,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '15:14 EET';
+const BUILD_TIME    = '15:20 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1148,62 +1148,74 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
   const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG,leagueId);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
   
-  let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Ανεπαρκής στατιστικό πλεονέκτημα.',pickScore=0;
-  
+  let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Δεν υπάρχει σαφές στατιστικό πλεονέκτημα για αυτό το ματς.',pickScore=0;
+
+  // Helper: ανθρώπινη βαθμολόγηση confidence
+  const confLabel = s => s>=80?'Πολύ ισχυρό σήμα':s>=72?'Ισχυρό σήμα':'Αξιόπιστο σήμα';
+
   // 1. ASIAN HANDICAP (-1.5)
-  if(pAH_Home >= 0.42 && xgDiff >= 0.90 && hS.formRating >= 50){omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Home)} | Διαφ. xG: +${xgDiff.toFixed(2)}`;}
-  else if(pAH_Away >= 0.42 && xgDiff <= -0.90 && aS.formRating >= 50){omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Away)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;}
+  if(pAH_Home >= 0.42 && xgDiff >= 0.90 && hS.formRating >= 50){
+    omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;
+    reason=`Ποντάρισμα: Η γηπεδούχος να κερδίσει με 2+ γκολ διαφορά. ${confLabel(pAH_Home*100)} — ξεκάθαρη επιθετική υπεροχή (xG +${xgDiff.toFixed(2)}).`;}
+  else if(pAH_Away >= 0.42 && xgDiff <= -0.90 && aS.formRating >= 50){
+    omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;
+    reason=`Ποντάρισμα: Η φιλοξενούμενη να κερδίσει με 2+ γκολ διαφορά. ${confLabel(pAH_Away*100)} — σαφής υπεροχή φιλοξενούμενης (xG ${xgDiff.toFixed(2)}).`;}
 
-  // 2. HALF-TIME WINNER — χρειάζεται ισχυρό πλεονέκτημα
-  else if(ppHT.pHome >= 0.48 && xgDiff >= 0.80){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΓΗΠΕΔΟΥΧΟΙ';pickScore=ppHT.pHome*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pHome)} | xG Διαφ.: +${xgDiff.toFixed(2)}`;}
-  else if(ppHT.pAway >= 0.48 && xgDiff <= -0.80){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΦΙΛΟΞΕΝΟΥΜΕΝΟΙ';pickScore=ppHT.pAway*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pAway)} | xG Διαφ.: ${xgDiff.toFixed(2)}`;}
+  // 2. HALF-TIME
+  else if(ppHT.pHome >= 0.48 && xgDiff >= 0.80){
+    omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΓΗΠΕΔΟΥΧΟΙ';pickScore=ppHT.pHome*100;
+    reason=`Ποντάρισμα: Γηπεδούχοι να προηγούνται στο ημίχρονο. Η επίθεσή τους κυριαρχεί από την αρχή (xG +${xgDiff.toFixed(2)}).`;}
+  else if(ppHT.pAway >= 0.48 && xgDiff <= -0.80){
+    omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΦΙΛΟΞΕΝΟΥΜΕΝΟΙ';pickScore=ppHT.pAway*100;
+    reason=`Ποντάρισμα: Φιλοξενούμενοι να προηγούνται στο ημίχρονο. Παίζουν επιθετικά από τα πρώτα λεπτά (xG ${xgDiff.toFixed(2)}).`;}
 
-  // 3. OVER / UNDER
-  // Over 3.5: P(O3.5) >= 0.52 (Poisson ~3.8 tXG → ~55%) + tXG threshold
+  // 3. OVER 3.5
   else if(pp.pO35 >= 0.52 && tXG >= lp.minXGO35 && btts >= 1.30){
     omegaPick='🚀 ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ';pickScore=pp.pO35*100;
-    reason=`Poisson Πάνω 3.5: ${pct(pp.pO35)} | Συν. xG: ${tXG.toFixed(2)}`;}
-  // Over 2.5: P(O2.5) >= 0.62 (Poisson ~3.1 tXG) + tXG threshold
+    reason=`Ποντάρισμα: Τουλάχιστον 4 γκολ. Και οι δύο ομάδες έχουν ισχυρή επίθεση — αναμένονται ${tXG.toFixed(1)} γκολ συνολικά (${pct(pp.pO35)} πιθανότητα).`;}
+
+  // 4. OVER 2.5
   else if(pp.pO25 >= 0.62 && tXG >= lp.minXGO25 && btts >= 0.90){
     omegaPick='🔥 ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pO25*100;
-    reason=`Poisson Πάνω 2.5: ${pct(pp.pO25)} | Συν. xG: ${tXG.toFixed(2)}`;}
-  // Under 2.5: P(U2.5) >= 0.58 (ισχυρό αμυντικό σήμα)
+    reason=`Ποντάρισμα: Τουλάχιστον 3 γκολ. Ανοιχτό επιθετικό ματς — αναμένονται ${tXG.toFixed(1)} γκολ (${pct(pp.pO25)} πιθανότητα).`;}
+
+  // 5. UNDER 2.5
   else if(pp.pU25 >= 0.58 && tXG <= lp.maxU25 && btts <= engineConfig.tBTTS_U25){
     omegaPick='🔒 ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pU25*100;
-    reason=`Poisson Κάτω 2.5: ${pct(pp.pU25)} | Συν. xG: ${tXG.toFixed(2)}`;}
+    reason=`Ποντάρισμα: Κάτω από 3 γκολ. Αμυντικό κλειστό ματς — αναμένονται μόλις ${tXG.toFixed(1)} γκολ (${pct(pp.pU25)} πιθανότητα).`;}
 
-  // 4. GOAL / GOAL — P(BTTS) >= 0.68 (αμφότερες ομάδες πρέπει να έχουν xG >= 1.3)
+  // 6. GOAL/GOAL
   else if(btts >= lp.minBTTS && pp.pBTTS >= 0.68 && hXG >= 1.10 && aXG >= 1.10){
     omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;
-    reason=`Πιθ. ΓΓ: ${pct(pp.pBTTS)} | xG: ${hXG.toFixed(2)} – ${aXG.toFixed(2)}`;}
+    reason=`Ποντάρισμα: Και οι δύο ομάδες να σκοράρουν. Αμφότερες έχουν επιθετική απειλή (🏠 ${hXG.toFixed(2)} / ✈️ ${aXG.toFixed(2)} xG) — ${pct(pp.pBTTS)} πιθανότητα.`;}
 
-  // 5. STRAIGHT WIN — P(win) >= 0.58 ΚΑΙ xgDiff >= lp.xgDiff
-  // 0.58 αντιστοιχεί σε xgDiff ~0.9 (αξιόπιστο edge)
+  // 7. STRAIGHT WIN
   else if(outPick !== 'X' && Math.abs(xgDiff) >= lp.xgDiff){
-    const outcome  = outPick==='1' ? '🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ' : '✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
-    const outProb  = outPick==='1' ? pp.pHome : pp.pAway;
-    const formOk   = outPick==='1' ? hS.formRating >= 40 : aS.formRating >= 40;
+    const isHome   = outPick==='1';
+    const outcome  = isHome ? '🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ' : '✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
+    const outProb  = isHome ? pp.pHome : pp.pAway;
+    const formOk   = isHome ? hS.formRating >= 40 : aS.formRating >= 40;
     if(outProb >= 0.58 && formOk){
       omegaPick = outProb >= 0.65 ? `⚡ ${outcome}` : outcome;
       pickScore = outProb*100;
-      reason = `Poisson ${outPick==='1'?'Γηπεδ.':'Φιλοξ.'}: ${pct(outProb)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;
+      reason = `Ποντάρισμα: Νίκη ${isHome?'γηπεδούχων':'φιλοξενούμενων'}. ${confLabel(outProb*100)} — υπεροχή σε xG (${isHome?'+':''}${xgDiff.toFixed(2)}) και φόρμα. Πιθανότητα νίκης: ${pct(outProb)}.`;
     }
   }
 
-  // 6. PROPS — μόνο αν δεν υπάρχει κύρια σύσταση
+  // 8. PROPS
   else if(cornerRes.conf >= 72){
     omegaPick='🚩 ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;
-    reason=`Μοντέλο Κόρνερ: ${cornerRes.conf.toFixed(1)}% | Αναμ.: ${cornerRes.expCor.toFixed(1)}`;}
+    reason=`Ποντάρισμα: Πάνω από 8 κόρνερ. Επιθετικό ματς με πολλές τελικές — αναμένονται ${cornerRes.expCor.toFixed(1)} κόρνερ συνολικά.`;}
   else if(totCards >= engineConfig.minCards && Math.abs(xgDiff) < 0.45){
     omegaPick='🟨 ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);
-    reason=`Μέσος Καρτών: ${totCards.toFixed(1)} | Ισορροπημένος αγώνας`;}
+    reason=`Ποντάρισμα: Πάνω από 5 κάρτες. Ισορροπημένο και αγωνιστικό ματς — αναμένονται ${totCards.toFixed(1)} κάρτες συνολικά.`;}
   
   // ── CONFIDENCE THRESHOLD ──────────────────────────────────────
   // Αν το pickScore δεν φτάνει το ελάχιστο κατώφλι → ΧΩΡΙΣ ΣΥΣΤΑΣΗ
   const MIN_CONF = 70;
   if(pickScore < MIN_CONF && !omegaPick.includes('ΧΩΡΙΣ')) {
     omegaPick = 'ΧΩΡΙΣ ΣΥΣΤΑΣΗ';
-    reason    = `Confidence ${pickScore.toFixed(0)}% < ${MIN_CONF}% (κατώφλι). ${reason}`;
+    reason    = `Το σήμα δεν είναι αρκετά ισχυρό για ποντάρισμα (${pickScore.toFixed(0)}% confidence — χρειάζεται τουλάχιστον ${MIN_CONF}%). Περιμένετε καλύτερη ευκαιρία.`;
     pickScore = 0;
   }
 
