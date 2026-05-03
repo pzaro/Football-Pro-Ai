@@ -158,7 +158,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '09:22 EET';
+const BUILD_TIME    = '09:32 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3506,36 +3506,80 @@ function renderVolatilityPanel(hS, aS, ht, at) {
   return `
   ${alertBox}
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
-  <table style="width:100%;border-collapse:collapse;min-width:420px;">
+  <table style="width:100%;border-collapse:separate;border-spacing:0;min-width:360px;">
+
+    <!-- HEADER -->
     <thead>
-      <tr style="border-bottom:2px solid var(--border-md);">
-        <th style="padding:6px 4px 8px;text-align:left;font-size:0.6rem;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em;white-space:nowrap;font-family:var(--font-cond);">Μέγεθος</th>
-        <!-- HOME block -->
-        <th colspan="2" style="padding:6px 4px 8px;text-align:center;border-left:1px solid var(--border-light);">
-          <div style="font-size:0.68rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-cond);">🏠 ${htShort}</div>
-          <div style="display:flex;justify-content:center;gap:1px;margin-top:3px;">
-            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">LAST 6</span>
-            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">ΣΕΖΟΝ</span>
-          </div>
+      <tr>
+        <th style="padding:0 6px 10px 0;width:26%;text-align:left;font-size:0.62rem;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);border-bottom:2px solid var(--border-md);"></th>
+        <th style="padding:0 4px 10px;text-align:center;border-bottom:2px solid rgba(252,211,77,0.4);border-left:2px solid rgba(252,211,77,0.2);">
+          <div style="font-size:0.75rem;font-weight:800;color:var(--accent-gold);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.1em;">🏠 ${htShort}</div>
         </th>
-        <th style="padding:0;width:24px;"></th>
-        <!-- AWAY block -->
-        <th colspan="2" style="padding:6px 4px 8px;text-align:center;border-right:1px solid var(--border-light);">
-          <div style="font-size:0.68rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-cond);">✈️ ${atShort}</div>
-          <div style="display:flex;justify-content:center;gap:1px;margin-top:3px;">
-            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">ΣΕΖΟΝ</span>
-            <span style="font-size:0.5rem;color:var(--text-dim);background:var(--bg-surface);border-radius:3px;padding:1px 5px;font-family:var(--font-cond);">LAST 6</span>
-          </div>
+        <th style="padding:0 4px 10px;width:8%;border-bottom:2px solid var(--border-md);"></th>
+        <th style="padding:0 4px 10px;text-align:center;border-bottom:2px solid rgba(77,184,255,0.4);border-right:2px solid rgba(77,184,255,0.2);">
+          <div style="font-size:0.75rem;font-weight:800;color:var(--accent-blue);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.1em;">✈️ ${atShort}</div>
         </th>
       </tr>
     </thead>
-    <tbody>${tableRows}</tbody>
-    <tfoot>
-      <tr>
-        <td colspan="6" style="padding:6px 4px 2px;font-size:0.5rem;color:var(--text-dim);font-family:var(--font-mono);">
-          ΜΟ = μέσος όρος · σ = τυπική απόκλιση · ΔΕ 95% = διάστημα εμπιστοσύνης · ●emp = empirical data · ●th = Poisson/NegBin θεωρητικό · <span style="color:var(--accent-green);">πράσινο</span> = καλύτερη πλευρά
+
+    <tbody>
+    ${rows.map(row => {
+      const [hCol, aCol] = compareColor(row.h.val, row.a.val, row.higherBetter);
+      const hBetter = hCol === 'var(--accent-green)';
+      const aBetter = aCol === 'var(--accent-green)';
+      const hV = vLabel(row.h.sd, row.base);
+      const aV = vLabel(row.a.sd, row.base);
+
+      // Sparkline inline
+      const mkSpark = (arr, color) => {
+        if(!arr?.length) return '<span style="color:var(--text-dim);font-size:0.6rem;">—</span>';
+        const mx = Math.max(...arr.map(Number), 1);
+        return `<div style="display:inline-flex;align-items:flex-end;gap:2px;height:22px;vertical-align:middle;">` +
+          arr.map((v,i) => {
+            const h = Math.max(Math.round((Number(v)/mx)*22), 2);
+            return `<div style="width:6px;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${0.35+(i/arr.length)*0.65};"></div>`;
+          }).join('') + `</div>`;
+      };
+
+      // Stat block: val + spark + volatility chip + σ + CI
+      const statBlock = (side, color, isBetter) => `
+        <div style="text-align:center;padding:10px 6px;">
+          <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${isBetter?color:'var(--text-main)'};line-height:1;margin-bottom:4px;">${f1(side.val)}</div>
+          <div style="margin-bottom:5px;">${mkSpark(side.arr, color)}</div>
+          <div style="display:inline-flex;align-items:center;gap:3px;background:${hV.col}18;border:1px solid ${isBetter?color+'44':'var(--border-light)'};border-radius:6px;padding:2px 7px;margin-bottom:4px;">
+            <span style="font-size:0.6rem;font-weight:800;color:${isBetter?color:hV.col};">${(side===row.h?hV:aV).icon} ${(side===row.h?hV:aV).lbl}</span>
+          </div>
+          <div style="font-size:0.58rem;color:var(--text-muted);font-family:var(--font-mono);">ΜΟ σεζ: <span style="color:var(--text-sub);">${f1(side.seaMean)}</span></div>
+          <div style="font-size:0.56rem;color:var(--text-dim);font-family:var(--font-mono);">σ=${f2(side.sd)}</div>
+          ${side.ci ? `<div style="font-size:0.54rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px;">ΔΕ₉₅ [${f1(side.ci[0])}–${f1(side.ci[1])}]</div>` : ''}
+        </div>`;
+
+      return `
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+        <!-- Label -->
+        <td style="padding:8px 8px 8px 0;vertical-align:middle;">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.07em;white-space:nowrap;">${row.label}</div>
         </td>
-      </tr>
+        <!-- HOME -->
+        <td style="background:${hBetter?'rgba(74,222,128,0.04)':'rgba(252,211,77,0.02)'};border-left:2px solid rgba(252,211,77,0.2);">
+          ${statBlock(row.h, row.color, hBetter)}
+        </td>
+        <!-- VS -->
+        <td style="text-align:center;vertical-align:middle;padding:0 4px;">
+          <div style="font-size:0.55rem;font-weight:800;color:var(--text-dim);font-family:var(--font-cond);letter-spacing:0.1em;">VS</div>
+        </td>
+        <!-- AWAY -->
+        <td style="background:${aBetter?'rgba(74,222,128,0.04)':'rgba(77,184,255,0.02)'};border-right:2px solid rgba(77,184,255,0.2);">
+          ${statBlock(row.a, row.color, aBetter)}
+        </td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+
+    <tfoot>
+      <tr><td colspan="4" style="padding:6px 0 2px;font-size:0.52rem;color:var(--text-dim);font-family:var(--font-mono);">
+        ΔΕ₉₅ = Διάστημα Εμπιστοσύνης 95% · σ = τυπ.απόκλιση · <span style="color:var(--accent-green);">πράσινο</span> = ισχυρότερη πλευρά ανά μέγεθος
+      </td></tr>
     </tfoot>
   </table>
   </div>`;
