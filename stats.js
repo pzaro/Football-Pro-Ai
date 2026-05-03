@@ -169,10 +169,9 @@ const SETTINGS_MAP = {
 };
 
 const _apiQueue = []; let _apiActive = 0;
-// api-sports.io: free plan = 10 req/sec
-// GAP=50ms: ασφαλές (10 concurrent × 50ms = 500ms/batch > 100ms min interval)
-// Το κύριο bottleneck είναι το network latency (~180ms), όχι το gap
-const MAX_CONCURRENT = 10, REQUEST_GAP_MS = 50;
+// 🚀 Paid Plan (30 req/sec limit)
+const MAX_CONCURRENT = 30; // 10 → 30
+const REQUEST_GAP_MS = 10; // 50ms → 10ms
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -180,7 +179,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '14:46 EET';
+const BUILD_TIME    = '14:58 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1405,10 +1404,9 @@ window.runScan=async function(){
       getLeagueTopCards(lid, season),
     ])));
 
-    // ── Parallel batch processing: 6 matches ταυτόχρονα ─────────
-    // buildIntel cache → ίδια ομάδα = 0 extra calls
-    // 6 × ~10 calls = 60 concurrent → χρησιμοποιεί πλήρως τα 10 slots
-    const SCAN_BATCH = 6;
+    // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
+    // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
+    const SCAN_BATCH = 15;
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
