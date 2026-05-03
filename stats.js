@@ -847,10 +847,12 @@ function applyInjuryAdjustment(baseXG, playerProfiles, rawInjuries) {
   if(!injuredProfiles.length) return { adjXG: baseXG, delta: 0, factor: 1.0, injured: [] };
 
   // Συνολική xG απώλεια × compensation factor
-  const COMPENSATION = 0.78; // αντικαθίσταται το 78% από εφεδρεία
+  // ΣΗΜΑΝΤΙΚΟ: 0.60 αντί 0.78 — οι αντικαταστάτες καλύπτουν περισσότερο
+  // από ό,τι υποθέτουμε. Το API επιστρέφει και "doubtful" ως injured.
+  const COMPENSATION = 0.60;
   const xGLoss = injuredProfiles.reduce((s, p) => s + p.xGContrib, 0) * COMPENSATION;
-  // Floor: ακόμα και με πολλές απουσίες, η ομάδα παράγει min 55% του base xG
-  const factor  = clamp(1 - xGLoss, 0.55, 1.0);
+  // Floor: ανεβάζουμε από 0.55 σε 0.70 — ακόμα με πολλές απουσίες παράγεται σοβαρό xG
+  const factor  = clamp(1 - xGLoss, 0.70, 1.0);
   const adjXG   = baseXG * factor;
   const delta   = adjXG - baseXG;
 
@@ -880,7 +882,7 @@ function applyLineupAdjustment(baseXG, allPlayers, lineupXI, rawInjuries) {
     return { ...injAdj, source: 'injury', xiPlayers: [], outPlayers: [] };
   }
 
-  const COMPENSATION = 0.72; // χαμηλότερο από injury (0.78): rotation ≠ injury
+  const COMPENSATION = 0.55; // rotation ≠ injury: αντικαταστάτης καλύπτει περισσότερο
   const injuredIds = new Set((rawInjuries||[]).map(i=>i.player?.id).filter(Boolean));
 
   const xiPlayers  = [];
@@ -900,9 +902,9 @@ function applyLineupAdjustment(baseXG, allPlayers, lineupXI, rawInjuries) {
   const xiGAP    = xiPlayers.reduce((s,p)  => s + p.gap, 0);
   const coverage = clamp(xiGAP / totalGAP, 0.30, 1.0);
 
-  // Μόνο αν coverage < 95% εφαρμόζεται ουσιαστική διόρθωση
-  const xGLoss = coverage < 0.95 ? (1 - coverage) * COMPENSATION : 0;
-  const factor  = clamp(1 - xGLoss, 0.52, 1.0);
+  // Μόνο αν coverage < 90% εφαρμόζεται ουσιαστική διόρθωση (αυστηρότερο threshold)
+  const xGLoss = coverage < 0.90 ? (1 - coverage) * COMPENSATION : 0;
+  const factor  = clamp(1 - xGLoss, 0.68, 1.0); // floor 0.68 αντί 0.52
   const adjXG   = baseXG * factor;
   const delta   = adjXG - baseXG;
 
@@ -3162,7 +3164,7 @@ function buildAccordionHTML(x) {
 
         <!-- ── xG Contribution card ───────────────────────── -->
         <div class="accordion-card">
-          <h4>${acr('xG')} Contribution <span style="font-size:0.65rem;color:var(--text-dim);font-weight:500;">↓ φθίνουσα</span></h4>
+          <h4>${acr('xG')} Contribution</h4>
 
           <!-- Home -->
           <div style="margin-bottom:12px;">
@@ -3192,7 +3194,7 @@ function buildAccordionHTML(x) {
 
         <!-- ── Card Risk card ─────────────────────────────── -->
         <div class="accordion-card">
-          <h4>🟨🟥 Card Risk <span style="font-size:0.65rem;color:var(--text-dim);font-weight:500;">↓ φθίνουσα</span></h4>
+          <h4>🟨🟥 Card Risk</h4>
 
           <!-- Home -->
           <div style="margin-bottom:12px;">
@@ -3449,7 +3451,6 @@ function renderVolatilityPanel(hS, aS, ht, at) {
       <!-- Label -->
       <td style="padding:8px 10px 8px 4px;vertical-align:middle;white-space:nowrap;">
         <div style="font-size:0.78rem;font-weight:700;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${row.label}</div>
-        <div style="font-size:0.65rem;color:var(--text-dim);margin-top:1px;">${row.higherBetter?'↑ better':'↓ better'}</div>
       </td>
 
       <!-- HOME last6 -->
