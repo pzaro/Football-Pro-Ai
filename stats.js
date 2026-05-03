@@ -161,7 +161,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '14:02 EET';
+const BUILD_TIME    = '14:14 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -708,6 +708,49 @@ function calculateScorerProb(leagueScorers, teamId, teamLambdaXG, teamTotalGoals
 // NegBin approximation + Bayesian shrinkage + shots-based projection
 const LEAGUE_CORNER_MEAN_H=5.1,LEAGUE_CORNER_MEAN_A=4.7,CORNER_OVERDISPERSION=1.35;
 
+// ── Per-league corner multipliers ────────────────────────────────
+// Βαθμονομημένα από Post-Match Analysis (global bias ~+38%)
+// GOLD leagues = επιθετικό ποδόσφαιρο → περισσότερα κόρνερ
+// TIGHT leagues = αμυντικό → λιγότερα κόρνερ
+const LEAGUE_CORNER_MULT = {
+  // GOLD — υψηλά κόρνερ
+  78:  1.42,  // Bundesliga DE
+  88:  1.45,  // Eredivisie NL
+  218: 1.40,  // Bundesliga AT
+  253: 1.38,  // MLS
+  262: 1.35,  // Liga MX
+  103: 1.38,  // Eliteserien NO
+  119: 1.38,  // Superliga DK
+  144: 1.40,  // Jupiler Pro BE
+  71:  1.35,  // Brasileirao
+  164: 1.38,  // Urvalsdeild IS
+  // STANDARD
+  39:  1.38,  // Premier League — πολλά κόρνερ λόγω έντασης
+  113: 1.36,  // Allsvenskan
+  179: 1.36,  // Premiership SC
+  203: 1.34,  // Süper Lig
+  106: 1.35,  // Ekstraklasa PL
+  345: 1.34,  // Fortuna Liga CZ
+  271: 1.33,  // OTP Bank Liga HU
+  // TIGHT — λιγότερα κόρνερ
+  135: 1.30,  // Serie A IT — αμυντικό
+  140: 1.30,  // La Liga ES
+  61:  1.28,  // Ligue 1 FR
+  94:  1.30,  // Primeira Liga PT
+  197: 1.28,  // Super League GR
+  128: 1.28,  // Liga Profesional AR
+  283: 1.27,  // SuperLiga RO
+  // UEFA
+  2:   1.32,  // Champions League
+  3:   1.35,  // Europa League
+  848: 1.33,  // Conference League
+};
+const CORNER_MULT_DEFAULT = 1.38; // global fallback (+38% διόρθωση)
+
+function getCornerMult(leagueId) {
+  return LEAGUE_CORNER_MULT[leagueId] || CORNER_MULT_DEFAULT;
+}
+
 function negativeBinomialCDF_approx(lambda,k_disp,x){
   const variance=lambda+(lambda*lambda)/k_disp;
   const sigma=Math.sqrt(variance);
@@ -715,7 +758,7 @@ function negativeBinomialCDF_approx(lambda,k_disp,x){
   return normalCDF((x+0.5-lambda)/sigma);
 }
 
-function computeCornerConfidence(hS,aS,hXG,aXG){
+function computeCornerConfidence(hS,aS,hXG,aXG,leagueId=0){
   const hN=hS.shotsOn>0?6:2,aN=aS.shotsOn>0?6:2;
   const hProjShotsOn=hS.shotsOn>0?hS.shotsOn:hXG*4.2;
   const hProjShotsOff=hS.shotsOff>0?hS.shotsOff:hXG*3.1;
@@ -733,7 +776,9 @@ function computeCornerConfidence(hS,aS,hXG,aXG){
   const aExp=0.40*aShotsBased+0.35*aShrunk+0.25*aOppAdj;
   const xgDiff=Math.abs(hXG-aXG);
   const domBonus=xgDiff>0.6?clamp((xgDiff-0.6)*1.2,0,1.8):0;
-  const totalExpCor=hExp+aExp+domBonus;
+  // ── Per-league multiplier: διορθώνει το συστηματικό +38% underestimation
+  const corMult = getCornerMult(leagueId);
+  const totalExpCor=(hExp+aExp+domBonus)*corMult;
   const pOver85=1-negativeBinomialCDF_approx(totalExpCor,CORNER_OVERDISPERSION,8);
   let score=pOver85*100;
   const samplePenalty=(hN<4||aN<4)?12:0;
@@ -982,7 +1027,7 @@ function adjustPlayerCardProbs(players, oppStats, matchCtx) {
 // ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
-function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
+function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
   const pp=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
   let outPick='X';
@@ -1004,7 +1049,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   const htF = lp.htFactor ?? HT_LAMBDA;
   const ppHT = getPoissonProbabilities(hL * htF * 1.025, aL * htF * 0.975, -0.10);
 
-  const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG);
+  const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG,leagueId);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
   
   let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Ανεπαρκής στατιστικό πλεονέκτημα.',pickScore=0;
@@ -1184,7 +1229,7 @@ async function analyzeMatchSafe(m,index,total){
     const aXGfinal = aInjAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
 
-    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS);
+    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id);
 
     // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
@@ -1427,7 +1472,7 @@ function applySubstitution(d, newLineupData) {
   const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
   const tXGfinal = hXGfinal + aXGfinal;
   const btts = Math.min(hXGfinal, aXGfinal);
-  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS);
+  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
   const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
 
   // Παρακολούθηση changed fields (για flash)
@@ -1537,7 +1582,7 @@ async function _liveTrackerTick(){
         try{
           const[hS,aS]=await Promise.all([buildIntel(lf.teams.home.id,lf.league.id,lf.league.season,true),buildIntel(lf.teams.away.id,lf.league.id,lf.league.season,false)]);
           const lp=getLeagueParams(lf.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
-          const tXG=hXG+aXG;const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS);
+          const tXG=hXG+aXG;const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS,lf.league.id);
           const syn={fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS};
           inPlay=computeInPlayPick(syn,lf);
         }catch{}
@@ -1749,7 +1794,7 @@ window.fetchAllLineups = async function() {
         const lp = getLeagueParams(d.leagueId);
         const hA = applyLineupAdjustment(d.hXGbase||d.hXGfinal, d.hPlayers, nl.home, []);
         const aA = applyLineupAdjustment(d.aXGbase||d.aXGfinal, d.aPlayers, nl.away, []);
-        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS);
+        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId);
         Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
           outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
           exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
@@ -1782,7 +1827,7 @@ window.fetchLineupForMatch = async function(fixId) {
     const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
     const btts = Math.min(hXGfinal, aXGfinal);
-    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS);
+    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
     const cardCtx = {xgDiff: result.xgDiff, leagueId: d.leagueId};
     adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
@@ -4131,9 +4176,10 @@ window.renderMyLeaguesPanel = function() {
           <input type="checkbox" id="lg_${id}" ${checked?'checked':''}
             onchange="toggleLeague(${id}, this.checked)"
             style="width:14px;height:14px;cursor:pointer;accent-color:var(--accent-blue);">
-          <label for="lg_${id}" style="font-size:0.75rem;color:var(--text-main);cursor:pointer;flex:1;display:flex;align-items:center;">
-            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.name)}</span>
+          <label for="lg_${id}" style="font-size:0.75rem;color:var(--text-main);cursor:pointer;flex:1;display:flex;align-items:center;gap:4px;min-width:0;">
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${esc(l.name)}</span>
             ${typeBadge}
+            <span style="font-size:0.6rem;color:var(--text-dim);font-family:var(--font-mono);flex-shrink:0;">🚩×${(LEAGUE_CORNER_MULT[id]||CORNER_MULT_DEFAULT).toFixed(2)}</span>
           </label>
         </div>`;
       }).join('')}
@@ -4155,6 +4201,20 @@ window.renderMyLeaguesPanel = function() {
   });
 
   updateMyLeaguesBadge();
+};
+
+window.selectAllLeagues = function(checked) {
+  const allIds = (typeof LEAGUES_DATA !== 'undefined') ? LEAGUES_DATA.map(l=>l.id) : [];
+  saveUserMyLeagues(checked ? allIds : []);
+  window.renderMyLeaguesPanel();
+  updateLeagueFilterOption();
+};
+
+window.selectDefaultLeagues = function() {
+  const def = typeof MY_LEAGUES_IDS !== 'undefined' ? MY_LEAGUES_IDS : [78,88,218,119,103,144,253,262,140,135,197];
+  saveUserMyLeagues(def);
+  window.renderMyLeaguesPanel();
+  updateLeagueFilterOption();
 };
 
 window.toggleLeague = function(id, checked) {
@@ -4183,9 +4243,11 @@ window.toggleLeagueGroup = function(ids, checked) {
 };
 
 function updateMyLeaguesBadge() {
-  const count = getUserMyLeagues().length;
+  const active = getUserMyLeagues();
+  const el = document.getElementById('activeLeagueCount');
+  if(el) el.textContent = `${active.length} πρωταθλήματα επιλεγμένα`;
   const badge = document.getElementById('myLeaguesBadge');
-  if(badge) badge.textContent = `${count} πρωταθλήματα`;
+  if(badge) badge.textContent = active.length;
 }
 
 function updateLeagueFilterOption() {
@@ -5245,7 +5307,7 @@ window.resimulateMatches=function(){
     const hXGfinal=hXG*hFactor, aXGfinal=aXG*aFactor;
     const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
     const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
-    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS);
+    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId);
     const htAnalysis=computeHTAnalysis(res.hExp,res.aExp,lp);
     Object.assign(d,{
       tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
