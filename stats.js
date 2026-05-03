@@ -157,8 +157,8 @@ let _errTimer = null, _okTimer = null;
 //  VERSION & BUILD INFO
 // ================================================================
 const APP_VERSION   = 'v5.0';
-const BUILD_DATE    = '2026-05-03';
-const BUILD_TIME    = '00:45 (EET+3)';
+const BUILD_DATE    = '03/05/2026';
+const BUILD_TIME    = '09:22 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
