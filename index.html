@@ -53,18 +53,20 @@
 <!-- ── AUTH SCREEN ──────────────────────────────────────────── -->
 <div id="auth">
   <div class="auth-card">
-    <div class="brand-logo" style="justify-content:center; font-size:2rem; margin-bottom:8px;">
+    <div class="brand-logo" style="justify-content:center;font-size:2.2rem;margin-bottom:4px;">
       APEX<span>OMEGA</span>
     </div>
-    <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:2px;font-family:var(--font-cond);">
+    <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);letter-spacing:0.14em;text-transform:uppercase;margin-bottom:10px;font-family:var(--font-cond);">
       AI Quant Terminal
     </div>
-    <div id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.58rem;color:var(--text-dim);margin-bottom:18px;letter-spacing:0.05em;">
-      — · —
+    <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
+    <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
+      <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.0 · 2026-05-03 21:45</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
-    <div id="authError" style="margin-top:10px; font-size:0.82rem; color:var(--red); min-height:18px; font-weight:600;"></div>
+    <div id="authError" style="margin-top:10px;font-size:0.82rem;color:var(--red);min-height:18px;font-weight:600;"></div>
   </div>
 </div>
 
