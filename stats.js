@@ -150,7 +150,10 @@ const SETTINGS_MAP = {
 };
 
 const _apiQueue = []; let _apiActive = 0;
-const MAX_CONCURRENT = 5, REQUEST_GAP_MS = 300;
+// api-sports.io: free plan = 10 req/sec, pro = 30 req/sec
+// MAX_CONCURRENT=10 + GAP=80ms → ~10 req/sec (safe για free plan)
+// Από 5 concurrent + 300ms gap → 3-4x speedup
+const MAX_CONCURRENT = 10, REQUEST_GAP_MS = 80;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -158,7 +161,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '09:46 EET';
+const BUILD_TIME    = '10:02 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -310,7 +313,8 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
 async function _executeRequest(path,resolve){
-  await new Promise(r=>setTimeout(r,Math.random()*80));
+  // Μικρό jitter για να αποφύγουμε burst (10ms max αντί για 80ms)
+  await new Promise(r=>setTimeout(r,Math.random()*10));
   const MAX_RETRIES=2;
   let resolved=false;
   try{
@@ -326,11 +330,12 @@ async function _executeRequest(path,resolve){
           }
           resolve(data); resolved=true; return;
         }
-        // HTTP error (429, 5xx) — retry με exponential backoff
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,600*(attempt+1)));continue;}
+        // 429 Rate limit → backoff αμέσως
+        if(r.status===429){await new Promise(r=>setTimeout(r,1000*(attempt+1)));continue;}
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,400*(attempt+1)));continue;}
       }catch(err){
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,800*(attempt+1)));continue;}
-        console.warn(`[APEX] API failed after ${MAX_RETRIES+1} attempts: ${path}`,err);
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,500*(attempt+1)));continue;}
+        console.warn(`[APEX] API failed: ${path}`,err);
       }
     }
     if(!resolved)resolve({response:[]});
@@ -1244,7 +1249,28 @@ window.runScan=async function(){
     }
     if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
     if(all.length>350) all=all.slice(0,350);
-    for(let i=0;i<all.length;i++) await analyzeMatchSafe(all[i],i,all.length);
+
+    // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
+    // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
+    const leagueIds = [...new Set(all.map(m=>m.league.id))];
+    const season    = all[0]?.league?.season;
+    setProgress(8, `Pre-fetching ${leagueIds.length} leagues…`);
+    await Promise.all(leagueIds.map(lid => Promise.all([
+      getStand(lid, season),
+      getLeagueTopScorers(lid, season),
+      getLeagueTopAssists(lid, season),
+      getLeagueTopCards(lid, season),
+    ])));
+
+    // ── Parallel batch processing ─────────────────────────────────
+    // Παράλληλα ανά BATCH αγώνες — αντί για σειριακό
+    // BATCH=4: 4 concurrent analyzeMatchSafe (κάθε ένα κάνει ~8 API calls)
+    // = ~32 concurrent API calls → χρησιμοποιεί πλήρως MAX_CONCURRENT=10
+    const SCAN_BATCH = 4;
+    for(let i=0; i<all.length; i+=SCAN_BATCH){
+      const batch = all.slice(i, i+SCAN_BATCH);
+      await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
+    }
     
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
