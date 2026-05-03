@@ -132,9 +132,12 @@ function getHTFactor(leagueId) {
 
 const DEFAULT_SETTINGS = {
   wShotsOn:0.14, wShotsOff:0.04, wCorners:0.02, wGoals:0.20,
-  tXG_O25:2.80,  tXG_O35:3.40,   tXG_U25:1.80,  tBTTS_U25:0.65,
-  xG_Diff:0.48,  tBTTS:1.10,     modTrap:0.90,  modTight:0.95,  modGold:1.12,
-  minCorners:11.0, minCards:6.1 
+  // tXG thresholds — βασίζονται σε Poisson ανάλυση για στόχους 75%+:
+  // P(O2.5)=62% απαιτεί tXG≥3.1 | P(O3.5)=52% απαιτεί tXG≥3.8
+  tXG_O25:3.10,  tXG_O35:3.80,   tXG_U25:1.80,  tBTTS_U25:0.65,
+  // xG_Diff >= 0.65 → P(home)~53% (ελάχιστο edge) | tBTTS >= 1.20 → αμφότερες ομάδες ≥1.2 xG
+  xG_Diff:0.65,  tBTTS:1.20,     modTrap:0.90,  modTight:0.95,  modGold:1.12,
+  minCorners:11.0, minCards:6.1
 };
 let engineConfig = { ...DEFAULT_SETTINGS };
 let leagueMods   = {};
@@ -991,30 +994,52 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS){
   let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Ανεπαρκής στατιστικό πλεονέκτημα.',pickScore=0;
   
   // 1. ASIAN HANDICAP (-1.5)
-  if(pAH_Home >= 0.38 && xgDiff >= 0.90 && hS.formRating >= 50){omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Home)} | Διαφ. xG: +${xgDiff.toFixed(2)}`;}
-  else if(pAH_Away >= 0.38 && xgDiff <= -0.90 && aS.formRating >= 50){omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Away)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;}
+  if(pAH_Home >= 0.42 && xgDiff >= 0.90 && hS.formRating >= 50){omegaPick='💣 ΑΣΟΣ -1.5 (AH)';pickScore=pAH_Home*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Home)} | Διαφ. xG: +${xgDiff.toFixed(2)}`;}
+  else if(pAH_Away >= 0.42 && xgDiff <= -0.90 && aS.formRating >= 50){omegaPick='💣 ΔΙΠΛΟ -1.5 (AH)';pickScore=pAH_Away*100;reason=`Χάντικαπ -1.5 Πιθ.: ${pct(pAH_Away)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;}
 
-  // 2. HALF-TIME WINNER
-  else if(ppHT.pHome >= 0.45 && xgDiff >= 0.75){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΓΗΠΕΔΟΥΧΟΙ';pickScore=ppHT.pHome*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pHome)} | xG Διαφ.: +${xgDiff.toFixed(2)}`;}
-  else if(ppHT.pAway >= 0.45 && xgDiff <= -0.75){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΦΙΛΟΞΕΝΟΥΜΕΝΟΙ';pickScore=ppHT.pAway*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pAway)} | xG Διαφ.: ${xgDiff.toFixed(2)}`;}
+  // 2. HALF-TIME WINNER — χρειάζεται ισχυρό πλεονέκτημα
+  else if(ppHT.pHome >= 0.48 && xgDiff >= 0.80){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΓΗΠΕΔΟΥΧΟΙ';pickScore=ppHT.pHome*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pHome)} | xG Διαφ.: +${xgDiff.toFixed(2)}`;}
+  else if(ppHT.pAway >= 0.48 && xgDiff <= -0.80){omegaPick='⏱️ ΗΜΙΤΕΛΙΚΟ — ΦΙΛΟΞΕΝΟΥΜΕΝΟΙ';pickScore=ppHT.pAway*100;reason=`Πιθ. Προβάδισμα Ημιτ.: ${pct(ppHT.pAway)} | xG Διαφ.: ${xgDiff.toFixed(2)}`;}
 
   // 3. OVER / UNDER
-  else if(pp.pO35>=0.45&&tXG>=lp.minXGO35&&btts>=1.20){omegaPick='🚀 ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ';pickScore=pp.pO35*100;reason=`Poisson Πάνω 3.5: ${pct(pp.pO35)} | Συν. xG: ${tXG.toFixed(2)}`;}
-  else if(pp.pO25>=0.54&&tXG>=lp.minXGO25&&btts>=0.90){omegaPick='🔥 ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pO25*100;reason=`Poisson Πάνω 2.5: ${pct(pp.pO25)} | Συν. xG: ${tXG.toFixed(2)}`;}
-  else if(pp.pU25>=0.55&&tXG<=lp.maxU25&&btts<=engineConfig.tBTTS_U25){omegaPick='🔒 ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pU25*100;reason=`Poisson Κάτω 2.5: ${pct(pp.pU25)} | Συν. xG: ${tXG.toFixed(2)}`;}
-  
-  // 4. GOAL / GOAL
-  else if(btts>=lp.minBTTS&&pp.pBTTS>=0.50&&hXG>=0.95&&aXG>=0.95){omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;reason=`Πιθ. ΓΓ: ${pct(pp.pBTTS)} | xG: ${hXG.toFixed(2)} – ${aXG.toFixed(2)}`;}
-  
-  // 5. STRAIGHT WIN (1X2)
-  else if(outPick!=='X'&&Math.abs(xgDiff)>=lp.xgDiff){
-    const outcome=outPick==='1'?'🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ':'✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';const outProb=outPick==='1'?pp.pHome:pp.pAway;const formOk=outPick==='1'?hS.formRating>=40:aS.formRating>=40;
-    if(outProb>=0.50&&formOk){omegaPick=outProb>=0.58?`⚡ ${outcome}`:outcome;pickScore=outProb*100;reason=`Poisson ${outPick==='1'?'Γηπεδ.':'Φιλοξ.'}: ${pct(outProb)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;}
+  // Over 3.5: P(O3.5) >= 0.52 (Poisson ~3.8 tXG → ~55%) + tXG threshold
+  else if(pp.pO35 >= 0.52 && tXG >= lp.minXGO35 && btts >= 1.30){
+    omegaPick='🚀 ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ';pickScore=pp.pO35*100;
+    reason=`Poisson Πάνω 3.5: ${pct(pp.pO35)} | Συν. xG: ${tXG.toFixed(2)}`;}
+  // Over 2.5: P(O2.5) >= 0.62 (Poisson ~3.1 tXG) + tXG threshold
+  else if(pp.pO25 >= 0.62 && tXG >= lp.minXGO25 && btts >= 0.90){
+    omegaPick='🔥 ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pO25*100;
+    reason=`Poisson Πάνω 2.5: ${pct(pp.pO25)} | Συν. xG: ${tXG.toFixed(2)}`;}
+  // Under 2.5: P(U2.5) >= 0.58 (ισχυρό αμυντικό σήμα)
+  else if(pp.pU25 >= 0.58 && tXG <= lp.maxU25 && btts <= engineConfig.tBTTS_U25){
+    omegaPick='🔒 ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ';pickScore=pp.pU25*100;
+    reason=`Poisson Κάτω 2.5: ${pct(pp.pU25)} | Συν. xG: ${tXG.toFixed(2)}`;}
+
+  // 4. GOAL / GOAL — P(BTTS) >= 0.68 (αμφότερες ομάδες πρέπει να έχουν xG >= 1.3)
+  else if(btts >= lp.minBTTS && pp.pBTTS >= 0.68 && hXG >= 1.10 && aXG >= 1.10){
+    omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;
+    reason=`Πιθ. ΓΓ: ${pct(pp.pBTTS)} | xG: ${hXG.toFixed(2)} – ${aXG.toFixed(2)}`;}
+
+  // 5. STRAIGHT WIN — P(win) >= 0.58 ΚΑΙ xgDiff >= lp.xgDiff
+  // 0.58 αντιστοιχεί σε xgDiff ~0.9 (αξιόπιστο edge)
+  else if(outPick !== 'X' && Math.abs(xgDiff) >= lp.xgDiff){
+    const outcome  = outPick==='1' ? '🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ' : '✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
+    const outProb  = outPick==='1' ? pp.pHome : pp.pAway;
+    const formOk   = outPick==='1' ? hS.formRating >= 40 : aS.formRating >= 40;
+    if(outProb >= 0.58 && formOk){
+      omegaPick = outProb >= 0.65 ? `⚡ ${outcome}` : outcome;
+      pickScore = outProb*100;
+      reason = `Poisson ${outPick==='1'?'Γηπεδ.':'Φιλοξ.'}: ${pct(outProb)} | Διαφ. xG: ${xgDiff.toFixed(2)}`;
+    }
   }
-  
-  // 6. PROPS
-  else if(cornerRes.conf>=72){omegaPick='🚩 ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;reason=`Μοντέλο Κόρνερ: ${cornerRes.conf.toFixed(1)}% | Αναμ.: ${cornerRes.expCor.toFixed(1)}`;}
-  else if(totCards>=engineConfig.minCards&&Math.abs(xgDiff)<0.45){omegaPick='🟨 ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);reason=`Μέσος Καρτών: ${totCards.toFixed(1)} | Ισορροπημένος αγώνας`;}
+
+  // 6. PROPS — μόνο αν δεν υπάρχει κύρια σύσταση
+  else if(cornerRes.conf >= 72){
+    omegaPick='🚩 ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;
+    reason=`Μοντέλο Κόρνερ: ${cornerRes.conf.toFixed(1)}% | Αναμ.: ${cornerRes.expCor.toFixed(1)}`;}
+  else if(totCards >= engineConfig.minCards && Math.abs(xgDiff) < 0.45){
+    omegaPick='🟨 ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);
+    reason=`Μέσος Καρτών: ${totCards.toFixed(1)} | Ισορροπημένος αγώνας`;}
   
   // ── CONFIDENCE THRESHOLD ──────────────────────────────────────
   // Αν το pickScore δεν φτάνει το ελάχιστο κατώφλι → ΧΩΡΙΣ ΣΥΣΤΑΣΗ
@@ -4243,29 +4268,18 @@ window.renderLeagueMods = function() {
   const container = document.getElementById('leagueModsContainer');
   if(!container || typeof LEAGUES_DATA === 'undefined') return;
   
-  let html = `<table class="summary-table" style="font-size:0.8rem;">
+  let html = `<table class="summary-table" style="font-size:0.85rem;">
     <thead style="position:sticky; top:0; z-index:1;">
-      <tr>
-        <th class="left-align">League</th>
-        <th title="xG Multiplier">xG Mult</th>
-        <th title="Διαφορά xG (1X2)">xG Diff</th>
-        <th title="Min xG (O2.5)">Min O2.5</th>
-        <th title="Min xG (O3.5)">Min O3.5</th>
-        <th title="Min xG (BTTS)">Min BTTS</th>
-        <th title="Max xG (U2.5)">Max U2.5</th>
-      </tr>
+      <tr><th class="left-align">League</th><th>xG Multiplier</th><th>Διαφορά xG (1X2)</th><th>Min xG (O2.5)</th></tr>
     </thead><tbody>`;
     
   LEAGUES_DATA.forEach(l => {
     const mods = leagueMods[l.id] || {};
     html += `<tr>
-      <td class="left-align" style="font-weight:700; color:var(--text-main); font-size:0.85rem; white-space:nowrap;">${l.name}</td>
-      <td><input type="number" step="0.01" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_o35_${l.id}" value="${mods.minXGO35 || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_btts_${l.id}" value="${mods.minBTTS || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_u25_${l.id}" value="${mods.maxU25 || ''}" placeholder="Def"></td>
+      <td class="left-align" style="font-weight:700; color:var(--text-main); font-size:0.95rem;">${l.name}</td>
+      <td><input type="number" step="0.01" class="quant-input" style="width:90px; padding:8px; text-align:center; font-size:0.95rem;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:90px; padding:8px; text-align:center; font-size:0.95rem;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
+      <td><input type="number" step="0.05" class="quant-input" style="width:90px; padding:8px; text-align:center; font-size:0.95rem;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
     </tr>`;
   });
   html += `</tbody></table>`;
@@ -4275,85 +4289,15 @@ window.renderLeagueMods = function() {
 window.saveLeagueMods = function() {
   if(typeof LEAGUES_DATA === 'undefined') return;
   LEAGUES_DATA.forEach(l => {
-    const mVal    = parseFloat(document.getElementById(`mod_mult_${l.id}`)?.value);
-    const dVal    = parseFloat(document.getElementById(`mod_diff_${l.id}`)?.value);
-    const o25Val  = parseFloat(document.getElementById(`mod_o25_${l.id}`)?.value);
-    const o35Val  = parseFloat(document.getElementById(`mod_o35_${l.id}`)?.value);
-    const bttsVal = parseFloat(document.getElementById(`mod_btts_${l.id}`)?.value);
-    const u25Val  = parseFloat(document.getElementById(`mod_u25_${l.id}`)?.value);
+    const mVal = parseFloat(document.getElementById(`mod_mult_${l.id}`)?.value);
+    const dVal = parseFloat(document.getElementById(`mod_diff_${l.id}`)?.value);
+    const oVal = parseFloat(document.getElementById(`mod_o25_${l.id}`)?.value);
     
-    if(!isNaN(mVal) || !isNaN(dVal) || !isNaN(o25Val) || !isNaN(o35Val) || !isNaN(bttsVal) || !isNaN(u25Val)) {
+    if(!isNaN(mVal) || !isNaN(dVal) || !isNaN(oVal)) {
       leagueMods[l.id] = {};
-      if(!isNaN(mVal))    leagueMods[l.id].mult     = mVal;
-      if(!isNaN(dVal))    leagueMods[l.id].xgDiff   = dVal;
-      if(!isNaN(o25Val))  leagueMods[l.id].minXGO25 = o25Val;
-      if(!isNaN(o35Val))  leagueMods[l.id].minXGO35 = o35Val;
-      if(!isNaN(bttsVal)) leagueMods[l.id].minBTTS  = bttsVal;
-      if(!isNaN(u25Val))  leagueMods[l.id].maxU25   = u25Val;
-    } else {
-      delete leagueMods[l.id];
-    }
-  });
-  try{ localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); }catch{}
-  showOk('Saved League Mods!');
-  if(window.scannedMatchesData.length > 0) window.resimulateMatches();
-};
-
-// ================================================================
-//  SETTINGS & INIT
-// ================================================================
-
-window.renderLeagueMods = function() {
-  const container = document.getElementById('leagueModsContainer');
-  if(!container || typeof LEAGUES_DATA === 'undefined') return;
-  
-  let html = `<table class="summary-table" style="font-size:0.8rem;">
-    <thead style="position:sticky; top:0; z-index:1;">
-      <tr>
-        <th class="left-align">League</th>
-        <th title="xG Multiplier">xG Mult</th>
-        <th title="Διαφορά xG (1X2)">xG Diff</th>
-        <th title="Min xG (O2.5)">Min O2.5</th>
-        <th title="Min xG (O3.5)">Min O3.5</th>
-        <th title="Min xG (BTTS)">Min BTTS</th>
-        <th title="Max xG (U2.5)">Max U2.5</th>
-      </tr>
-    </thead><tbody>`;
-    
-  LEAGUES_DATA.forEach(l => {
-    const mods = leagueMods[l.id] || {};
-    html += `<tr>
-      <td class="left-align" style="font-weight:700; color:var(--text-main); font-size:0.85rem; white-space:nowrap;">${l.name}</td>
-      <td><input type="number" step="0.01" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_mult_${l.id}" value="${mods.mult || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_diff_${l.id}" value="${mods.xgDiff || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_o25_${l.id}" value="${mods.minXGO25 || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_o35_${l.id}" value="${mods.minXGO35 || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_btts_${l.id}" value="${mods.minBTTS || ''}" placeholder="Def"></td>
-      <td><input type="number" step="0.05" class="quant-input" style="width:65px; padding:6px; text-align:center; font-size:0.85rem;" id="mod_u25_${l.id}" value="${mods.maxU25 || ''}" placeholder="Def"></td>
-    </tr>`;
-  });
-  html += `</tbody></table>`;
-  container.innerHTML = html;
-};
-
-window.saveLeagueMods = function() {
-  if(typeof LEAGUES_DATA === 'undefined') return;
-  LEAGUES_DATA.forEach(l => {
-    const mVal    = parseFloat(document.getElementById(`mod_mult_${l.id}`)?.value);
-    const dVal    = parseFloat(document.getElementById(`mod_diff_${l.id}`)?.value);
-    const o25Val  = parseFloat(document.getElementById(`mod_o25_${l.id}`)?.value);
-    const o35Val  = parseFloat(document.getElementById(`mod_o35_${l.id}`)?.value);
-    const bttsVal = parseFloat(document.getElementById(`mod_btts_${l.id}`)?.value);
-    const u25Val  = parseFloat(document.getElementById(`mod_u25_${l.id}`)?.value);
-    
-    if(!isNaN(mVal) || !isNaN(dVal) || !isNaN(o25Val) || !isNaN(o35Val) || !isNaN(bttsVal) || !isNaN(u25Val)) {
-      leagueMods[l.id] = {};
-      if(!isNaN(mVal))    leagueMods[l.id].mult     = mVal;
-      if(!isNaN(dVal))    leagueMods[l.id].xgDiff   = dVal;
-      if(!isNaN(o25Val))  leagueMods[l.id].minXGO25 = o25Val;
-      if(!isNaN(o35Val))  leagueMods[l.id].minXGO35 = o35Val;
-      if(!isNaN(bttsVal)) leagueMods[l.id].minBTTS  = bttsVal;
-      if(!isNaN(u25Val))  leagueMods[l.id].maxU25   = u25Val;
+      if(!isNaN(mVal)) leagueMods[l.id].mult = mVal;
+      if(!isNaN(dVal)) leagueMods[l.id].xgDiff = dVal;
+      if(!isNaN(oVal)) leagueMods[l.id].minXGO25 = oVal;
     } else {
       delete leagueMods[l.id];
     }
@@ -4987,12 +4931,12 @@ const CALIB_MIN_N  = 8;    // ελάχιστα records ανά market
 const CALIB_GRID_N = 20;   // σημεία grid ανά παράμετρο
 
 const PARAM_BOUNDS = {
-  mult:     [0.75, 1.40],
-  minXGO25: [2.00, 3.20],
-  minXGO35: [2.70, 4.00],
-  xgDiff:   [0.28, 0.95],
-  minBTTS:  [0.55, 1.35],
-  maxU25:   [1.80, 2.80],
+  mult:     [0.75, 1.45],
+  minXGO25: [2.60, 3.80],  // P(O2.5) 55%-78%
+  minXGO35: [3.20, 4.50],  // P(O3.5) 48%-72%
+  xgDiff:   [0.40, 1.10],  // xG diff για 1X2
+  minBTTS:  [0.90, 1.60],  // min(hXG,aXG) για BTTS
+  maxU25:   [1.50, 2.20],  // max tXG για Under 2.5
 };
 
 const LS_CALIB_LOG = 'omega_calib_log_v5.0';
@@ -5484,18 +5428,11 @@ window.addEventListener('DOMContentLoaded',()=>{
   document.head.appendChild(tipStyle);
 
   // ── Tooltip DOM element ──────────────────────────────────────
-    const tipEl = document.createElement('div');
+  const tipEl = document.createElement('div');
   tipEl.id = 'apex-tip';
   document.body.appendChild(tipEl);
 
-  // ── ΠΡΟΣΘΗΚΗ ΕΝΔΕΙΞΗΣ ΕΚΔΟΣΗΣ ──────────────────────────────
-  const versionBadge = document.createElement('div');
-  versionBadge.innerHTML = `<div style="position:fixed; bottom:12px; right:12px; background:rgba(16, 185, 129, 0.15); border:1px solid rgba(16, 185, 129, 0.4); color:var(--accent-green); padding:5px 12px; border-radius:12px; font-size:0.65rem; font-weight:800; font-family:var(--font-mono); z-index:99999; backdrop-filter:blur(4px); box-shadow:0 4px 12px rgba(0,0,0,0.3);">
-    APEX OMEGA v5.2 MASTER · Ενημερώθηκε: 2 Μαΐου 2026
-  </div>`;
-  document.body.appendChild(versionBadge);
-
-   // ── Click handler (event delegation) ────────────────────────
+  // ── Click handler (event delegation) ────────────────────────
   document.addEventListener('click', function(e) {
     const el = e.target.closest('.acr');
     if (!el) { tipEl.style.display = 'none'; return; }
