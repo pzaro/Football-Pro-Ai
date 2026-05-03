@@ -179,7 +179,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '14:58 EET';
+const BUILD_TIME    = '15:05 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3060,6 +3060,70 @@ function buildAccordionHTML(x) {
           <div style="font-size:0.55rem;color:var(--text-dim);margin-top:4px;">Πολλές σεβές = κρυφή πίεση</div>
         </div>
       </div>
+
+      <!-- ── LIVE VERDICT ─────────────────────────────────────── -->
+      ${(() => {
+        // Συγκεντρώνουμε όλα τα σήματα και βγάζουμε πόρισμα
+        const sqd      = li.sqd || 0;
+        const edgeH    = li.hLiveEdge || 50;
+        const hSoT     = li.hSoT || 0;
+        const aSoT     = li.aSoT || 0;
+        const hSaves   = li.hSaves || 0; // σεβές HOME GK = πίεση AWAY
+        const aSaves   = li.aSaves || 0; // σεβές AWAY GK = πίεση HOME
+        const hXGps    = li.hXGperShot || 0;
+        const aXGps    = li.aXGperShot || 0;
+        const pNext    = li.pNextHome || 0.5;
+
+        // Ποια ομάδα κυριαρχεί;
+        // Σήματα: SQD, SoT ratio, GK saves, Edge
+        let homeSignals = 0, awaySignals = 0;
+        if(sqd > 0.03)  homeSignals++; else if(sqd < -0.03) awaySignals++;
+        if(edgeH > 55)  homeSignals++; else if(edgeH < 45)  awaySignals++;
+        if(aSaves > hSaves + 1) homeSignals++; else if(hSaves > aSaves + 1) awaySignals++;
+        if(hSoT > aSoT)  homeSignals++; else if(aSoT > hSoT) awaySignals++;
+
+        const dominant = homeSignals > awaySignals ? 'HOME' : awaySignals > homeSignals ? 'AWAY' : 'DRAW';
+        const dominantName = dominant === 'HOME' ? esc(x.ht.split(' ')[0])
+                           : dominant === 'AWAY' ? esc(x.at.split(' ')[0]) : null;
+        const domCol   = dominant === 'HOME' ? 'var(--accent-gold)' : dominant === 'AWAY' ? 'var(--accent-blue)' : 'var(--accent-teal)';
+        const signals  = Math.max(homeSignals, awaySignals);
+        const strength = signals >= 3 ? 'ΙΣΧΥΡΗ' : signals >= 2 ? 'ΜΕΤΡΙΑ' : 'ΑΣΘΕΝΗΣ';
+        const strCol   = signals >= 3 ? 'var(--accent-green)' : signals >= 2 ? 'var(--accent-gold)' : 'var(--text-muted)';
+
+        // Οικοδόμηση αιτιολογίας
+        const reasons = [];
+        if(Math.abs(sqd) > 0.03)
+          reasons.push(`${acr('SQD')} ${sqd>0?'🏠':'✈️'} ${Math.abs(sqd).toFixed(3)} — ${sqd>0?'η HOME':'η AWAY'} βγάζει πιο επικίνδυνες ευκαιρίες ανά σουτ`);
+        if(Math.abs(edgeH - 50) > 5)
+          reasons.push(`${acr('Edge')} ${edgeH.toFixed(0)}% — ${edgeH>50?'HOME':'AWAY'} κυριαρχεί συνολικά`);
+        if(Math.abs(hSaves - aSaves) > 1)
+          reasons.push(`GK saves: 🏠${hSaves} vs ✈️${aSaves} — ${hSaves>aSaves?'AWAY ασκεί κρυφή πίεση':'HOME ασκεί κρυφή πίεση'}`);
+        if(hSoT !== aSoT)
+          reasons.push(`SoT: 🏠${hSoT} vs ✈️${aSoT} — ${hSoT>aSoT?'HOME':'AWAY'} πιο αποτελεσματική`);
+
+        // Σύσταση
+        let suggestion = '';
+        if(dominant !== 'DRAW' && signals >= 2) {
+          const nextPct = dominant === 'HOME' ? Math.round(pNext*100) : Math.round((1-pNext)*100);
+          suggestion = `Επόμενο γκολ: <strong style="color:${domCol};">${dominant==='HOME'?'🏠':'✈️'} ${dominantName} ${nextPct}%</strong>`;
+        } else {
+          suggestion = 'Ισορροπημένος αγώνας — χωρίς ξεκάθαρο πλεονέκτημα';
+        }
+
+        return `<div style="margin-top:14px;background:linear-gradient(135deg,rgba(74,222,128,0.06),rgba(0,0,0,0));border:1px solid rgba(74,222,128,0.2);border-radius:8px;padding:14px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:0.68rem;font-weight:800;color:var(--accent-green);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.1em;">⚖️ Live Verdict</span>
+              <span style="font-size:0.65rem;font-weight:700;padding:2px 8px;border-radius:6px;background:${strCol}18;color:${strCol};border:1px solid ${strCol}44;">${strength} ΕΝΔΕΙΞΗ</span>
+            </div>
+            ${dominant !== 'DRAW' ? `<span style="font-family:var(--font-mono);font-size:1rem;font-weight:900;color:${domCol};">${dominant==='HOME'?'🏠':'✈️'} ${dominantName}</span>` : `<span style="color:var(--accent-teal);font-weight:700;">⚖️ Ισόρροπο</span>`}
+          </div>
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;">${suggestion}</div>
+          ${reasons.length ? `<div style="border-top:1px solid rgba(255,255,255,0.05);padding-top:8px;display:flex;flex-direction:column;gap:4px;">
+            ${reasons.map(r=>`<div style="font-size:0.68rem;color:var(--text-sub);display:flex;align-items:flex-start;gap:5px;"><span style="color:var(--accent-green);flex-shrink:0;">▸</span>${r}</div>`).join('')}
+          </div>` : ''}
+        </div>`;
+      })()}
     </div>`;
   })() : '';
 
@@ -3636,32 +3700,43 @@ function renderSummaryTable() {
 
         // Live Intelligence extras
         const li = live ? x.liveIntel : null;
+        const elapsed = li?.elapsed || x.m?.fixture?.status?.elapsed || null;
+
+        // Λεπτό αγώνα — φαίνεται πάντα σε live αγώνες
+        const minuteBadge = live ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:3px;">
+          <span style="background:rgba(74,222,128,0.15);color:var(--accent-green);font-family:var(--font-mono);font-size:0.75rem;font-weight:900;padding:2px 7px;border-radius:4px;border:1px solid rgba(74,222,128,0.3);">
+            ${elapsed ? elapsed + "'" : sh}
+          </span>
+        </div>` : '';
+
         const momentumBar = li ? `<div style="display:flex;height:3px;border-radius:2px;overflow:hidden;margin-top:4px;gap:1px;">
           <div style="width:${li.hMomentum}%;background:var(--accent-gold);border-radius:2px 0 0 2px;"></div>
           <div style="width:${li.aMomentum}%;background:var(--accent-blue);border-radius:0 2px 2px 0;"></div>
         </div>` : '';
-        const nextGoalBadge = li ? `<div style="font-size:0.62rem;color:var(--accent-teal);margin-top:3px;font-weight:700;">
+
+        const nextGoalBadge = li ? `<div style="font-size:0.62rem;color:var(--accent-teal);margin-top:2px;font-weight:700;">
           🎯 ${li.pNextHome>li.pNextAway?'🏠':'✈️'} ${Math.round(Math.max(li.pNextHome,li.pNextAway)*100)}%
           &nbsp;·&nbsp; ${acr('xGA')}: ${li.hLiveXGA.toFixed(2)}|${li.aLiveXGA.toFixed(2)}
         </div>` : '';
 
-        // SQD + Live Edge badge (εμφανίζεται μόνο σε live αγώνες)
-        const sqdBadge = li && li.hTot + li.aTot >= 3 ? (() => {
-          const sqdVal = li.sqd;
+        // SQD + Live Edge — εμφανίζεται μόλις υπάρχουν shots
+        const sqdBadge = li && (li.hTot + li.aTot) >= 2 ? (() => {
+          const sqdVal = li.sqd || 0;
           const sqdAbs = Math.abs(sqdVal).toFixed(3);
           const sqdSide = sqdVal > 0.01 ? '🏠' : sqdVal < -0.01 ? '✈️' : '⚖️';
-          const sqdCol  = Math.abs(sqdVal) > 0.04 ? (sqdVal > 0 ? 'var(--accent-gold)' : 'var(--accent-blue)') : 'var(--text-muted)';
-          const edgeCol = li.hLiveEdge > 58 ? 'var(--accent-gold)' : li.hLiveEdge < 42 ? 'var(--accent-blue)' : 'var(--text-muted)';
-          return `<div style="font-size:0.6rem;margin-top:3px;display:flex;gap:5px;align-items:center;">
-            <span style="color:${sqdCol};font-weight:700;">SQD ${sqdSide} ${sqdAbs}</span>
+          const sqdCol  = Math.abs(sqdVal) > 0.03 ? (sqdVal > 0 ? 'var(--accent-gold)' : 'var(--accent-blue)') : 'var(--text-muted)';
+          const edgeH   = li.hLiveEdge || 50;
+          const edgeCol = edgeH > 55 ? 'var(--accent-gold)' : edgeH < 45 ? 'var(--accent-blue)' : 'var(--text-muted)';
+          return `<div style="font-size:0.6rem;margin-top:3px;display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+            <span style="color:${sqdCol};font-weight:700;">${acr('SQD')} ${sqdSide} ${sqdAbs}</span>
             <span style="color:var(--text-dim);">·</span>
-            <span style="color:${edgeCol};font-weight:700;">Edge 🏠${li.hLiveEdge.toFixed(0)}% ✈️${li.aLiveEdge.toFixed(0)}%</span>
+            <span style="color:${edgeCol};font-weight:700;">${acr('Edge')} 🏠${edgeH.toFixed(0)}%</span>
           </div>`;
-        })() : '';
+        })() : (li ? `<div style="font-size:0.58rem;color:var(--text-dim);margin-top:2px;">Αναμονή shots...</div>` : '');
 
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
           <td class="col-match left-align" style="font-weight:700; font-size:1.05rem;">${live?'<span class="live-dot" style="width:8px;height:8px;margin-right:6px;display:inline-block;"></span>':''}${esc(x.ht)} <span style="color:var(--text-muted)">–</span> ${esc(x.at)}${injBadge}${lineupSrcBadge}${subFlash}</td>
-          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
+          <td class="col-score data-num" style="color:${scoreCol};">${minuteBadge}${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
