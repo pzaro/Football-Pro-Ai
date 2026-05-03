@@ -158,7 +158,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '2026-05-03';
-const BUILD_TIME    = '21:45';
+const BUILD_TIME    = '00:45 (EET+3)';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -5191,8 +5191,12 @@ window.applyCalibAdjustments = function(adjustmentsByLeague) {
 
   try { localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); } catch {}
 
+  const grkNow = new Date().toLocaleString('el-GR', {timeZone:'Europe/Athens',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  try { localStorage.setItem('omega_last_calib_ts', grkNow); } catch {}
+  updateLastCalibBadge(grkNow);
+
   calibLog.unshift({
-    date: new Date().toLocaleString('el-GR'),
+    date: grkNow,
     applied: applied.map(a => ({
       leagueId: a.leagueId,
       params: a.params,
