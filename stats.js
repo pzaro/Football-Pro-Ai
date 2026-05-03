@@ -2783,89 +2783,20 @@ function teamBlock(players, teamName, teamColor, isHome, oppS) {
 }
 function buildAccordionHTML(x) {
   const formDots=arr=>(arr||[]).slice(0,5).map(h=>`<div class="form-dot form-${h.cls}">${h.res}</div>`).join('');
-  const pHtml=x.pp?getPoissonMatrixHTML(x.hExp,x.aExp,4):'';
-
-  // Injury-adjusted xG row με visual διαφορά
-  const hHasInj=(x.hInjAdj?.delta||0)<-0.05, aHasInj=(x.aInjAdj?.delta||0)<-0.05;
+  const pct = v => (v*100).toFixed(1)+'%';
+  
+  // Helpers για xG adjustments και τραυματισμούς
   const injXGRow=(label,base,final,adj)=>{
-    if(!adj||adj.delta>=-0.05) return `<div class="accordion-row"><span>${label} xG</span><span class="data-num" style="color:var(--accent-blue)">${Number(final||base||0).toFixed(2)}</span></div>`;
-    return `<div class="accordion-row"><span>${label} xG</span><span class="data-num"><span style="color:var(--text-muted);text-decoration:line-through;font-size:0.85rem;">${Number(base||0).toFixed(2)}</span><span style="color:var(--accent-gold);font-weight:800;margin-left:5px;">${Number(final||0).toFixed(2)}</span><span style="color:var(--accent-red);font-size:0.75rem;margin-left:3px;">(${Number(adj.delta||0).toFixed(2)})</span></span></div>`;
+    if(!adj||adj.delta>=-0.05) return `<div class="accordion-row"><span>${label}</span><span class="data-num" style="color:var(--accent-blue)">${Number(final||base||0).toFixed(2)}</span></div>`;
+    return `<div class="accordion-row"><span>${label}</span><span class="data-num"><span style="color:var(--text-muted);text-decoration:line-through;font-size:0.85rem;">${Number(base||0).toFixed(2)}</span><span style="color:var(--accent-gold);font-weight:800;margin-left:5px;">${Number(final||0).toFixed(2)}</span><span style="color:var(--accent-red);font-size:0.75rem;margin-left:3px;">(${Number(adj.delta||0).toFixed(2)})</span></span></div>`;
   };
+  
   const injuredBanner=(injAdj,teamName)=>{
     if(!injAdj?.injured?.length) return '';
-    return `<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:0.78rem;color:var(--accent-red);font-weight:700;">🏥 <b>${esc(teamName)}</b>: ${injAdj.injured.map(p=>esc((p.name||'').split(' ').slice(-1)[0])).join(', ')} — xG ×${(injAdj.factor||1).toFixed(2)}</div>`;
+    return `<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:0.78rem;color:var(--accent-red);font-weight:700;">🏥 <b>${esc(teamName.split(' ')[0])}</b>: ${injAdj.injured.map(p=>esc((p.name||'').split(' ').slice(-1)[0])).join(', ')} — xG ×${(injAdj.factor||1).toFixed(2)}</div>`;
   };
 
-  // Live Intelligence card builder (εμφανίζεται μόνο για live αγώνες)
-  const li = x.liveIntel;
-  const liveIntelCard = li ? `
-    <div class="accordion-card" style="border-color:rgba(239,68,68,0.35);min-width:320px;">
-      <h4 style="color:var(--accent-red);">🔴 Live Intelligence
-        <span style="font-size:0.75rem;font-weight:400;color:var(--text-muted);margin-left:8px;">${li.elapsed}'  ·  ${li.xgSource==='provider'?'Official xG':'Model xG'}</span>
-      </h4>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 6px;font-size:0.8rem;margin-bottom:14px;text-align:center;">
-        <span style="color:var(--text-dim);font-size:0.7rem;text-transform:uppercase;"></span>
-        <span style="color:var(--accent-gold);font-weight:700;">🏠 ${esc(x.ht.split(' ')[0])}</span>
-        <span style="color:var(--accent-blue);font-weight:700;">✈️ ${esc(x.at.split(' ')[0])}</span>
-
-        <span style="color:var(--text-muted);text-align:left;">Shots OT</span>
-        <span class="data-num">${li.hSoT}</span><span class="data-num">${li.aSoT}</span>
-
-        <span style="color:var(--text-muted);text-align:left;">Total Shots</span>
-        <span class="data-num">${li.hTot}</span><span class="data-num">${li.aTot}</span>
-
-        <span style="color:var(--text-muted);text-align:left;">Corners</span>
-        <span class="data-num">${li.hCor}</span><span class="data-num">${li.aCor}</span>
-
-        <span style="color:var(--text-muted);text-align:left;">Possession</span>
-        <span class="data-num">${li.hPoss}%</span><span class="data-num">${li.aPoss}%</span>
-
-        <span style="color:var(--text-muted);text-align:left;">GK Saves</span>
-        <span class="data-num">${li.hSaves}</span><span class="data-num">${li.aSaves}</span>
-
-        <span style="color:var(--text-muted);text-align:left;font-weight:700;">${acr('xG')} Live</span>
-        <span class="data-num" style="color:var(--accent-gold);font-weight:800;">${li.hLiveXG.toFixed(2)}</span>
-        <span class="data-num" style="color:var(--accent-blue);font-weight:800;">${li.aLiveXG.toFixed(2)}</span>
-
-        <span style="color:var(--text-muted);text-align:left;font-weight:700;">${acr('xGA')} Live</span>
-        <span class="data-num" style="color:${li.hLiveXGA>1.2?'var(--accent-red)':li.hLiveXGA>0.8?'var(--accent-gold)':'var(--accent-green)'};">${li.hLiveXGA.toFixed(2)}</span>
-        <span class="data-num" style="color:${li.aLiveXGA>1.2?'var(--accent-red)':li.aLiveXGA>0.8?'var(--accent-gold)':'var(--accent-green)'};">${li.aLiveXGA.toFixed(2)}</span>
-      </div>
-
-      <div style="margin-bottom:12px;">
-        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:5px;">Momentum</div>
-        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;gap:1px;">
-          <div style="width:${li.hMomentum}%;background:var(--accent-gold);transition:width 0.5s;"></div>
-          <div style="width:${li.aMomentum}%;background:var(--accent-blue);transition:width 0.5s;"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-muted);margin-top:4px;">
-          <span style="color:var(--accent-gold);font-weight:700;">🏠 ${li.hMomentum}%</span>
-          <span style="color:var(--accent-blue);font-weight:700;">${li.aMomentum}% ✈️</span>
-        </div>
-      </div>
-
-      <div style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.2);border-radius:8px;padding:12px;">
-        <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;text-align:center;margin-bottom:8px;">🎯 Επόμενο Γκολ</div>
-        <div style="display:flex;justify-content:space-around;align-items:center;">
-          <div style="text-align:center;">
-            <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${li.pNextHome>0.55?'var(--accent-gold)':'var(--text-main)'};">${Math.round(li.pNextHome*100)}%</div>
-            <div style="font-size:0.75rem;color:var(--text-muted);">🏠 ${esc(x.ht.split(' ')[0])}</div>
-          </div>
-          <div style="color:var(--text-dim);font-size:0.85rem;">vs</div>
-          <div style="text-align:center;">
-            <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${li.pNextAway>0.55?'var(--accent-blue)':'var(--text-main)'};">${Math.round(li.pNextAway*100)}%</div>
-            <div style="font-size:0.75rem;color:var(--text-muted);">✈️ ${esc(x.at.split(' ')[0])}</div>
-          </div>
-        </div>
-        <div style="margin-top:8px;display:flex;height:4px;border-radius:2px;overflow:hidden;gap:1px;">
-          <div style="width:${Math.round(li.pNextHome*100)}%;background:var(--accent-gold);"></div>
-          <div style="width:${Math.round(li.pNextAway*100)}%;background:var(--accent-blue);"></div>
-        </div>
-     </div>
-    </div>` : '';
-
-  // ─── ⚡ AI FINAL VERDICT PANEL ───────────────────────────────────
+  // Προβολές Καρτών και Κόρνερ
   const hCrdExp = x.hS?.crd || 2.1;
   const aCrdExp = x.aS?.crd || 2.1;
   const totalCrd = hCrdExp + aCrdExp;
@@ -2876,292 +2807,182 @@ function buildAccordionHTML(x) {
   const hProjCor = (x.expCor || 0) * hCorShare;
   const aProjCor = (x.expCor || 0) * (1 - hCorShare);
 
-  const finalVerdictCard = `
-    <div class="accordion-card" style="grid-column:1/-1;border-color:rgba(77,184,255,0.35);background:linear-gradient(135deg,rgba(77,184,255,0.06),transparent);box-shadow:0 4px 20px rgba(0,0,0,0.25);">
-
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:0.7rem;font-weight:800;font-family:var(--font-cond);color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.12em;">⚡ ΤΕΛΙΚΗ ΣΥΣΤΑΣΗ</span>
-          <span style="background:${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?'rgba(74,222,128,0.12)':'rgba(255,255,255,0.04)'};border:1px solid ${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?'rgba(74,222,128,0.3)':'var(--border-light)'};color:${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?'var(--accent-green)':'var(--text-muted)'};font-size:0.7rem;font-weight:800;font-family:var(--font-cond);padding:3px 10px;border-radius:10px;text-transform:uppercase;">${x.omegaPick&&!x.omegaPick.includes('ΧΩΡΙΣ')?esc(x.omegaPick):'ΧΩΡΙΣ ΣΥΣΤΑΣΗ'}</span>
-        </div>
-        <span style="font-family:var(--font-mono);font-size:0.78rem;color:${(x.strength||0)>=70?'var(--accent-green)':'var(--text-muted)'};font-weight:700;background:${(x.strength||0)>=70?'rgba(74,222,128,0.08)':'rgba(255,255,255,0.03)'};padding:3px 10px;border-radius:8px;border:1px solid ${(x.strength||0)>=70?'rgba(74,222,128,0.2)':'var(--border-light)'};">CONF ${(x.strength||0).toFixed(0)}%</span>
-      </div>
-
-      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
-      <table style="width:100%;border-collapse:collapse;min-width:300px;">
-        <thead>
-          <tr style="border-bottom:2px solid var(--border-md);">
-            <th style="padding:5px 8px 7px 0;text-align:left;width:32%;font-size:0.6rem;font-weight:700;color:var(--text-muted);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.1em;"></th>
-            <th style="padding:5px 4px 7px;text-align:center;width:23%;font-size:0.68rem;font-weight:800;color:var(--accent-gold);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">HOME</th>
-            <th style="padding:5px 4px 7px;text-align:center;width:23%;font-size:0.68rem;font-weight:800;color:var(--accent-blue);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">AWAY</th>
-            <th style="padding:5px 4px 7px;text-align:center;width:22%;font-size:0.62rem;font-weight:700;color:var(--text-muted);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">ΣΥΝΟΛΟ</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr style="border-bottom:1px solid var(--border-light);">
-            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">⚽ xG</td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-gold);">${x.hXGfinal.toFixed(2)}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);">${x.aXGfinal.toFixed(2)}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--text-main);">${(x.hXGfinal+x.aXGfinal).toFixed(2)}</span></td>
-          </tr>
-          <tr style="border-bottom:1px solid var(--border-light);background:rgba(74,222,128,0.03);">
-            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">🎯 Σκορ</td>
-            <td colspan="2" style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.45rem;font-weight:900;color:var(--accent-green);">${x.exact}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:0.88rem;font-weight:700;color:var(--text-muted);">${x.exact2&&x.exact2!==x.exact?x.exact2:'—'}</span><div style="font-size:0.6rem;color:var(--text-muted);">alt</div></td>
-          </tr>
-          <tr style="border-bottom:1px solid var(--border-light);">
-            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">🚩 Κόρνερ</td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-gold);">${hProjCor.toFixed(1)}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);">${aProjCor.toFixed(1)}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--accent-teal);">${(x.expCor||0).toFixed(1)}</span></td>
-          </tr>
-          <tr>
-            <td style="padding:9px 8px 9px 0;font-size:0.7rem;font-family:var(--font-cond);color:var(--text-sub);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;">🟨 Κάρτες</td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-gold);">${hCrdExp.toFixed(1)}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);">${aCrdExp.toFixed(1)}</span></td>
-            <td style="padding:9px 4px;text-align:center;"><span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:800;color:var(--accent-gold);">${totalCrd.toFixed(1)}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      </div>
-
-      ${x.reason&&!x.reason.includes('Ανεπαρκής')?`<div style="margin-top:10px;padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:5px;border-left:2px solid rgba(77,184,255,0.4);"><span style="font-size:0.68rem;color:var(--text-muted);font-family:var(--font-mono);">${esc(x.reason)}</span></div>`:''}
+  // Helper για Card Risk
+  const renderCardRow = (p, rank) => {
+    const yProb = p.adjCardProb ?? p.cardProb ?? 0;
+    const rProb = p.adjRedCardProb ?? p.redCardProb ?? 0;
+    const yCol  = yProb>=40?'var(--accent-red)':yProb>=20?'var(--accent-gold)':'var(--text-muted)';
+    const rCol  = rProb>=8 ?'var(--accent-red)':rProb>=3 ?'var(--accent-gold)':'var(--text-dim)';
+    const adj   = p.cardAdjFactor>1.05 ? `<span style="font-size:0.6rem;color:var(--accent-red);font-weight:900;">▲</span>` : p.cardAdjFactor<0.95 ? `<span style="font-size:0.6rem;color:var(--accent-teal);font-weight:900;">▼</span>` : '';
+    const suspS = p.suspRisk ? ' <span style="font-size:0.68rem;" title="Κίνδυνος αποβολής">🔴</span>' : '';
+    const name  = esc((p.name||'').split(' ').pop());
+    const injS  = p.injured ? '🏥 ' : '';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+      <span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-dim);min-width:14px;text-align:center;font-weight:700;">${rank+1}</span>
+      <span style="flex:1;font-size:0.82rem;font-weight:600;color:${p.injured?'var(--accent-red)':'var(--text-main)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${injS}${name}${suspS}</span>
+      <span style="font-family:var(--font-mono);font-size:0.82rem;font-weight:800;color:${yCol};min-width:40px;text-align:right;">🟨${yProb.toFixed(0)}%${adj}</span>
+      <span style="font-family:var(--font-mono);font-size:0.78rem;font-weight:700;color:${rCol};min-width:34px;text-align:right;">${rProb>=2?'🟥':'  '}${rProb.toFixed(0)}%</span>
     </div>`;
+  };
 
+  // 1. Home vs Away Breakdown
+  const homeAwayHTML = `
+    <div class="accordion-card" style="margin:0; height:100%;">
+      <h4>📊 Home vs Away Breakdown</h4>
+      <div class="accordion-row"><span>Form xG</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
+      <div class="accordion-row"><span>Form xGA</span><span class="data-num" style="color:var(--text-muted)">${x.hS?.uiXGA||'0.00'} vs ${x.aS?.uiXGA||'0.00'}</span></div>
+      <div class="accordion-row"><span>Split xG</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
+      <div class="accordion-row"><span>Avg Corners</span><span class="data-num">${Number(x.hS?.cor||0).toFixed(1)} vs ${Number(x.aS?.cor||0).toFixed(1)}</span></div>
+      <div class="accordion-row"><span>Avg Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
+      <div class="accordion-row" style="color:var(--text-muted);"><span>H2H (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
+      <div style="display:flex;gap:4px;margin-top:10px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:4px;margin-top:6px;">${formDots(x.aS?.history)}</div>
+    </div>
+  `;
+
+  // 2. Game Projections (Συμμετρικό με το Breakdown)
+  const gameProjHTML = `
+    <div class="accordion-card" style="margin:0; height:100%;">
+      <h4>🎯 Game Projections (Engine)</h4>
+      ${injuredBanner(x.hInjAdj, x.ht)}
+      ${injuredBanner(x.aInjAdj, x.at)}
+      ${injXGRow('🏠 Proj. xG', x.hXGbase, x.hXGfinal, x.hInjAdj)}
+      ${injXGRow('✈️ Proj. xG', x.aXGbase, x.aXGfinal, x.aInjAdj)}
+      <div class="accordion-row"><span>xG Diff (Match)</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
+      <div class="accordion-row"><span>Proj. Corners</span><span class="data-num">${hProjCor.toFixed(1)} vs ${aProjCor.toFixed(1)} <span style="font-size:0.7em;color:var(--text-muted)">(Tot: ${(Number(x.expCor)||0).toFixed(1)})</span></span></div>
+      <div class="accordion-row"><span>Proj. Cards</span><span class="data-num">${hCrdExp.toFixed(1)} vs ${aCrdExp.toFixed(1)} <span style="font-size:0.7em;color:var(--text-muted)">(Tot: ${totalCrd.toFixed(1)})</span></span></div>
+      <div class="accordion-row"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
+      <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
+    </div>
+  `;
+
+  // 3. Volatility Analysis
+  const volatilityHTML = `
+    <div class="accordion-card" style="min-width:100%; margin-bottom:14px;">
+      <h4>📉 Volatility Analysis</h4>
+      ${renderVolatilityPanel(x.hS, x.aS, x.ht, x.at)}
+    </div>
+  `;
+
+  // 4. HT Prediction
+  const htHTML = x.htAnalysis ? (() => {
+    const ht=x.htAnalysis;
+    const hPct=Math.round(ht.pLeadHome*100), dPct=Math.round(ht.pDraw*100), aPct=Math.round(ht.pLeadAway*100);
+    const leadCol = ht.pLeadHome>ht.pLeadAway?'var(--accent-gold)':'var(--accent-blue)';
+    const leadStr = ht.pLeadHome>ht.pLeadAway+0.05?`🏠 ${hPct}%`:ht.pLeadAway>ht.pLeadHome+0.05?`✈️ ${aPct}%'`:`⚖️ Ισόρροπο`;
+    return `<div class="accordion-card" style="min-width:280px;border-color:rgba(45,212,191,0.4);">
+      <h4 style="color:var(--accent-teal);">⏱️ HT Prediction
+        <span style="font-size:0.68rem;color:var(--text-dim);font-weight:400;margin-left:8px;">λ 🏠${ht.htLambdaH.toFixed(2)} ✈️${ht.htLambdaA.toFixed(2)}</span>
+      </h4>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
+        <div style="text-align:center;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,${ht.pLeadHome>0.38?'0.40':'0.18'});border-radius:8px;padding:10px 4px;">
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">🏠 Προηγείται</div>
+          <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pLeadHome>0.35?'var(--accent-gold)':'var(--text-main)'};">${hPct}%</div>
+        </div>
+        <div style="text-align:center;background:rgba(255,255,255,0.03);border:1px solid var(--border-light);border-radius:8px;padding:10px 4px;">
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">⚖️ Ισοπαλία</div>
+          <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pDraw>0.42?'var(--accent-teal)':'var(--text-main)'};">${dPct}%</div>
+        </div>
+        <div style="text-align:center;background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,${ht.pLeadAway>0.38?'0.40':'0.18'});border-radius:8px;padding:10px 4px;">
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">✈️ Προηγείται</div>
+          <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pLeadAway>0.35?'var(--accent-blue)':'var(--text-main)'};">${aPct}%</div>
+        </div>
+      </div>
+
+      <div style="height:6px;border-radius:3px;overflow:hidden;display:flex;gap:1px;margin-bottom:12px;">
+        <div style="width:${hPct}%;background:var(--accent-gold);"></div>
+        <div style="width:${dPct}%;background:rgba(255,255,255,0.18);"></div>
+        <div style="width:${aPct}%;background:var(--accent-blue);"></div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <div style="flex:1;background:rgba(45,212,191,0.07);border:1px solid rgba(45,212,191,0.30);border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🥇 HT Score</div>
+          <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-teal);">${ht.htBest.h}-${ht.htBest.a}</div>
+        </div>
+        <div style="flex:1;background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.25);border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🥈 Alt Score</div>
+          <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-purple);">${ht.htSecond.h}-${ht.htSecond.a}</div>
+        </div>
+      </div>
+    </div>`;
+  })() : '';
+
+  // 5. Card Risk
+  const cardRiskHTML = `
+    <div class="accordion-card">
+      <h4>🟨🟥 Card Risk</h4>
+      <div style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:6px;">
+          <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
+          ${(()=>{const f=(x.hPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
+        </div>
+        <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+          <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
+        </div>
+        ${([...(x.hPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,5).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+      </div>
+      <div style="border-top:1px solid var(--border-light);padding-top:10px;">
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:6px;">
+          <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
+          ${(()=>{const f=(x.aPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
+        </div>
+        <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
+          <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
+        </div>
+        ${([...(x.aPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,5).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
+      </div>
+    </div>
+  `;
+
+  // 6. Context & Strength Ratings
+  const contextHTML = (x.sitCtx || x.dcResult) ? `
+    <div class="accordion-card" style="min-width:260px;border-color:rgba(251,191,36,0.25);">
+      <h4 style="color:var(--accent-gold);">🎯 Context & Strength</h4>
+      ${x.sitCtx ? `
+      <div style="margin-bottom:12px;">
+        <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Situational Flags</div>
+        ${x.sitCtx.flags?.length
+          ? x.sitCtx.flags.map(f=>`<div style="font-size:0.75rem;padding:3px 8px;background:rgba(251,191,36,0.1);border-radius:4px;margin-bottom:3px;color:var(--accent-gold);">⚑ ${esc(f)}</div>`).join('')
+          : `<div style="font-size:0.72rem;color:var(--text-muted);">Κανένα ιδιαίτερο context.</div>`
+        }
+        <div style="display:flex;gap:8px;margin-top:8px;font-size:0.72rem;">
+          <div>🏠 Mot: <span style="font-family:var(--font-mono);color:${x.sitCtx.hMot>=1.05?'var(--accent-green)':x.sitCtx.hMot<=0.92?'var(--accent-red)':'var(--text-muted)'};">${x.sitCtx.hMot?.toFixed(2)}</span></div>
+          <div>✈️ Mot: <span style="font-family:var(--font-mono);color:${x.sitCtx.aMot>=1.05?'var(--accent-green)':x.sitCtx.aMot<=0.92?'var(--accent-red)':'var(--text-muted)'};">${x.sitCtx.aMot?.toFixed(2)}</span></div>
+          ${x.sitCtx.isDerby?`<span style="color:var(--accent-red);font-weight:700;">🔥 DERBY</span>`:''}
+        </div>
+      </div>` : ''}
+      ${x.dcResult ? `
+      <div>
+        <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Dixon-Coles Ratings</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.72rem;">
+          <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">🏠 Attack</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.hAtt>1.1?'var(--accent-green)':x.dcResult.hAtt<0.9?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.hAtt?.toFixed(2)}</div></div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">🏠 Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.hDef<0.9?'var(--accent-green)':x.dcResult.hDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.hDef?.toFixed(2)}</div></div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Attack</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aAtt>1.1?'var(--accent-green)':x.dcResult.aAtt<0.9?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aAtt?.toFixed(2)}</div></div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aDef<0.9?'var(--accent-green)':x.dcResult.aDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aDef?.toFixed(2)}</div></div>
+        </div>
+      </div>` : ''}
+      <button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Καταγραφή</button>
+      ${renderStabilitySignals(x)}
+    </div>` : '';
+
+  // --- FINAL ASSEMBLY ---
   return `
     <td colspan="9" style="padding: 20px; text-align:left; border-bottom:1px solid var(--border-light); background:var(--bg-panel);">
-      <div class="accordion-grid">
-      
-        ${finalVerdictCard}
+      <!-- ΓΡΑΜΜΗ 1: Breakdown & Projections Δίπλα-δίπλα -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px;">
+        ${homeAwayHTML}
+        ${gameProjHTML}
+      </div>
 
-        <div class="accordion-card">
-          <h4>Home vs Away Breakdown</h4>
-          <div class="accordion-row"><span>Form ${acr('xG')}</span><span class="data-num">${x.hS?.uiXG||'0.00'} vs ${x.aS?.uiXG||'0.00'}</span></div>
-          <div class="accordion-row"><span>Form ${acr('xGA')}</span><span class="data-num" style="color:var(--text-muted)">${x.hS?.uiXGA||'0.00'} vs ${x.aS?.uiXGA||'0.00'}</span></div>
-          <div class="accordion-row"><span>Split ${acr('xG')}</span><span class="data-num">${x.hS?.uiSXG||'0.00'} vs ${x.aS?.uiSXG||'0.00'}</span></div>
-          <div class="accordion-row"><span>Exp. Cards</span><span class="data-num">${Number(x.hS?.crd||0).toFixed(1)} vs ${Number(x.aS?.crd||0).toFixed(1)}</span></div>
-          <div class="accordion-row" style="color:var(--text-muted);"><span>${acr('H2H')} (Last 8)</span><span class="data-num">${x.h2h?`${x.h2h.homeWins}W - ${x.h2h.draws}D - ${x.h2h.awayWins}W`:'N/A'}</span></div>
-          <div style="display:flex;gap:4px;margin-top:10px;">${formDots(x.hS?.history)}</div><div style="display:flex;gap:4px;margin-top:6px;">${formDots(x.aS?.history)}</div>
-        </div>
+      <!-- ΓΡΑΜΜΗ 2: Volatility Analysis -->
+      ${volatilityHTML}
 
-        ${liveIntelCard}
-
-
-        ${x.htAnalysis ? (() => {
-          const ht=x.htAnalysis;
-          const hPct=Math.round(ht.pLeadHome*100), dPct=Math.round(ht.pDraw*100), aPct=Math.round(ht.pLeadAway*100);
-          const leadCol = ht.pLeadHome>ht.pLeadAway?'var(--accent-gold)':'var(--accent-blue)';
-          const leadStr = ht.pLeadHome>ht.pLeadAway+0.05?`🏠 ${hPct}%`:ht.pLeadAway>ht.pLeadHome+0.05?`✈️ ${aPct}%'`:`⚖️ Ισόρροπο`;
-          return `<div class="accordion-card" style="min-width:280px;border-color:rgba(45,212,191,0.4);">
-          <h4 style="color:var(--accent-teal);">⏱️ HT Prediction
-            <span style="font-size:0.68rem;color:var(--text-dim);font-weight:400;margin-left:8px;">λ 🏠${ht.htLambdaH.toFixed(2)} ✈️${ht.htLambdaA.toFixed(2)} · ×${ht.htFactor}</span>
-          </h4>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
-            <div style="text-align:center;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,${ht.pLeadHome>0.38?'0.40':'0.18'});border-radius:8px;padding:10px 4px;">
-              <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">🏠 Προηγείται</div>
-              <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pLeadHome>0.35?'var(--accent-gold)':'var(--text-main)'};">${hPct}%</div>
-            </div>
-            <div style="text-align:center;background:rgba(255,255,255,0.03);border:1px solid var(--border-light);border-radius:8px;padding:10px 4px;">
-              <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">⚖️ Ισοπαλία</div>
-              <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pDraw>0.42?'var(--accent-teal)':'var(--text-main)'};">${dPct}%</div>
-            </div>
-            <div style="text-align:center;background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,${ht.pLeadAway>0.38?'0.40':'0.18'});border-radius:8px;padding:10px 4px;">
-              <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px;font-weight:700;text-transform:uppercase;">✈️ Προηγείται</div>
-              <div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${ht.pLeadAway>0.35?'var(--accent-blue)':'var(--text-main)'};">${aPct}%</div>
-            </div>
-          </div>
-
-          <div style="height:6px;border-radius:3px;overflow:hidden;display:flex;gap:1px;margin-bottom:12px;">
-            <div style="width:${hPct}%;background:var(--accent-gold);"></div>
-            <div style="width:${dPct}%;background:rgba(255,255,255,0.18);"></div>
-            <div style="width:${aPct}%;background:var(--accent-blue);"></div>
-          </div>
-
-          <div style="display:flex;gap:8px;margin-bottom:10px;">
-            <div style="flex:1;background:rgba(45,212,191,0.07);border:1px solid rgba(45,212,191,0.30);border-radius:8px;padding:10px;text-align:center;">
-              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🥇 HT Score</div>
-              <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-teal);">${ht.htBest.h}-${ht.htBest.a}</div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px;">${pct(ht.htBest.prob)} D-C</div>
-            </div>
-            <div style="flex:1;background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.25);border-radius:8px;padding:10px;text-align:center;">
-              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🥈 Alt Score</div>
-              <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-purple);">${ht.htSecond.h}-${ht.htSecond.a}</div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px;">${pct(ht.htSecond.prob)} D-C</div>
-            </div>
-          </div>
-          <div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.20);border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">Conf</span>
-            <span style="font-family:var(--font-mono);font-size:1.1rem;font-weight:900;color:${ht.htConf>=45?'var(--accent-teal)':ht.htConf>=25?'var(--accent-gold)':'var(--text-muted)'};">${ht.htConf}%</span>
-            <span style="font-size:0.72rem;color:${leadCol};font-weight:700;">${leadStr}</span>
-          </div>
-          <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);">D-C ρ=−0.10 · home +2.5% · away −2.5% λ</div>
-        </div>`;})() : ''}
-
-        <div class="accordion-card">
-          <h4>🎯 Top Scorer Projections</h4>
-          ${['home','away'].map(side => {
-            const sp    = side==='home' ? x.hScorerProb : x.aScorerProb;
-            const players = side==='home' ? (x.hPlayers||[]) : (x.aPlayers||[]);
-            const label = side==='home' ? `🏠 ${esc(x.ht)}` : `✈️ ${esc(x.at)}`;
-            const col   = side==='home' ? 'var(--accent-gold)' : 'var(--accent-blue)';
-
-            // Βρες τους top-3 διαθέσιμους (inXI ή δεν είναι injured)
-            const avail = players
-              .filter(p => p.inXI !== undefined ? (p.inXI && !p.injured) : !p.injured)
-              .filter(p => (p.goals||0) > 0)
-              .sort((a,b) => (b.goals||0) - (a.goals||0));
-
-            // Penalty taker: ο πρώτος με isPenaltyTaker ή ο με τα περισσότερα γκολ
-            const penTaker = players.find(p => p.isPenaltyTaker && !p.injured);
-
-            // Απόντες: injured ή not in XI αλλά με γκολ
-            const absent = players.filter(p => {
-              const isOut = p.injured || (p.inXI !== undefined && !p.inXI);
-              return isOut && (p.goals||0) > 0;
-            }).sort((a,b)=>(b.goals||0)-(a.goals||0)).slice(0,2);
-
-            const playerRow = (p, rank, extra='') => {
-              const pXG    = sp?.modelLambda ? sp.modelLambda * Math.min((p.goals||0) / Math.max(sp.teamTotalGoals||10, 1), 0.70) : 0;
-              const pProb  = pXG > 0 ? (1 - Math.exp(-pXG)) * 100 : 0;
-              const probCol = pProb >= 45 ? 'var(--accent-green)' : pProb >= 25 ? 'var(--accent-gold)' : 'var(--text-muted)';
-              return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-light);">
-                <span style="font-size:0.65rem;color:var(--text-dim);min-width:14px;">${rank}</span>
-                <div style="flex:1;min-width:0;">
-                  <div style="font-size:0.8rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.name||'—')}</div>
-                  <div style="font-size:0.62rem;color:var(--text-muted);">${p.goals||0}G${p.assists?` · ${p.assists}A`:''}${extra}</div>
-                </div>
-                <span style="font-family:var(--font-mono);font-weight:800;font-size:0.95rem;color:${probCol};">${pProb>0?pProb.toFixed(1)+'%':'—'}</span>
-              </div>`;
-            };
-
-            return `<div style="margin-bottom:14px;${side==='away'?'border-top:1px solid var(--border-light);padding-top:14px;':''}">
-              <div style="font-size:0.7rem;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">${label}</div>
-              ${avail.length
-                ? avail.slice(0,3).map((p,i) => playerRow(p, ['🥇','🥈','🥉'][i]||`${i+1}.`, p.isPenaltyTaker?' 🅿':'') ).join('')
-                : `<div style="font-size:0.8rem;color:var(--text-muted);">Δεν υπάρχουν δεδομένα lineup.</div>`
-              }
-              ${penTaker && !avail.slice(0,3).find(p=>p.id===penTaker.id) ? `
-              <div style="margin-top:6px;padding:5px 8px;background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.2);border-radius:5px;font-size:0.7rem;">
-                🅿 <strong>Κόπτης πέναλτι:</strong> ${esc(penTaker.name)} (${penTaker.goals||0}G)
-              </div>` : ''}
-              ${absent.length ? `
-              <div style="margin-top:8px;padding:6px 8px;background:rgba(244,63,94,0.07);border:1px solid rgba(244,63,94,0.2);border-radius:5px;">
-                <div style="font-size:0.62rem;font-weight:700;color:var(--accent-red);margin-bottom:4px;">🏥 ΑΠΟΥΣΙΑ (${absent.map(p=>p.injured?'Τραυμ.':'Εκτός ΕΝ').join('/')})</div>
-                ${absent.map(p=>`<div style="font-size:0.72rem;color:var(--text-muted);display:flex;justify-content:space-between;"><span>${esc(p.name)} <span style="color:var(--accent-red);">(${p.goals||0}G)</span></span><span style="font-size:0.62rem;">${p.injured?'🏥 Τραυμ.':'📋 Πάγκος'}</span></div>`).join('')}
-              </div>` : ''}
-            </div>`;
-          }).join('')}
-        </div>
-
-        <div class="accordion-card">
-          <h4>Game Projections</h4>
-          ${injuredBanner(x.hInjAdj, x.ht)}
-          ${injuredBanner(x.aInjAdj, x.at)}
-          ${injXGRow('🏠', x.hXGbase, x.hXGfinal, x.hInjAdj)}
-          ${injXGRow('✈️', x.aXGbase, x.aXGfinal, x.aInjAdj)}
-          <div class="accordion-row"><span>${acr('xG')} Diff</span><span class="data-num" style="color:${(x.xgDiff||0)>0?'var(--accent-green)':'var(--accent-red)'}">${(x.xgDiff||0)>0?'+':''}${Number(x.xgDiff||0).toFixed(2)}</span></div>
-          <div class="accordion-row"><span>Poisson ${acr('O2.5')}</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
-          <div class="accordion-row" style="margin-top:10px;border-top:1px solid var(--border-light);padding-top:10px;color:var(--accent-gold);"><span>Exp. Corners (Tot)</span><span class="data-num">${(Number(x.expCor)||0).toFixed(1)}</span></div>
-          <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
-        </div>
-
-        <!-- ── xG Contribution card ───────────────────────── -->
-        <div class="accordion-card">
-          <h4>${acr('xG')} Contribution</h4>
-
-          <!-- Home -->
-          <div style="margin-bottom:12px;">
-            <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
-              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
-              ${hHasInj?`<span style="font-size:0.65rem;color:var(--accent-red);">⚠️ ${(x.hInjAdj?.injured||[]).length} OUT</span>`:''}
-            </div>
-            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
-              <span>#&nbsp;&nbsp;Παίκτης</span><span>bar&nbsp;&nbsp;xG%</span>
-            </div>
-            ${([...(x.hPlayers||[])].sort((a,b)=>b.xGContrib-a.xGContrib).slice(0,7).map((p,i)=>renderXGRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
-          </div>
-
-          <!-- Away -->
-          <div style="border-top:1px solid var(--border-light);padding-top:10px;">
-            <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
-              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
-              ${aHasInj?`<span style="font-size:0.65rem;color:var(--accent-red);">⚠️ ${(x.aInjAdj?.injured||[]).length} OUT</span>`:''}
-            </div>
-            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
-              <span>#&nbsp;&nbsp;Παίκτης</span><span>bar&nbsp;&nbsp;xG%</span>
-            </div>
-            ${([...(x.aPlayers||[])].sort((a,b)=>b.xGContrib-a.xGContrib).slice(0,7).map((p,i)=>renderXGRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
-          </div>
-          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">xG% = συνεισφορά στο team xG (GAP: γκολ + 0.4×ασίστ) · 🏥 τραυματίας</div>
-        </div>
-
-        <!-- ── Card Risk card ─────────────────────────────── -->
-        <div class="accordion-card">
-          <h4>🟨🟥 Card Risk</h4>
-
-          <!-- Home -->
-          <div style="margin-bottom:12px;">
-            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:6px;">
-              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-gold);text-transform:uppercase;letter-spacing:0.05em;">🏠 ${esc(x.ht.split(' ').slice(0,2).join(' '))}</span>
-              ${(()=>{const f=(x.hPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
-            </div>
-            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
-              <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
-            </div>
-            ${([...(x.hPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,7).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
-          </div>
-
-          <!-- Away -->
-          <div style="border-top:1px solid var(--border-light);padding-top:10px;">
-            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:6px;">
-              <span style="font-size:0.7rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:0.05em;">✈️ ${esc(x.at.split(' ').slice(0,2).join(' '))}</span>
-              ${(()=>{const f=(x.aPlayers||[]).find(p=>p.cardAdjFactor)?.cardAdjFactor||1;return f!==1?`<span style="font-size:0.62rem;color:${f>1.05?'var(--accent-red)':'var(--accent-teal)'};">αντίπ. ×${f.toFixed(2)}</span>`:''})()}
-            </div>
-            <div style="font-size:0.62rem;color:var(--text-muted);display:flex;justify-content:space-between;padding-bottom:4px;border-bottom:1px solid var(--border-light);margin-bottom:3px;">
-              <span>#&nbsp;&nbsp;Παίκτης</span><span>🟨%&nbsp;&nbsp;&nbsp;🟥%</span>
-            </div>
-            ${([...(x.aPlayers||[])].sort((a,b)=>(b.adjCardProb??b.cardProb??0)-(a.adjCardProb??a.cardProb??0)).slice(0,7).map((p,i)=>renderCardRow(p,i)).join('')) || '<span style="font-size:0.8rem;color:var(--text-dim)">Δεν υπάρχουν δεδομένα</span>'}
-          </div>
-          <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">🟨 Adj. card% (Poisson · αντίπαλος · league) · 🟥 Red card% · 🔴 κίνδυνος αποβολής · ▲▼ διόρθωση</div>
-        </div>
-
-        <div class="accordion-card" style="min-width:280px;">
-          <h4>📉 Volatility Analysis</h4>
-          ${renderVolatilityPanel(x.hS, x.aS, x.ht, x.at)}
-        </div>
-
-        ${x.sitCtx || x.dcResult ? `
-        <div class="accordion-card" style="min-width:260px;border-color:rgba(251,191,36,0.25);">
-          <h4 style="color:var(--accent-gold);">🎯 Context & Strength Ratings</h4>
-          ${x.sitCtx ? `
-          <div style="margin-bottom:12px;">
-            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Situational Flags</div>
-            ${x.sitCtx.flags?.length
-              ? x.sitCtx.flags.map(f=>`<div style="font-size:0.75rem;padding:3px 8px;background:rgba(251,191,36,0.1);border-radius:4px;margin-bottom:3px;color:var(--accent-gold);">⚑ ${esc(f)}</div>`).join('')
-              : `<div style="font-size:0.72rem;color:var(--text-muted);">Κανένα ιδιαίτερο context.</div>`
-            }
-            <div style="display:flex;gap:8px;margin-top:8px;font-size:0.72rem;">
-              <div>🏠 Mot: <span style="font-family:var(--font-mono);color:${x.sitCtx.hMot>=1.05?'var(--accent-green)':x.sitCtx.hMot<=0.92?'var(--accent-red)':'var(--text-muted)'};">${x.sitCtx.hMot?.toFixed(2)}</span></div>
-              <div>✈️ Mot: <span style="font-family:var(--font-mono);color:${x.sitCtx.aMot>=1.05?'var(--accent-green)':x.sitCtx.aMot<=0.92?'var(--accent-red)':'var(--text-muted)'};">${x.sitCtx.aMot?.toFixed(2)}</span></div>
-              ${x.sitCtx.isDerby?`<span style="color:var(--accent-red);font-weight:700;">🔥 DERBY</span>`:''}
-            </div>
-          </div>` : ''}
-          ${x.dcResult ? `
-          <div>
-            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Dixon-Coles Ratings (trust: ${(x.dcResult.trust*100).toFixed(0)}%)</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.72rem;">
-              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">🏠 Attack</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.hAtt>1.1?'var(--accent-green)':x.dcResult.hAtt<0.9?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.hAtt?.toFixed(2)}</div></div>
-              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">🏠 Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.hDef<0.9?'var(--accent-green)':x.dcResult.hDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.hDef?.toFixed(2)}</div></div>
-              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Attack</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aAtt>1.1?'var(--accent-green)':x.dcResult.aAtt<0.9?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aAtt?.toFixed(2)}</div></div>
-              <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aDef<0.9?'var(--accent-green)':x.dcResult.aDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aDef?.toFixed(2)}</div></div>
-            </div>
-            <div style="margin-top:8px;font-size:0.68rem;color:var(--text-muted);">DC λ: 🏠 ${x.dcResult.dcH?.toFixed(2)} | ✈️ ${x.dcResult.dcA?.toFixed(2)} · League avg: ${x.dcResult.lgAvg?.toFixed(2)}</div>
-          </div>` : ''}
-          <button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Καταγραφή Στοιχήματος</button>
-          ${renderStabilitySignals(x)}
-        </div>` : ''}
-
+      <!-- ΓΡΑΜΜΗ 3: Τα υπόλοιπα στοιχισμένα -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
+        ${htHTML}
+        ${cardRiskHTML}
+        ${contextHTML}
       </div>
     </td>
   `;
