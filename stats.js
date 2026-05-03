@@ -161,7 +161,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '13:41 EET';
+const BUILD_TIME    = '14:02 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3485,6 +3485,174 @@ function renderSummaryTable() {
         </tr>`;
     });
 
+    // ── Model Accuracy Analysis ────────────────────────────────────
+    // Μόνο αν έχουμε ≥3 ολοκληρωμένους αγώνες με actStats
+    const validForAnalysis = finishedMatches.filter(x =>
+      x.actStats && x.hXGfinal && x.aXGfinal
+    );
+
+    let accuracyHtml = '';
+    if(validForAnalysis.length >= 2) {
+      // Συλλογή δεδομένων ανά metric
+      const metrics = {
+        xGH:   { label:'xG HOME',        pred:[], actual:[], errors:[] },
+        xGA:   { label:'xG AWAY',         pred:[], actual:[], errors:[] },
+        tXG:   { label:'Total xG',        pred:[], actual:[], errors:[] },
+        corners:{ label:'Κόρνερ (Σύν.)', pred:[], actual:[], errors:[] },
+        cards:  { label:'Κάρτες (Σύν.)', pred:[], actual:[], errors:[] },
+        goals:  { label:'Γκολ (Σύν.)',   pred:[], actual:[], errors:[] },
+      };
+
+      validForAnalysis.forEach(x => {
+        const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0;
+        const hXGAct = Number(x.actStats?.hXg||0);
+        const aXGAct = Number(x.actStats?.aXg||0);
+        const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
+        const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
+        const hXGPred = Number(x.hXGfinal||0);
+        const aXGPred = Number(x.aXGfinal||0);
+        const hCorPred = Number(x.hProjCor || x.expCor/2 || 0);
+        const aCorPred = Number(x.aProjCor || x.expCor/2 || 0);
+        const hCrdPred = Number(x.hS?.crd||0);
+        const aCrdPred = Number(x.aS?.crd||0);
+
+        metrics.xGH.pred.push(hXGPred);   metrics.xGH.actual.push(hXGAct);
+        metrics.xGA.pred.push(aXGPred);   metrics.xGA.actual.push(aXGAct);
+        metrics.tXG.pred.push(hXGPred+aXGPred); metrics.tXG.actual.push(hXGAct+aXGAct);
+        metrics.corners.pred.push(hCorPred+aCorPred); metrics.corners.actual.push(hCorAct+aCorAct);
+        metrics.cards.pred.push(hCrdPred+aCrdPred);   metrics.cards.actual.push(hCrdAct+aCrdAct);
+        metrics.goals.pred.push(hXGPred+aXGPred);     metrics.goals.actual.push(ah+aa);
+      });
+
+      // Υπολογισμός MAE (Mean Absolute Error) και Pearson correlation
+      const calcMAE = (pred, actual) => {
+        const n = pred.length;
+        return pred.reduce((s,p,i) => s + Math.abs(p - actual[i]), 0) / n;
+      };
+      const calcCorr = (pred, actual) => {
+        const n = pred.length;
+        if(n < 2) return 0;
+        const mP = pred.reduce((a,b)=>a+b,0)/n;
+        const mA = actual.reduce((a,b)=>a+b,0)/n;
+        const cov = pred.reduce((s,p,i)=>s+(p-mP)*(actual[i]-mA),0)/n;
+        const sdP = Math.sqrt(pred.reduce((s,p)=>s+(p-mP)**2,0)/n);
+        const sdA = Math.sqrt(actual.reduce((s,a)=>s+(a-mA)**2,0)/n);
+        return (sdP*sdA) > 0 ? cov/(sdP*sdA) : 0;
+      };
+      const calcBias = (pred, actual) => {
+        // Θετικό = υπερεκτίμηση, Αρνητικό = υποεκτίμηση
+        const n = pred.length;
+        return pred.reduce((s,p,i)=>s+(p-actual[i]),0)/n;
+      };
+
+      // Χτίζουμε metric cards
+      const mCards = Object.entries(metrics).map(([key, m]) => {
+        const mae  = calcMAE(m.pred, m.actual);
+        const corr = calcCorr(m.pred, m.actual);
+        const bias = calcBias(m.pred, m.actual);
+        const corrPct = (corr*100).toFixed(0);
+        const corrCol = corr >= 0.7 ? 'var(--accent-green)' : corr >= 0.4 ? 'var(--accent-gold)' : 'var(--accent-red)';
+        const biasCol = Math.abs(bias) < 0.3 ? 'var(--accent-green)' : Math.abs(bias) < 0.7 ? 'var(--accent-gold)' : 'var(--accent-red)';
+        const biasStr = bias > 0 ? `+${bias.toFixed(2)} ↑` : `${bias.toFixed(2)} ↓`;
+        const barW = Math.min(Math.abs(corr)*100, 100).toFixed(0);
+
+        // Mini scatter: κάθε ζεύγος pred/actual ως dot
+        const maxV = Math.max(...m.pred, ...m.actual, 1);
+        const dots = m.pred.map((p,i) => {
+          const x = (p/maxV*60).toFixed(1);
+          const y = (60 - (m.actual[i]/maxV*60)).toFixed(1);
+          const dev = Math.abs(p - m.actual[i]);
+          const dc = dev < 0.5 ? 'var(--accent-green)' : dev < 1.2 ? 'var(--accent-gold)' : 'var(--accent-red)';
+          return `<circle cx="${x}" cy="${y}" r="3.5" fill="${dc}" fill-opacity="0.8"/>`;
+        }).join('');
+        // Diagonal perfect line
+        const diag = `<line x1="0" y1="60" x2="60" y2="0" stroke="rgba(255,255,255,0.15)" stroke-width="0.8" stroke-dasharray="3,2"/>`;
+
+        return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
+            <span style="font-size:0.72rem;font-weight:800;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${m.label}</span>
+            <svg width="66" height="66" style="flex-shrink:0;border:1px solid var(--border-light);border-radius:5px;background:var(--bg-surface);" viewBox="-3 -3 66 66">
+              ${diag}${dots}
+            </svg>
+          </div>
+          <div style="margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;font-size:0.6rem;color:var(--text-muted);margin-bottom:3px;">
+              <span>Συσχέτιση Π→Α</span>
+              <span style="color:${corrCol};font-weight:700;">${corrPct}%</span>
+            </div>
+            <div style="height:4px;background:var(--border-light);border-radius:2px;">
+              <div style="height:4px;width:${barW}%;background:${corrCol};border-radius:2px;"></div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.68rem;">
+            <div style="background:var(--bg-surface);border-radius:4px;padding:4px 6px;">
+              <div style="color:var(--text-dim);font-size:0.58rem;margin-bottom:1px;">MAE (Μ. Σφάλμα)</div>
+              <div style="font-family:var(--font-mono);font-weight:700;color:var(--text-main);">${mae.toFixed(2)}</div>
+            </div>
+            <div style="background:var(--bg-surface);border-radius:4px;padding:4px 6px;">
+              <div style="color:var(--text-dim);font-size:0.58rem;margin-bottom:1px;">Bias</div>
+              <div style="font-family:var(--font-mono);font-weight:700;color:${biasCol};">${biasStr}</div>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+
+      // Correlations ranking — ποιο metric έχει τη μεγαλύτερη συσχέτιση
+      const ranked = Object.entries(metrics).map(([key, m]) => ({
+        label: m.label, corr: calcCorr(m.pred, m.actual)
+      })).sort((a,b)=>b.corr-a.corr);
+
+      const rankHtml = ranked.map((r,i) => {
+        const col = r.corr>=0.7?'var(--accent-green)':r.corr>=0.4?'var(--accent-gold)':'var(--accent-red)';
+        const medal = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣'][i]||`${i+1}.`;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+          <span style="font-size:0.9rem;flex-shrink:0;">${medal}</span>
+          <span style="font-size:0.72rem;color:var(--text-sub);flex:1;">${r.label}</span>
+          <div style="width:80px;height:5px;background:var(--border-light);border-radius:2px;">
+            <div style="height:5px;width:${Math.min(Math.abs(r.corr)*100,100).toFixed(0)}%;background:${col};border-radius:2px;"></div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:0.72rem;font-weight:700;color:${col};min-width:36px;text-align:right;">${(r.corr*100).toFixed(0)}%</span>
+        </div>`;
+      }).join('');
+
+      accuracyHtml = `
+      <div class="quant-panel" style="margin-top:16px;border-color:rgba(168,85,247,0.3);">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+          <div>
+            <div style="font-size:0.85rem;font-weight:800;color:var(--accent-purple);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:1px;">🔬 Model Accuracy Analysis</div>
+            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">Βασίζεται σε ${validForAnalysis.length} αγώνες · Scatter: κόκκινο=μεγάλη απόκλιση · πράσινο=καλή πρόβλεψη</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+
+          <!-- Metric Cards Grid -->
+          <div>
+            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Ακρίβεια ανά Μέγεθος</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">${mCards}</div>
+          </div>
+
+          <!-- Correlation Ranking -->
+          <div>
+            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Κατάταξη Συσχέτισης Π→Α</div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+              ${rankHtml}
+            </div>
+            <div style="background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:10px 14px;font-size:0.72rem;">
+              <div style="font-weight:700;color:var(--accent-purple);margin-bottom:6px;">Ερμηνεία</div>
+              <div style="color:var(--text-muted);line-height:1.6;">
+                <span style="color:var(--accent-green);">●</span> ≥70%: Ισχυρή συσχέτιση — αξιόπιστη πρόβλεψη<br>
+                <span style="color:var(--accent-gold);">●</span> 40-70%: Μέτρια — βοηθητική ένδειξη<br>
+                <span style="color:var(--accent-red);">●</span> &lt;40%: Αδύναμη — χρειάζεται βαθμονόμηση<br>
+                <span style="color:var(--text-dim);">Bias ↑</span>: Υπερεκτίμηση · <span style="color:var(--text-dim);">Bias ↓</span>: Υποεκτίμηση
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>`;
+    }
+
     finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(74,222,128,0.35);">
       <div style="background:rgba(74,222,128,0.07);padding:12px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <span style="font-size:0.82rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-cond);">🏁 Post-Match Evolution — ${finishedMatches.length} αγώνες</span>
@@ -3505,7 +3673,8 @@ function renderSummaryTable() {
           <tbody>${fRows}</tbody>
         </table>
       </div>
-    </div>`;
+    </div>
+    ${accuracyHtml}`;
   }
 
   sec.innerHTML = finalHtml;
