@@ -161,7 +161,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '10:02 EET';
+const BUILD_TIME    = '13:41 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3412,6 +3412,13 @@ function renderSummaryTable() {
       const hCorPred = Number(x.hProjCor||x.expCor/2||0).toFixed(1);
       const aCorPred = Number(x.aProjCor||x.expCor/2||0).toFixed(1);
       const expCorPred = Number(x.expCor||0).toFixed(1);
+      // Προβλεπόμενες κάρτες από το μοντέλο
+      const hCrdPred = Number(x.hS?.crd||0).toFixed(1);
+      const aCrdPred = Number(x.aS?.crd||0).toFixed(1);
+      const totCrdPred = (Number(x.hS?.crd||0)+Number(x.aS?.crd||0)).toFixed(1);
+      const totCrdAct  = hCrdAct + aCrdAct;
+      const crdDev = Math.abs(totCrdAct - Number(totCrdPred));
+      const crdCol = crdDev < 1.5 ? 'var(--accent-green)' : crdDev < 3 ? 'var(--accent-gold)' : 'var(--accent-red)';
 
       // ── Σύγκριση: πράσινο αν η πρόβλεψη ήταν εντός ±20%, κόκκινο αν πολύ έξω
       const xgDev = Math.abs((Number(hXGAct)+Number(aXGAct)) - Number(tXGPred));
@@ -3466,10 +3473,7 @@ function renderSummaryTable() {
             <div style="font-size:0.9rem;font-weight:700;">${hPoss}%–${aPoss}%</div>
           </td>
           <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${hCorAct}–${aCorAct} (${hCorAct+aCorAct})`, corCol)}</td>
-          <td style="text-align:center;font-family:var(--font-mono);">
-            <div style="font-size:0.72rem;color:var(--text-muted);">—</div>
-            <div style="font-size:0.9rem;font-weight:700;color:var(--accent-gold);">${hCrdAct}–${aCrdAct}</div>
-          </td>
+          <td>${pvA(`${hCrdPred}–${aCrdPred} (${totCrdPred})`, `${hCrdAct}–${aCrdAct} (${totCrdAct})`, crdCol)}</td>
           <td style="font-size:0.78rem;font-weight:700;color:${x.strength>=70?'var(--accent-green)':'var(--text-muted)'};max-width:140px;">
             ${esc(pick.split(' ').slice(0,4).join(' ')||'—')}
             ${x.strength>=70?`<div style="font-size:0.6rem;color:var(--text-muted);">${x.strength?.toFixed(0)}% conf</div>`:''}
@@ -3494,7 +3498,7 @@ function renderSummaryTable() {
             <th>xG (Π→Α)</th>
             <th>Possession</th>
             <th>Κόρνερ (Π→Α)</th>
-            <th>Κάρτες</th>
+            <th>Κάρτες (Π→Α)</th>
             <th>Signal</th>
             <th>Result</th>
           </tr></thead>
