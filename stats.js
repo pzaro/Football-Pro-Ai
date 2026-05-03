@@ -154,8 +154,17 @@ const MAX_CONCURRENT = 5, REQUEST_GAP_MS = 300;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
-//  UTILITIES
+//  VERSION & BUILD INFO
 // ================================================================
+const APP_VERSION   = 'v5.0';
+const BUILD_DATE    = '2026-05-03';
+const BUILD_TIME    = '21:45';
+const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
+function updateLastCalibBadge(ts) {
+  const el = document.getElementById('lastCalibBadge');
+  if(el && ts) { el.textContent = `⚡ Τελ. Βαθμονόμηση: ${ts}`; el.style.display = 'inline-block'; }
+}
+
 const safeNum  = (x,d=0) => Number.isFinite(Number(x))?Number(x):d;
 const clamp    = (n,mn,mx) => Math.max(mn,Math.min(mx,n));
 const statVal  = (arr,type) => {
@@ -5470,6 +5479,25 @@ window.addEventListener('DOMContentLoaded',()=>{
       window.loadBetJournal();
       loadCalibLog();
       renderCalibLog();
+
+      // Version display στο header
+      const vtEl = document.getElementById('versionTag');
+      if(vtEl) vtEl.textContent = BUILD_LABEL;
+      // Auth screen build info
+      const authBuild = document.getElementById('authBuildInfo');
+      if(authBuild) authBuild.textContent = `Build ${BUILD_DATE} ${BUILD_TIME}`;
+      // Last calibration badge
+      try {
+        const ts = localStorage.getItem('omega_last_calib_ts');
+        if(ts) updateLastCalibBadge(ts);
+      } catch {}
+      // Last-updated badge στο header
+      const luBadge = document.getElementById('lastUpdatedBadge');
+      const luText  = document.getElementById('lastUpdatedText');
+      if(luBadge && luText) {
+        luText.textContent = `Αναβαθμίστηκε ${BUILD_DATE} ${BUILD_TIME}`;
+        luBadge.style.display = 'flex';
+      }
       // My Leagues panel
       window.renderMyLeaguesPanel();
       updateLeagueFilterOption();
