@@ -179,8 +179,8 @@ let _errTimer = null, _okTimer = null;
 //  VERSION & BUILD INFO
 // ================================================================
 const APP_VERSION   = 'v5.0';
-const BUILD_DATE    = '03/05/2026';
-const BUILD_TIME    = '15:20 EET';
+const BUILD_DATE    = '07/05/2026';
+const BUILD_TIME    = '17:44 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -809,6 +809,10 @@ const LEAGUE_CORNER_MEAN_H=5.1,LEAGUE_CORNER_MEAN_A=4.7,CORNER_OVERDISPERSION=1.
 // GOLD leagues = επιθετικό ποδόσφαιρο → περισσότερα κόρνερ
 // TIGHT leagues = αμυντικό → λιγότερα κόρνερ
 const LEAGUE_CORNER_MULT = {
+  // FIFA
+  1:   1.35,  // World Cup 2026 — συντηρητικό ποδόσφαιρο, λιγότερα κόρνερ vs club
+  32:  1.30,  // WC Qualifiers UEFA
+  34:  1.33,  // WC Qualifiers CONMEBOL
   // GOLD — υψηλά κόρνερ
   78:  1.42,  // Bundesliga DE
   88:  1.45,  // Eredivisie NL
@@ -5526,11 +5530,11 @@ window.runAutoCalibration = function(auditRecords) {
   const el = document.getElementById('autoCalibPanel');
   if(!el) return;
   if(!auditRecords?.length) {
-    el.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:24px;font-size:0.8rem;">Εκτελέστε Audit για να εμφανιστεί η ανάλυση βαθμονόμησης.</div>`;
+    el.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:24px;font-size:0.8rem;">Εκτελέστε Audit για να εμφανιστεί η ανάλυση.</div>`;
     return;
   }
 
-  // Group by league
+  // Group by league & run grid search
   const byLeague = {};
   auditRecords.forEach(r => {
     const id = r.leagueId || 0;
@@ -5538,7 +5542,6 @@ window.runAutoCalibration = function(auditRecords) {
     byLeague[id].push(r);
   });
 
-  // Run grid search per league
   const allResults = {};
   let totalLeaguesWithChanges = 0;
   Object.entries(byLeague).forEach(([lid, recs]) => {
@@ -5546,74 +5549,114 @@ window.runAutoCalibration = function(auditRecords) {
     allResults[lid] = res;
     if(Object.keys(res.optimized).length > 0) totalLeaguesWithChanges++;
   });
-
   window._pendingAdjustments = allResults;
 
-  // Render results (Πάντα τυπώνουμε τα αποτελέσματα, ακόμα και αν δεν υπάρχουν αλλαγές)
+  // ── Human-readable param descriptions ─────────────────────
+  const PARAM_LABELS = {
+    xgDiff:   { name:'Ελάχιστη Διαφορά xG για 1X2', unit:'', fmt: v => v.toFixed(2) },
+    minXGO25: { name:'Ελάχιστο tXG για Πάνω 2.5',   unit:'', fmt: v => v.toFixed(2) },
+    minXGO35: { name:'Ελάχιστο tXG για Πάνω 3.5',   unit:'', fmt: v => v.toFixed(2) },
+    minBTTS:  { name:'Ελάχιστο xG ανά ομάδα για GG', unit:'', fmt: v => v.toFixed(2) },
+    mult:     { name:'Πολλαπλασιαστής xG (Mult)',    unit:'×', fmt: v => v.toFixed(3) },
+    maxU25:   { name:'Μέγιστο tXG για Κάτω 2.5',    unit:'', fmt: v => v.toFixed(2) },
+  };
+  const MARKET_LABELS = {
+    outcomes:'1X2 / Αποτέλεσμα', btts:'Γκολ/Γκολ (GG)',
+    over25:'Πάνω 2.5 Γκολ', over35:'Πάνω 3.5 Γκολ',
+    corners:'Κόρνερ', bombs:'Bombs',
+  };
+
+  // ── Render each league ─────────────────────────────────────
   const rows = Object.entries(allResults).map(([lid, data]) => {
     if(!Object.keys(data.stats).length) return '';
-    const lgName = (typeof LEAGUES_DATA!=='undefined' ? LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
+    const lgName   = (typeof LEAGUES_DATA!=='undefined' ? LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
     const hasChanges = Object.keys(data.optimized).length > 0;
 
-    const marketRows = Object.entries(data.stats).map(([m, s]) => {
-      const reached = s.reachedTarget;
-      const improved = s.improved;
-      const barW = Math.min(Math.round(s.bestAcc / s.target * 100), 100);
+    // ── Recommendation cards per market ───────────────────
+    const recCards = Object.entries(data.stats).map(([m, s]) => {
+      const reached  = s.reachedTarget;
+      const improved = s.improved && s.changed;
+      const mLabel   = MARKET_LABELS[m] || m;
+      const pLabel   = PARAM_LABELS[s.curVal !== undefined ? (m==='outcomes'?'xgDiff':m==='over25'?'minXGO25':m==='over35'?'minXGO35':m==='btts'?'minBTTS':'mult') : 'mult'] || {};
+      const paramKey = m==='outcomes'?'xgDiff':m==='over25'?'minXGO25':m==='over35'?'minXGO35':m==='btts'?'minBTTS':'mult';
+      const pInfo    = PARAM_LABELS[paramKey];
+      const barW     = Math.min(Math.round(s.bestAcc / s.target * 100), 100);
       const barColor = reached ? 'var(--accent-green)' : improved ? 'var(--accent-gold)' : 'var(--accent-red)';
-      const mLabel = {outcomes:'🏆 1X2/AH', btts:'🎯 BTTS', over25:'🔥 O2.5', over35:'🚀 O3.5', corners:'🚩 Κόρνερ', bombs:'💣 Bombs'}[m] || m;
       const statusIcon = reached ? '✅' : improved ? '📈' : '⚠️';
-      const paramChange = s.changed && s.improved
-        ? `<span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent-gold);margin-left:6px;">${m==='outcomes'?'xgDiff':m==='over25'?'minXGO25':m==='over35'?'minXGO35':m==='btts'?'minBTTS':'mult'}: ${s.curVal.toFixed(3)}→<strong>${s.bestVal.toFixed(3)}</strong></span>`
-        : `<span style="font-size:0.62rem;color:var(--text-muted);margin-left:6px;">— χωρίς αλλαγή</span>`;
+      const gap        = s.target - s.baselineAcc;
 
-      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);flex-wrap:wrap;">
-        <span style="min-width:90px;font-size:0.7rem;font-weight:700;">${mLabel}</span>
-        <div style="flex:1;min-width:120px;">
-          <div style="display:flex;justify-content:space-between;margin-bottom:2px;font-size:0.62rem;font-family:var(--font-mono);">
-            <span style="color:var(--text-muted);">τώρα: <span style="color:var(--text-sub);">${s.baselineAcc}%</span></span>
-            <span style="color:${barColor};font-weight:700;">${statusIcon} ${s.bestAcc}% / στόχος ${s.target}%</span>
+      // Ανθρώπινη οδηγία
+      let advice = '';
+      if(reached && !improved) {
+        advice = `Ο στόχος επιτυγχάνεται με τις τρέχουσες ρυθμίσεις.`;
+      } else if(improved) {
+        const dir    = s.bestVal > s.curVal ? 'Αύξηση' : 'Μείωση';
+        const effect = s.bestVal > s.curVal ? 'αυστηρότερο φίλτρο' : 'περισσότερα σήματα';
+        advice = `${dir} του ορίου από <strong>${pInfo?.fmt(s.curVal)}</strong> σε <strong style="color:var(--accent-green);">${pInfo?.fmt(s.bestVal)}</strong> — ${effect}. Βελτίωση: ${s.baselineAcc}% → ${s.bestAcc}%.`;
+      } else {
+        advice = `Δεν βρέθηκε ρύθμιση που φτάνει τον στόχο (${s.target}%). Χρειάζονται περισσότερα δεδομένα (n=${s.n}).`;
+      }
+
+      return `<div style="background:${reached?'rgba(74,222,128,0.04)':improved?'rgba(252,211,77,0.04)':'rgba(251,113,133,0.03)'};border:1px solid ${reached?'rgba(74,222,128,0.18)':improved?'rgba(252,211,77,0.2)':'rgba(251,113,133,0.15)'};border-radius:7px;padding:10px 12px;margin-bottom:7px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+          <span style="font-size:0.8rem;font-weight:800;color:var(--text-main);">${statusIcon} ${mLabel}</span>
+          <div style="flex:1;min-width:100px;">
+            <div style="display:flex;justify-content:space-between;font-size:0.6rem;font-family:var(--font-mono);margin-bottom:2px;">
+              <span style="color:var(--text-muted);">${s.baselineAcc}%</span>
+              <span style="color:${barColor};font-weight:700;">${s.bestAcc}% / στόχος ${s.target}%</span>
+            </div>
+            <div style="background:var(--border-light);border-radius:2px;height:4px;">
+              <div style="height:4px;width:${barW}%;background:${barColor};border-radius:2px;"></div>
+            </div>
           </div>
-          <div style="background:var(--border-light);border-radius:2px;height:5px;">
-            <div style="height:5px;width:${barW}%;background:${barColor};border-radius:2px;transition:width 0.4s;"></div>
-          </div>
+          <span style="font-size:0.6rem;color:var(--text-dim);">n=${s.n}</span>
         </div>
-        ${paramChange}
-        <span style="font-size:0.6rem;color:var(--text-dim);">n=${s.n}</span>
+        ${improved || reached ? `
+        <div style="font-size:0.68rem;color:var(--text-sub);line-height:1.5;">
+          <strong style="color:var(--text-muted);font-size:0.6rem;text-transform:uppercase;letter-spacing:0.06em;">${pInfo?.name||paramKey}: </strong>${advice}
+        </div>` : `<div style="font-size:0.68rem;color:var(--text-muted);">${advice}</div>`}
       </div>`;
     }).join('');
 
-    const paramSummary = Object.entries(data.optimized).map(([k,v]) => {
-      const cur = (leagueMods[parseInt(lid)]?.[k]) ?? getLeagueParams(parseInt(lid))[k];
-      const dir = v > cur ? '▲' : '▼';
-      const col = v > cur ? 'var(--accent-gold)' : 'var(--accent-teal)';
-      return `<span style="font-size:0.7rem;font-family:var(--font-mono);color:${col};background:${col}15;padding:2px 8px;border-radius:4px;border:1px solid ${col}30;">${k} ${dir} ${v}</span>`;
-    }).join('');
+    // ── Βέλτιστες τιμές summary (μόνο αν υπάρχουν αλλαγές) ─
+    const optSummary = hasChanges ? `
+      <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.2);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:0.72rem;">
+        <div style="font-weight:800;color:var(--accent-green);margin-bottom:6px;">🎯 Βέλτιστες Τιμές για Εφαρμογή</div>
+        ${Object.entries(data.optimized).map(([k,v]) => {
+          const pInfo = PARAM_LABELS[k];
+          const cur   = (leagueMods[parseInt(lid)]?.[k]) ?? getLeagueParams(parseInt(lid))[k];
+          const arrow = v > cur ? '↑' : '↓';
+          const col   = v > cur ? 'var(--accent-gold)' : 'var(--accent-teal)';
+          return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+            <span style="color:var(--text-muted);">${pInfo?.name||k}</span>
+            <span style="font-family:var(--font-mono);font-weight:700;color:${col};">${pInfo?.fmt(cur)||cur} ${arrow} <strong>${pInfo?.fmt(v)||v}</strong></span>
+          </div>`;
+        }).join('')}
+      </div>` : '';
 
-    return `<div style="background:var(--bg-base);border:1px solid ${hasChanges?'rgba(252,211,77,0.2)':'var(--border-light)'};border-radius:8px;padding:12px 14px;margin-bottom:10px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
-        <span style="font-weight:800;font-size:0.85rem;">${esc(lgName)}</span>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;">${paramSummary}</div>
+    return `<div style="background:var(--bg-base);border:1px solid ${hasChanges?'rgba(252,211,77,0.22)':'var(--border-light)'};border-radius:8px;padding:14px;margin-bottom:12px;">
+      <div style="font-size:0.9rem;font-weight:800;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
+        <span>${esc(lgName)}</span>
+        ${hasChanges ? `<span style="font-size:0.62rem;background:rgba(252,211,77,0.12);color:var(--accent-gold);border:1px solid rgba(252,211,77,0.25);border-radius:5px;padding:2px 7px;">Χρειάζεται βαθμονόμηση</span>` : `<span style="font-size:0.62rem;background:rgba(74,222,128,0.1);color:var(--accent-green);border:1px solid rgba(74,222,128,0.22);border-radius:5px;padding:2px 7px;">✅ Στόχοι OK</span>`}
       </div>
-      ${marketRows}
+      ${optSummary}
+      ${recCards}
     </div>`;
   }).filter(Boolean).join('');
 
-  // Header: κουμπί εφαρμογής μόνο αν υπάρχουν αλλαγές, αλλιώς πράσινο μήνυμα
   const headerHtml = totalLeaguesWithChanges > 0
-    ? `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding:10px 14px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;">
-        <div style="font-size:0.78rem;color:var(--text-sub);">
-          Grid Search ολοκληρώθηκε. <strong style="color:var(--accent-gold);">${totalLeaguesWithChanges} πρωταθλήματα</strong> χρειάζονται βαθμονόμηση.
+    ? `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px;padding:12px 16px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.22);border-radius:8px;">
+        <div>
+          <div style="font-size:0.82rem;font-weight:700;color:var(--accent-gold);margin-bottom:2px;">Βρέθηκαν βέλτιστες ρυθμίσεις για ${totalLeaguesWithChanges} πρωτάθλημα</div>
+          <div style="font-size:0.68rem;color:var(--text-muted);">Το Grid Search εντόπισε τις ακριβείς τιμές που επιτυγχάνουν τους στόχους — πατήστε Εφαρμογή για άμεση ενημέρωση.</div>
         </div>
-        <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:34px;font-size:0.8rem;">✅ Εφαρμογή & Re-Simulate</button>
+        <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:36px;font-size:0.82rem;font-weight:800;">✅ Εφαρμογή Βέλτιστων Τιμών</button>
       </div>`
-    : `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);margin-bottom:14px;">
-        ✅ <strong>Το μοντέλο είναι άριστα βαθμονομημένο!</strong> Όλα τα πρωταθλήματα πετυχαίνουν τους στόχους ή δεν επιδέχονται περαιτέρω βελτίωση.
+    : `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.82rem;color:var(--accent-green);margin-bottom:14px;">
+        ✅ <strong>Όλα τα πρωταθλήματα πετυχαίνουν τους στόχους!</strong> Δεν απαιτείται αλλαγή.
       </div>`;
 
-  el.innerHTML = `
-    ${headerHtml}
-    ${rows}
-    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Grid: ${CALIB_GRID_N} τιμές/παράμετρο · Min samples: ${CALIB_MIN_N} · Pure backtest χωρίς API calls</div>`;
+  el.innerHTML = `${headerHtml}${rows}`;
 };
 
 function renderCalibLog() {
