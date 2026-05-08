@@ -179,8 +179,8 @@ let _errTimer = null, _okTimer = null;
 //  VERSION & BUILD INFO
 // ================================================================
 const APP_VERSION   = 'v5.0';
-const BUILD_DATE    = '07/05/2026';
-const BUILD_TIME    = '17:44 EET';
+const BUILD_DATE    = '08/05/2026';
+const BUILD_TIME    = '07:58 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -756,15 +756,52 @@ function summarizeH2H(fixtures,homeId,awayId){
   const t=hw+aw+dr||1;return{homeWins:hw,awayWins:aw,draws:dr,h2hAvgGoals:((hG+aG)/t).toFixed(2)};
 }
 
+// ── Βαθμονομημένες παράμετροι ανά πρωτάθλημα ─────────────────────
+// Βασίζονται σε ανάλυση ~250 ματς σεζόν 2025-26
+// Champions League: avg 2.44 γκολ → χαμηλά thresholds
+// Προκριματικά:     avg 3.07 γκολ → φυσιολογικά thresholds
+const LEAGUE_CALIBRATED_PARAMS = {
+  // ── UEFA Champions League ─────────────────────────────
+  2:  { mult:0.88, minXGO25:2.20, minXGO35:3.10, xgDiff:0.55, minBTTS:1.05, maxU25:2.00 },
+  // ── UEFA Europa League ────────────────────────────────
+  3:  { mult:0.90, minXGO25:2.35, minXGO35:3.20, xgDiff:0.55, minBTTS:1.08, maxU25:2.00 },
+  // ── UEFA Conference League ────────────────────────────
+  848:{ mult:0.95, minXGO25:2.60, minXGO35:3.30, xgDiff:0.58, minBTTS:1.10, maxU25:1.90 },
+  // ── WC Qualifiers UEFA ────────────────────────────────
+  32: { mult:0.95, minXGO25:2.60, minXGO35:3.30, xgDiff:0.58, minBTTS:1.10, maxU25:1.90 },
+};
+
 function getLeagueParams(leagueId){
-  const lm=leagueMods[leagueId]||{};
-  let defDiff=engineConfig.xG_Diff,defMult=1.00, defO25=engineConfig.tXG_O25;
-  if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId))defDiff=0.35;
-  else if(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(leagueId))defDiff=0.65;
-  if(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(leagueId))defMult=engineConfig.modGold;
-  else if(typeof TRAP_LEAGUES!=='undefined'&&TRAP_LEAGUES.has(leagueId))defMult=engineConfig.modTrap;
-  else if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId))defMult=engineConfig.modTight;
-  return{mult:lm.mult??defMult,minXGO25:lm.minXGO25??defO25,minXGO35:lm.minXGO35??engineConfig.tXG_O35,maxU25:lm.maxU25??engineConfig.tXG_U25,minBTTS:lm.minBTTS??engineConfig.tBTTS,xgDiff:lm.xgDiff??defDiff,htFactor:getHTFactor(leagueId)};
+  const lm = leagueMods[leagueId] || {};
+  // Βαθμονομημένα defaults (αν υπάρχουν) — override generic
+  const cal = LEAGUE_CALIBRATED_PARAMS[leagueId] || {};
+  let defDiff = cal.xgDiff   ?? engineConfig.xG_Diff;
+  let defMult = cal.mult     ?? 1.00;
+  let defO25  = cal.minXGO25 ?? engineConfig.tXG_O25;
+  let defO35  = cal.minXGO35 ?? engineConfig.tXG_O35;
+  let defBTTS = cal.minBTTS  ?? engineConfig.tBTTS;
+  let defU25  = cal.maxU25   ?? engineConfig.tXG_U25;
+
+  // League type overrides (μόνο αν δεν υπάρχει calibrated value)
+  if(!cal.mult) {
+    if(typeof GOLD_LEAGUES !=='undefined'&&GOLD_LEAGUES.has(leagueId))  defMult=engineConfig.modGold;
+    else if(typeof TRAP_LEAGUES!=='undefined'&&TRAP_LEAGUES.has(leagueId))defMult=engineConfig.modTrap;
+    else if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId))defMult=engineConfig.modTight;
+  }
+  if(!cal.xgDiff) {
+    if(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(leagueId)) defDiff=0.35;
+    else if(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(leagueId)) defDiff=0.65;
+  }
+
+  return {
+    mult:     lm.mult     ?? defMult,
+    minXGO25: lm.minXGO25 ?? defO25,
+    minXGO35: lm.minXGO35 ?? defO35,
+    maxU25:   lm.maxU25   ?? defU25,
+    minBTTS:  lm.minBTTS  ?? defBTTS,
+    xgDiff:   lm.xgDiff   ?? defDiff,
+    htFactor: getHTFactor(leagueId),
+  };
 }
 
 // 🎯 PLAYER PROPS MODEL
@@ -840,10 +877,10 @@ const LEAGUE_CORNER_MULT = {
   197: 1.28,  // Super League GR
   128: 1.28,  // Liga Profesional AR
   283: 1.27,  // SuperLiga RO
-  // UEFA
-  2:   1.32,  // Champions League
-  3:   1.35,  // Europa League
-  848: 1.33,  // Conference League
+  // UEFA — αμυντικό CL/EL ποδόσφαιρο = λιγότερα corners
+  2:   1.25,  // Champions League — tight defensive, λιγότερα corners από club
+  3:   1.28,  // Europa League
+  848: 1.30,  // Conference League
 };
 const CORNER_MULT_DEFAULT = 1.38; // global fallback (+38% διόρθωση)
 
