@@ -180,7 +180,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '08/05/2026';
-const BUILD_TIME    = '19:42 EET';
+const BUILD_TIME    = '19:51 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3020,128 +3020,191 @@ function buildAccordionHTML(x) {
 
   // ── Live SQD + Shot Quality panel (μόνο αν είναι live) ──────────
   const liveQualityPanel = li ? (() => {
-    const fixId   = x.fixId;
-    const elapsed = li.elapsed || x.m?.fixture?.status?.elapsed || 0;
-    const src     = li.xgSource === 'provider' ? 'xG Provider' : 'xG Model';
-    const hPoss   = li.hPoss || 50, aPoss = li.aPoss || (100 - hPoss);
-    const el      = Math.max(elapsed, 1);
-    const hRate   = li.hLiveXG / el;
-    const aRate   = li.aLiveXG / el;
-    const remMin  = Math.max(90 - elapsed, 1);
-    const hGoals  = x.m?.goals?.home ?? 0;
-    const aGoals  = x.m?.goals?.away ?? 0;
-    const hLam    = clamp(li.hLiveXG + hRate * remMin * 0.6, 0.05, 5);
-    const aLam    = clamp(li.aLiveXG + aRate * remMin * 0.6, 0.05, 5);
-    const ppLive  = getPoissonProbabilities(hLam, aLam);
-    const decayed = inPlayMarketDecay(ppLive, elapsed, hGoals, aGoals);
+    const fixId  = x.fixId;
+    const el     = Math.max(li.elapsed || x.m?.fixture?.status?.elapsed || 0, 1);
+    const remMin = Math.max(90 - el, 1);
+    const src    = li.xgSource === 'provider' ? 'xG Provider' : 'xG Model';
+    const hName  = esc(x.ht.split(' ').slice(0,2).join(' '));
+    const aName  = esc(x.at.split(' ').slice(0,2).join(' '));
+    const hGoals = x.m?.goals?.home ?? 0;
+    const aGoals = x.m?.goals?.away ?? 0;
+    const hPoss  = li.hPoss || 50, aPoss = li.aPoss || (100 - hPoss);
 
-    // Top-4 πιθανά σκορ
+    // ── Live Poisson projections ───────────────────────────
+    const hRate = li.hLiveXG / el, aRate = li.aLiveXG / el;
+    const hLam  = clamp(li.hLiveXG + hRate * remMin * 0.6, 0.05, 5);
+    const aLam  = clamp(li.aLiveXG + aRate * remMin * 0.6, 0.05, 5);
+    const ppLive  = getPoissonProbabilities(hLam, aLam);
+    const decayed = inPlayMarketDecay(ppLive, el, hGoals, aGoals);
+
+    // ── Επόμενο γκολ (SQD + xG rate weighted) ────────────
+    const sqd    = li.sqd || 0;
+    const edgeH  = li.hLiveEdge || 50;
+    const totRate = hRate * 1.04 + aRate;
+    // SQD boost: ομάδα με καλύτερο SQD έχει 15% bonus στο next goal prob
+    const sqdBoost = clamp(Math.abs(sqd) * 150, 0, 0.12);
+    let pNextH = totRate > 0 ? clamp((hRate * 1.04) / totRate, 0.05, 0.95) : 0.5;
+    if(sqd > 0.03)  pNextH = clamp(pNextH + sqdBoost, 0.05, 0.95);
+    if(sqd < -0.03) pNextH = clamp(pNextH - sqdBoost, 0.05, 0.95);
+    const pNextA = 1 - pNextH;
+    const nextFav  = pNextH >= pNextA ? hName : aName;
+    const nextFavPct = Math.round(Math.max(pNextH, pNextA) * 100);
+    const nextFavIcon = pNextH >= pNextA ? '🏠' : '✈️';
+    const nextFavCol  = pNextH >= pNextA ? 'var(--accent-gold)' : 'var(--accent-blue)';
+
+    // ── Σκορ top-5 ────────────────────────────────────────
     const scoreProbs = [];
     for(let h=hGoals;h<=hGoals+4;h++) for(let a=aGoals;a<=aGoals+4;a++){
       const p = poissonProb(hLam,h)*poissonProb(aLam,a);
-      if(p>0.005) scoreProbs.push({h,a,p});
+      if(p>0.003) scoreProbs.push({h,a,p});
     }
     scoreProbs.sort((a,b)=>b.p-a.p);
-    const top4 = scoreProbs.slice(0,4);
+    const top5 = scoreProbs.slice(0,5);
 
-    // Κόρνερ / κάρτες projection
+    // ── Corner / Card projections ─────────────────────────
     const hCorRate   = (li.hCor||0)/el, aCorRate=(li.aCor||0)/el;
     const projCor    = (li.hCor||0)+(li.aCor||0)+(hCorRate+aCorRate)*remMin;
-    const pCorOver85 = projCor>=8.5?clamp((projCor-8.5)*0.3+0.5,0.5,0.98):clamp(projCor/8.5*0.45,0.05,0.49);
+    const pCorOver85 = projCor>=8.5?clamp((projCor-8.5)*0.28+0.52,0.52,0.97):clamp(projCor/8.5*0.48,0.05,0.51);
     const hCrdRate   = (li.hFouls||0)/el*0.18, aCrdRate=(li.aFouls||0)/el*0.18;
-    const projCrd    = (hCrdRate+aCrdRate)*remMin;
-    const pCrdOver4  = clamp(projCrd*0.35+0.25,0.10,0.92);
+    const pCrdOver4  = clamp((hCrdRate+aCrdRate)*remMin*0.35+0.25, 0.10, 0.92);
 
-    // Επόμενο γκολ
-    const totRate = hRate*1.04+aRate;
-    const pNextH  = totRate>0?clamp((hRate*1.04)/totRate,0.05,0.95):0.5;
-    const pNextA  = 1-pNextH;
+    // ── SoT quality ───────────────────────────────────────
+    const hXGps = (li.hXGperShot||0)*100, aXGps=(li.aXGperShot||0)*100;
 
-    // Verdict
-    const sqd    = li.sqd||0, edgeH=li.hLiveEdge||50;
-    const domSide = edgeH>50?`🏠 ${esc(x.ht.split(' ')[0])}`:`✈️ ${esc(x.at.split(' ')[0])}`;
-    const verdictLine = Math.abs(sqd)>0.04||Math.abs(edgeH-50)>10
-      ? `${domSide} με ${edgeH>65||edgeH<35?'ισχυρή':'μέτρια'} υπεροχή (Edge ${edgeH.toFixed(0)}%, SQD ${sqd>=0?'+':''}${sqd.toFixed(3)})`
-      : 'Ισορροπημένος αγώνας';
-
+    // ── Markets ───────────────────────────────────────────
     const markets = [
-      {label:'Πάνω 2.5 γκολ', p:decayed.pO25, icon:'🔥'},
-      {label:'Πάνω 3.5 γκολ', p:decayed.pO35, icon:'🚀'},
-      {label:'Κάτω 2.5 γκολ', p:decayed.pU25, icon:'🔒'},
-      {label:'Γκολ/Γκολ (GG)',p:decayed.pBTTS,icon:'🎯'},
-      {label:'Πάνω 8.5 κόρνερ',p:pCorOver85, icon:'🚩'},
-      {label:'Πάνω 4.5 κάρτες',p:pCrdOver4,  icon:'🟨'},
+      {label:'Πάνω 2.5 γκολ', p:decayed.pO25,  icon:'🔥'},
+      {label:'Πάνω 3.5 γκολ', p:decayed.pO35,  icon:'🚀'},
+      {label:'Κάτω 2.5 γκολ', p:decayed.pU25,  icon:'🔒'},
+      {label:'Γκολ / Γκολ',   p:decayed.pBTTS, icon:'🎯'},
+      {label:'Πάνω 8.5 κόρνερ',p:pCorOver85,   icon:'🚩'},
+      {label:'Πάνω 4.5 κάρτες',p:pCrdOver4,    icon:'🟨'},
     ];
+    const topMarket = [...markets].sort((a,b)=>b.p-a.p)[0];
 
-    return `<div class="accordion-card" id="lqi-${fixId}" style="border-color:rgba(74,222,128,0.28);background:rgba(74,222,128,0.03);">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:6px;">
-        <span style="font-size:0.82rem;font-weight:800;color:var(--accent-green);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:1px;">📡 Live Report</span>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border-light);border-radius:4px;padding:2px 7px;">${elapsed}' · ${src}</span>
-          <span id="lqi-timer-${fixId}" style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-dim);">⟳ 15s</span>
+    // ── Verdict ───────────────────────────────────────────
+    let homeSignals=0, awaySignals=0;
+    if(sqd>0.03) homeSignals++; else if(sqd<-0.03) awaySignals++;
+    if(edgeH>55)  homeSignals++; else if(edgeH<45)  awaySignals++;
+    if((li.aSaves||0)>(li.hSaves||0)) homeSignals++;
+    if((li.hSoT||0)>(li.aSoT||0)) homeSignals++; else if((li.aSoT||0)>(li.hSoT||0)) awaySignals++;
+    const domScore = homeSignals - awaySignals;
+    const domLabel = domScore>=3?'ΙΣΧΥΡΗ ΥΠΕΡΟΧΗ':domScore>=2?'ΜΕΤΡΙΑ ΥΠΕΡΟΧΗ':domScore>=1?'ΕΛΑΦΡΑ ΥΠΕΡΟΧΗ':'ΙΣΟΒΑΘΜΙΑ';
+    const domTeam  = domScore>0?hName:domScore<0?aName:'—';
+    const domIcon  = domScore>0?'🏠':domScore<0?'✈️':'⚖️';
+    const domCol   = domScore>=2?'var(--accent-green)':domScore>=1?'var(--accent-gold)':domScore<=-2?'var(--accent-blue)':domScore<=-1?'var(--accent-teal)':'var(--text-muted)';
+
+    return `<div class="accordion-card" id="lqi-${fixId}" style="border-color:rgba(74,222,128,0.3);padding:0;overflow:hidden;">
+
+      <!-- HEADER ──────────────────────────────────────────── -->
+      <div style="background:rgba(74,222,128,0.07);border-bottom:1px solid rgba(74,222,128,0.15);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:0.72rem;font-weight:800;color:var(--accent-green);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:1px;">📡 Live Report</span>
+          <span style="font-family:var(--font-mono);font-size:0.6rem;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:3px;padding:1px 6px;">${el}' · ${src}</span>
         </div>
+        <span id="lqi-timer-${fixId}" style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent-green);background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.2);border-radius:4px;padding:2px 8px;">⟳ 15s</span>
       </div>
 
-      <!-- Κατοχή -->
-      <div style="margin-bottom:8px;padding:8px 10px;background:var(--bg-surface);border-radius:6px;">
-        <div style="font-size:0.6rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px;">⚽ Κατοχή Μπάλας</div>
-        <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:1rem;font-weight:900;margin-bottom:4px;">
-          <span style="color:var(--accent-gold);">🏠 ${hPoss.toFixed(0)}%</span>
-          <span style="color:var(--accent-blue);">✈️ ${aPoss.toFixed(0)}%</span>
-        </div>
-        <div style="height:5px;background:var(--border-light);border-radius:3px;overflow:hidden;display:flex;">
-          <div style="width:${hPoss.toFixed(0)}%;background:var(--accent-gold);"></div>
-          <div style="width:${aPoss.toFixed(0)}%;background:var(--accent-blue);"></div>
-        </div>
-      </div>
+      <div style="padding:12px 14px;display:flex;flex-direction:column;gap:10px;">
 
-      <!-- Πιθανότητες γεγονότων -->
-      <div style="margin-bottom:8px;padding:8px 10px;background:var(--bg-surface);border-radius:6px;">
-        <div style="font-size:0.6rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">📊 Πιθανότητα Επαλήθευσης</div>
-        ${markets.map(row => {
-          const pct = Math.round(row.p*100);
-          const col = pct>=70?'var(--accent-green)':pct>=45?'var(--accent-gold)':'var(--text-muted)';
-          return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
-            <span style="font-size:0.72rem;flex:1;color:var(--text-sub);">${row.icon} ${row.label}</span>
-            <div style="width:70px;height:3px;background:var(--border-light);border-radius:2px;overflow:hidden;">
-              <div style="height:3px;width:${pct}%;background:${col};border-radius:2px;"></div>
+        <!-- ROW 1: ΣΚΟΡ + ΚΑΤΟΧΗ ───────────────────────────── -->
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;">
+
+          <!-- Σκορ κουτί -->
+          <div style="text-align:center;background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:8px 14px;min-width:80px;">
+            <div style="font-family:var(--font-mono);font-size:1.8rem;font-weight:900;color:var(--text-main);line-height:1;">${hGoals} – ${aGoals}</div>
+            <div style="font-size:0.58rem;color:var(--text-dim);margin-top:3px;font-family:var(--font-cond);">ΤΕΛΙΚΟ</div>
+          </div>
+
+          <!-- Κατοχή -->
+          <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:8px 12px;">
+            <div style="font-size:0.58rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:5px;">⚽ Κατοχή</div>
+            <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:0.85rem;font-weight:800;margin-bottom:4px;">
+              <span style="color:var(--accent-gold);">${hPoss.toFixed(0)}%</span>
+              <span style="font-size:0.6rem;color:var(--text-dim);align-self:center;">${hName}</span>
+              <span style="color:var(--accent-blue);">${aPoss.toFixed(0)}%</span>
             </div>
-            <span style="font-family:var(--font-mono);font-size:0.8rem;font-weight:900;color:${col};min-width:36px;text-align:right;">${pct}%</span>
-          </div>`;
-        }).join('')}
-      </div>
-
-      <!-- Επόμενο γκολ -->
-      <div style="margin-bottom:8px;padding:8px 10px;background:var(--bg-surface);border-radius:6px;">
-        <div style="font-size:0.6rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px;">🎯 Επόμενο Γκολ</div>
-        <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:0.92rem;font-weight:900;margin-bottom:4px;">
-          <span style="color:${pNextH>pNextA?'var(--accent-green)':'var(--text-muted)'};">🏠 ${Math.round(pNextH*100)}%</span>
-          <span style="color:${pNextA>pNextH?'var(--accent-green)':'var(--text-muted)'};">✈️ ${Math.round(pNextA*100)}%</span>
+            <div style="height:6px;border-radius:3px;overflow:hidden;display:flex;gap:1px;">
+              <div style="width:${hPoss.toFixed(0)}%;background:var(--accent-gold);border-radius:3px 0 0 3px;"></div>
+              <div style="width:${aPoss.toFixed(0)}%;background:var(--accent-blue);border-radius:0 3px 3px 0;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:0.58rem;color:var(--text-dim);margin-top:3px;font-family:var(--font-mono);">
+              <span>SoT ${li.hSoT||0} · xG/shot ${hXGps.toFixed(1)}%</span>
+              <span>xG/shot ${aXGps.toFixed(1)}% · SoT ${li.aSoT||0}</span>
+            </div>
+          </div>
         </div>
-        <div style="height:4px;background:var(--border-light);border-radius:2px;overflow:hidden;display:flex;">
-          <div style="width:${Math.round(pNextH*100)}%;background:var(--accent-gold);"></div>
-          <div style="width:${Math.round(pNextA*100)}%;background:var(--accent-blue);"></div>
-        </div>
-      </div>
 
-      <!-- Προβολή Σκορ -->
-      <div style="margin-bottom:8px;padding:8px 10px;background:var(--bg-surface);border-radius:6px;">
-        <div style="font-size:0.6rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">🏆 Πιθανό Τελικό Σκορ</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
-          ${top4.map((sc,i)=>{
-            const cols=['var(--accent-green)','var(--accent-gold)','var(--text-sub)','var(--text-muted)'];
-            const medals=['🥇','🥈','🥉','4️⃣'];
-            return `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-base);border:1px solid rgba(255,255,255,0.05);border-radius:5px;padding:5px 8px;">
-              <span style="font-size:0.65rem;">${medals[i]}</span>
-              <span style="font-family:var(--font-mono);font-size:1rem;font-weight:900;color:${cols[i]};">${sc.h}-${sc.a}</span>
-              <span style="font-family:var(--font-mono);font-size:0.7rem;font-weight:700;color:${cols[i]};">${(sc.p*100).toFixed(1)}%</span>
+        <!-- ROW 2: ΕΠΟΜΕΝΟ ΓΚΟΛ ────────────────────────────── -->
+        <div style="background:var(--bg-base);border:1px solid rgba(74,222,128,0.2);border-radius:8px;padding:10px 12px;">
+          <div style="font-size:0.58rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">🎯 Πρόβλεψη Επόμενου Γκολ</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="flex:1;text-align:center;padding:8px;background:${pNextH>pNextA?'rgba(252,211,77,0.08)':'rgba(0,0,0,0)'};border:1px solid ${pNextH>pNextA?'rgba(252,211,77,0.3)':'var(--border-light)'};border-radius:7px;">
+              <div style="font-size:0.6rem;color:var(--text-dim);margin-bottom:3px;">🏠 ${hName}</div>
+              <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:${pNextH>pNextA?'var(--accent-gold)':'var(--text-muted)'};">${Math.round(pNextH*100)}%</div>
+            </div>
+            <div style="text-align:center;font-size:0.65rem;color:var(--text-dim);">vs</div>
+            <div style="flex:1;text-align:center;padding:8px;background:${pNextA>pNextH?'rgba(77,184,255,0.08)':'rgba(0,0,0,0)'};border:1px solid ${pNextA>pNextH?'rgba(77,184,255,0.3)':'var(--border-light)'};border-radius:7px;">
+              <div style="font-size:0.6rem;color:var(--text-dim);margin-bottom:3px;">✈️ ${aName}</div>
+              <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:${pNextA>pNextH?'var(--accent-blue)':'var(--text-muted)'};">${Math.round(pNextA*100)}%</div>
+            </div>
+          </div>
+          <div style="height:4px;border-radius:2px;overflow:hidden;display:flex;margin-top:8px;gap:1px;">
+            <div style="width:${Math.round(pNextH*100)}%;background:var(--accent-gold);"></div>
+            <div style="width:${Math.round(pNextA*100)}%;background:var(--accent-blue);"></div>
+          </div>
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:6px;text-align:center;">
+            Πιθανότερο: <strong style="color:${nextFavCol};">${nextFavIcon} ${nextFav} (${nextFavPct}%)</strong>
+            ${Math.abs(sqd)>0.03?`· SQD ${sqd>=0?'+':''}${sqd.toFixed(3)}`:''}
+          </div>
+        </div>
+
+        <!-- ROW 3: ΠΙΘΑΝΟΤΗΤΕΣ ΑΓΟΡΩΝ ──────────────────────── -->
+        <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;">
+          <div style="font-size:0.58rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:7px;">📊 Πιθανότητα Επαλήθευσης</div>
+          ${markets.map(row => {
+            const pct = Math.round(row.p*100);
+            const col = pct>=70?'var(--accent-green)':pct>=50?'var(--accent-gold)':pct>=30?'var(--text-sub)':'var(--text-dim)';
+            const isTop = row.label === topMarket.label;
+            return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.03);${isTop?'opacity:1;':'opacity:0.85;'}">
+              <span style="font-size:0.7rem;flex:1;color:var(--text-sub);white-space:nowrap;">${row.icon} ${row.label}</span>
+              <div style="width:80px;height:4px;background:var(--border-light);border-radius:2px;overflow:hidden;flex-shrink:0;">
+                <div style="height:4px;width:${pct}%;background:${col};border-radius:2px;transition:width 0.4s;"></div>
+              </div>
+              <span style="font-family:var(--font-mono);font-size:0.82rem;font-weight:900;color:${col};min-width:36px;text-align:right;">${pct}%</span>
+              ${isTop?`<span style="font-size:0.55rem;color:var(--accent-green);border:1px solid rgba(74,222,128,0.3);border-radius:3px;padding:0 4px;">ΚΟΡΥΦΗ</span>`:'<span style="min-width:40px;"></span>'}
             </div>`;
           }).join('')}
         </div>
-      </div>
 
-      <!-- Verdict -->
-      <div style="font-size:0.7rem;color:var(--text-muted);padding:5px 2px;border-top:1px solid var(--border-light);">⚖️ ${verdictLine}</div>
+        <!-- ROW 4: ΠΡΟΒΛΕΨΗ ΣΚΟΡ ───────────────────────────── -->
+        <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;">
+          <div style="font-size:0.58rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:7px;">🏆 Πιθανό Τελικό Σκορ</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;">
+            ${top5.map((sc,i)=>{
+              const isFirst = i===0;
+              const pct = (sc.p*100).toFixed(1);
+              const col = isFirst?'var(--accent-green)':i===1?'var(--accent-gold)':i===2?'var(--text-sub)':'var(--text-dim)';
+              return `<div style="text-align:center;padding:6px 4px;background:${isFirst?'rgba(74,222,128,0.08)':'rgba(255,255,255,0.02)'};border:1px solid ${isFirst?'rgba(74,222,128,0.25)':'rgba(255,255,255,0.05)'};border-radius:6px;">
+                <div style="font-family:var(--font-mono);font-size:1rem;font-weight:900;color:${col};margin-bottom:2px;">${sc.h}-${sc.a}</div>
+                <div style="font-size:0.6rem;color:${col};font-weight:700;">${pct}%</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- ROW 5: VERDICT ──────────────────────────────────── -->
+        <div style="background:${domCol}10;border:1px solid ${domCol}30;border-radius:8px;padding:9px 12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+          <div>
+            <span style="font-size:0.65rem;font-weight:800;color:${domCol};font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${domIcon} ${domScore!==0?domTeam+' — ':''}</span>
+            <span style="font-size:0.65rem;font-weight:700;color:${domCol};">${domLabel}</span>
+          </div>
+          <div style="font-size:0.6rem;color:var(--text-muted);">
+            Edge 🏠${edgeH.toFixed(0)}% · SoT 🏠${li.hSoT||0}/✈️${li.aSoT||0} · Saves 🏠${li.hSaves||0}/✈️${li.aSaves||0}
+          </div>
+        </div>
+
+      </div><!-- /padding -->
 
       <script>(function(){
         let t=15;
