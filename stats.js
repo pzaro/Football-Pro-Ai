@@ -271,6 +271,31 @@ function showErr(msg){clearTimeout(_errTimer);const box=document.getElementById(
 function showOk(msg){clearTimeout(_okTimer);const box=document.getElementById('successBox');if(!box)return;box.innerHTML=`<div>✓ ${esc(msg)}</div>`;_okTimer=setTimeout(()=>box.innerHTML='',4000);}
 function clearAlerts(){const e=document.getElementById('errorBox'),s=document.getElementById('successBox');if(e)e.innerHTML='';if(s)s.innerHTML='';}
 
+// ── Persistent API-Sports error banner ──────────────────────────
+// Το api-sports.io συχνά απαντάει με HTTP 200 ΚΑΙ ένα "errors" object
+// (π.χ. ληγμένη συνδρομή, εξαντλημένο daily quota) ενώ το "response"
+// μένει άδειο. Χωρίς αυτό, το scan απλά επιστρέφει 0 αγώνες σιωπηλά.
+let _apiErrorShown = false;
+function extractApiErrorMsg(data){
+  const errs = data?.errors;
+  if(!errs) return '';
+  if(Array.isArray(errs)) return errs.filter(Boolean).join(' ');
+  if(typeof errs === 'object') return Object.values(errs).filter(Boolean).join(' ');
+  return String(errs);
+}
+function showApiError(msg){
+  if(_apiErrorShown || !msg) return;
+  _apiErrorShown = true;
+  let banner = document.getElementById('apiStatusBanner');
+  if(!banner){
+    banner = document.createElement('div');
+    banner.id = 'apiStatusBanner';
+    banner.style.cssText = 'position:sticky;top:0;z-index:1500;background:rgba(244,63,94,0.15);border-bottom:1px solid rgba(244,63,94,0.4);color:var(--accent-red,#f43f5e);padding:10px 20px;font-size:0.8rem;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:12px;';
+    document.body.insertBefore(banner, document.body.firstChild);
+  }
+  banner.innerHTML = `<span>⚠️ API-Sports: ${esc(msg)}</span><button onclick="this.parentElement.remove();_apiErrorShown=false;" style="background:none;border:1px solid currentColor;color:inherit;border-radius:4px;padding:2px 10px;cursor:pointer;font-weight:700;">✕ Κλείσιμο</button>`;
+}
+
 // ================================================================
 //  BANKROLL & EXPORT
 // ================================================================
@@ -388,8 +413,11 @@ async function _executeRequest(path,resolve){
     for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
       try{
         const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
-        if(r.ok){
-          const data=await r.json();
+        let data=null;
+        try{ data=await r.json(); }catch{}
+        const apiErrMsg=extractApiErrorMsg(data);
+        if(apiErrMsg) showApiError(apiErrMsg);
+        if(r.ok&&data){
           if(data.response&&typeof currentCredits==='number'){
             currentCredits--;
             const el=document.getElementById('creditDisplay');
@@ -411,7 +439,19 @@ async function _executeRequest(path,resolve){
     _apiActive--;_drainQueue();
   }
 }
-window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
+window.initCredits=async function(){
+  try{
+    const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});
+    let d=null;
+    try{ d=await r.json(); }catch{}
+    const apiErrMsg=extractApiErrorMsg(d);
+    if(apiErrMsg) showApiError(apiErrMsg);
+    if(!r.ok||!d) return;
+    currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);
+    const el=document.getElementById('creditDisplay');
+    if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
+  }catch{}
+};
 
 async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
 async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
