@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.0 — MASTER ENGINE · DATA QUALITY GUARD + LIVE LEARNING + MARKET MISPRICING + PROGRESSIVE SMART SCAN
+// APEX OMEGA v6.1 — MASTER ENGINE · NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING + PROGRESSIVE SMART SCAN
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -310,7 +310,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.0';
+const APP_VERSION   = 'v6.1';
 const BUILD_DATE    = '05/09/2026';
 const BUILD_TIME    = 'LIVE LEARNING ENGINE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
@@ -3698,77 +3698,151 @@ function _best4Norm(s){
     .replace(/\s+/g,' ').trim();
 }
 
+const MARKET_PARSE_MAX_ODDS = 20.0;
+const MARKET_BOMB_MAX_ODDS = 12.0;
+
 function _best4PushQuote(store,key,odd,bkName){
   const o=Number(odd);
-  if(!key || !Number.isFinite(o) || o<1.01 || o>BEST4_MAX_ODDS) return;
+  if(!key || !Number.isFinite(o) || o<1.01 || o>MARKET_PARSE_MAX_ODDS) return;
   if(!store[key]) store[key]=[];
   store[key].push({odd:o, bookmaker:bkName||'Bookmaker'});
 }
 
-// Robust best price: when 3+ books exist, reject a single quote >25% above median.
-// This protects BEST 4 from stale/malformed outliers while still taking the top valid price.
-function _best4ChooseQuote(quotes){
+function _medianNums(values){
+  const a=(values||[]).filter(Number.isFinite).slice().sort((x,y)=>x-y);
+  if(!a.length) return null;
+  const m=Math.floor(a.length/2);
+  return a.length%2?a[m]:(a[m-1]+a[m])/2;
+}
+
+// Robust best price: with 3+ books reject a single quote >25% above median.
+function _best4ChooseQuote(quotes,maxOdds=BEST4_MAX_ODDS){
   if(!quotes?.length) return null;
-  const q=quotes.filter(x=>Number.isFinite(x.odd)&&x.odd>=1.01&&x.odd<=BEST4_MAX_ODDS).sort((a,b)=>a.odd-b.odd);
+  const q=quotes.filter(x=>Number.isFinite(x.odd)&&x.odd>=1.01&&x.odd<=maxOdds).sort((a,b)=>a.odd-b.odd);
   if(!q.length) return null;
-  const mid=q[Math.floor(q.length/2)].odd;
+  const mid=_medianNums(q.map(x=>x.odd));
   const clean=q.length>=3 ? q.filter(x=>x.odd <= mid*1.25) : q;
-  const best=(clean.length?clean:q).sort((a,b)=>b.odd-a.odd)[0];
+  const best=(clean.length?clean:q).slice().sort((a,b)=>b.odd-a.odd)[0];
   return {...best, books:q.length, median:mid, quotes:q.map(x=>({odd:x.odd,bookmaker:x.bookmaker}))};
 }
 
-/** Parse ALL bookmakers returned by /odds?fixture=... into best-price market keys. */
+function _marketBookSet(perBook,bkName,key,odd){
+  const o=Number(odd);
+  if(!key||!Number.isFinite(o)||o<1.01||o>MARKET_PARSE_MAX_ODDS) return;
+  if(!perBook[bkName]) perBook[bkName]={};
+  // Keep first canonical quote for this market/bookmaker; API normally supplies one.
+  if(perBook[bkName][key]===undefined) perBook[bkName][key]=o;
+}
+
+function _noVigGroupForKey(key){
+  if(key==='1'||key==='X'||key==='2') return ['1','X','2'];
+  const pairs={
+    'O2.5':['O2.5','U2.5'], 'U2.5':['O2.5','U2.5'],
+    'O3.5':['O3.5','U3.5'], 'U3.5':['O3.5','U3.5'],
+    'COR O8.5':['COR O8.5','COR U8.5'], 'COR U8.5':['COR O8.5','COR U8.5'],
+    'OFF TOT O2.5':['OFF TOT O2.5','OFF TOT U2.5'], 'OFF TOT U2.5':['OFF TOT O2.5','OFF TOT U2.5'],
+    'OFF TOT O3.5':['OFF TOT O3.5','OFF TOT U3.5'], 'OFF TOT U3.5':['OFF TOT O3.5','OFF TOT U3.5'],
+    'OFF HOME O1.5':['OFF HOME O1.5','OFF HOME U1.5'], 'OFF HOME U1.5':['OFF HOME O1.5','OFF HOME U1.5'],
+    'OFF AWAY O1.5':['OFF AWAY O1.5','OFF AWAY U1.5'], 'OFF AWAY U1.5':['OFF AWAY O1.5','OFF AWAY U1.5'],
+  };
+  return pairs[key]||null;
+}
+
+function _buildNoVigConsensus(perBook,key){
+  const group=_noVigGroupForKey(key); if(!group) return null;
+  const rows=[];
+  Object.entries(perBook||{}).forEach(([bookmaker,m])=>{
+    if(!group.every(k=>Number.isFinite(Number(m[k]))&&Number(m[k])>1)) return;
+    const inv=group.map(k=>1/Number(m[k]));
+    const z=inv.reduce((a,b)=>a+b,0); if(!(z>0)) return;
+    const idx=group.indexOf(key); if(idx<0) return;
+    rows.push({bookmaker,prob:inv[idx]/z,overround:z-1,odds:Number(m[key])});
+  });
+  if(!rows.length) return null;
+  const probs=rows.map(r=>r.prob);
+  const prob=_medianNums(probs);
+  if(!(prob>0&&prob<1)) return null;
+  const min=Math.min(...probs), max=Math.max(...probs);
+  const meanOverround=rows.reduce((s,r)=>s+r.overround,0)/rows.length;
+  return {
+    prob,
+    fairOdds:1/prob,
+    books:rows.length,
+    spreadPP:(max-min)*100,
+    minProb:min,
+    maxProb:max,
+    meanOverround,
+    rows
+  };
+}
+
+/** Parse ALL bookmakers and preserve both executable prices and complete no-vig market sets. */
 function parseBestOddsAcrossBookmakers(response){
-  const buckets={};
+  const buckets={}, perBook={};
+  const put=(bkName,key,odd)=>{_best4PushQuote(buckets,key,odd,bkName);_marketBookSet(perBook,bkName,key,odd);};
   (response||[]).forEach(item=>{
     (item?.bookmakers||[]).forEach(bk=>{
       const bkName=bk?.name||`Bookmaker ${bk?.id??''}`;
       (bk?.bets||[]).forEach(bet=>{
         const n=_best4Norm(bet?.name);
-        const isHalf = n.includes('half') || n.includes('1st') || n.includes('2nd') || n.includes('1st half') || n.includes('2nd half');
+        const isHalf=n.includes('half')||n.includes('1st')||n.includes('2nd')||n.includes('1st half')||n.includes('2nd half');
         (bet?.values||[]).forEach(v=>{
-          const val=_best4Norm(v?.value);
-          const odd=parseFloat(v?.odd);
+          const val=_best4Norm(v?.value), odd=parseFloat(v?.odd);
           if(!Number.isFinite(odd)) return;
 
-          // 1X2 / Match Winner — full time only
-          if(!isHalf && (n==='match winner' || n==='winner' || n.includes('match winner'))){
-            if(val==='home' || val==='1') _best4PushQuote(buckets,'1',odd,bkName);
-            else if(val==='draw' || val==='x') _best4PushQuote(buckets,'X',odd,bkName);
-            else if(val==='away' || val==='2') _best4PushQuote(buckets,'2',odd,bkName);
+          if(!isHalf && (n==='match winner'||n==='winner'||n.includes('match winner'))){
+            if(val==='home'||val==='1') put(bkName,'1',odd);
+            else if(val==='draw'||val==='x') put(bkName,'X',odd);
+            else if(val==='away'||val==='2') put(bkName,'2',odd);
           }
 
-          // Match goals totals
-          const isGoalsTotal = !isHalf && !n.includes('corner') && !n.includes('offside') &&
-            ((n.includes('goals') && (n.includes('over/under')||n.includes('over under')||n.includes('total'))) || n==='goals over/under');
+          const isGoalsTotal=!isHalf&&!n.includes('corner')&&!n.includes('offside')&&
+            ((n.includes('goals')&&(n.includes('over/under')||n.includes('over under')||n.includes('total')))||n==='goals over/under');
           if(isGoalsTotal){
-            if(val==='over 2.5' || val==='o 2.5') _best4PushQuote(buckets,'O2.5',odd,bkName);
-            if(val==='over 3.5' || val==='o 3.5') _best4PushQuote(buckets,'O3.5',odd,bkName);
+            if(val==='over 2.5'||val==='o 2.5') put(bkName,'O2.5',odd);
+            if(val==='under 2.5'||val==='u 2.5') put(bkName,'U2.5',odd);
+            if(val==='over 3.5'||val==='o 3.5') put(bkName,'O3.5',odd);
+            if(val==='under 3.5'||val==='u 3.5') put(bkName,'U3.5',odd);
           }
 
-          // Total corners — accept common provider naming variants
-          if(!isHalf && n.includes('corner')){
-            if((val==='over 8.5'||val==='o 8.5') && !n.includes('home') && !n.includes('away'))
-              _best4PushQuote(buckets,'COR O8.5',odd,bkName);
-          }
-
-          // Offsides — availability varies by fixture/bookmaker.
-          if(!isHalf && n.includes('offside')){
-            const isHome=n.includes('home') || n.includes('team 1');
-            const isAway=n.includes('away') || n.includes('team 2');
-            if(!isHome && !isAway){
-              if(val==='over 2.5'||val==='o 2.5') _best4PushQuote(buckets,'OFF TOT O2.5',odd,bkName);
-              if(val==='over 3.5'||val==='o 3.5') _best4PushQuote(buckets,'OFF TOT O3.5',odd,bkName);
+          if(!isHalf&&n.includes('corner')){
+            if(!n.includes('home')&&!n.includes('away')){
+              if(val==='over 8.5'||val==='o 8.5') put(bkName,'COR O8.5',odd);
+              if(val==='under 8.5'||val==='u 8.5') put(bkName,'COR U8.5',odd);
             }
-            if(isHome && (val==='over 1.5'||val==='o 1.5')) _best4PushQuote(buckets,'OFF HOME O1.5',odd,bkName);
-            if(isAway && (val==='over 1.5'||val==='o 1.5')) _best4PushQuote(buckets,'OFF AWAY O1.5',odd,bkName);
+          }
+
+          if(!isHalf&&n.includes('offside')){
+            const isHome=n.includes('home')||n.includes('team 1');
+            const isAway=n.includes('away')||n.includes('team 2');
+            if(!isHome&&!isAway){
+              if(val==='over 2.5'||val==='o 2.5') put(bkName,'OFF TOT O2.5',odd);
+              if(val==='under 2.5'||val==='u 2.5') put(bkName,'OFF TOT U2.5',odd);
+              if(val==='over 3.5'||val==='o 3.5') put(bkName,'OFF TOT O3.5',odd);
+              if(val==='under 3.5'||val==='u 3.5') put(bkName,'OFF TOT U3.5',odd);
+            }
+            if(isHome){
+              if(val==='over 1.5'||val==='o 1.5') put(bkName,'OFF HOME O1.5',odd);
+              if(val==='under 1.5'||val==='u 1.5') put(bkName,'OFF HOME U1.5',odd);
+            }
+            if(isAway){
+              if(val==='over 1.5'||val==='o 1.5') put(bkName,'OFF AWAY O1.5',odd);
+              if(val==='under 1.5'||val==='u 1.5') put(bkName,'OFF AWAY U1.5',odd);
+            }
           }
         });
       });
     });
   });
+
   const out={};
-  Object.keys(buckets).forEach(k=>{ const best=_best4ChooseQuote(buckets[k]); if(best) out[k]=best; });
+  Object.keys(buckets).forEach(k=>{
+    const best4=_best4ChooseQuote(buckets[k],BEST4_MAX_ODDS);
+    const bomb=_best4ChooseQuote(buckets[k],MARKET_BOMB_MAX_ODDS);
+    const base=best4||bomb;
+    if(base) out[k]={...base,bombQuote:bomb||base,noVig:_buildNoVigConsensus(perBook,k)};
+  });
+  Object.defineProperty(out,'__perBook',{value:perBook,enumerable:false});
   return out;
 }
 
@@ -3909,7 +3983,7 @@ window.refreshBest4 = async function(opts={}){
     const priced=[];
     radar.forEach(s=>{
       const key=_best4MarketKey(s); if(!key) return;
-      const q=priceMap.get(s.fixId)?.[key]; if(!q || Number(q.odd)<BEST4_MIN_ODDS) return;
+      const q=priceMap.get(s.fixId)?.[key]; if(!q || Number(q.odd)<BEST4_MIN_ODDS || Number(q.odd)>BEST4_MAX_ODDS) return;
       const p=Number(s.probability||0)/100; if(!(p>0)) return;
       const fair=1/p;
       const implied=1/Number(q.odd);
@@ -4038,51 +4112,51 @@ function renderValueBetsTab(bets) {
 }
 
 // ================================================================
-//  💣 BOMBS v5.8 — MARKET MISPRICING DETECTOR
+//  💣 BOMBS v6.1 — NO-VIG VERIFIED MARKET MISPRICING
 //
-//  Η Bomb ΔΕΝ σημαίνει "υψηλή πιθανότητα".
-//  Σημαίνει ότι η αγορά τιμολογεί ένα outcome αισθητά ακριβότερα
-//  από την APEX fair price, με επιβεβαίωση από πολλές εταιρείες.
+//  Bomb = πιθανό bookmaker mispricing ΜΟΝΟ όταν:
+//  1) αφαιρείται το bookmaker margin (no-vig consensus),
+//  2) η απόκλιση είναι ουσιαστική αλλά όχι παράλογα ακραία,
+//  3) RADAR / xG / market-specific metrics επιβεβαιώνουν ανεξάρτητα,
+//  4) υπάρχει επαρκής κάλυψη και ποιότητα δεδομένων.
 //
-//  Core idea:
-//    APEX Fair Price = 1 / internal model probability
-//    Executable Edge = Best Market Odds / APEX Fair Price - 1
-//    Consensus Gap   = Median Market Odds / APEX Fair Price - 1
-//
-//  Δεν χρησιμοποιείται absolute probability threshold.
-//  Η probability παραμένει εσωτερικό μαθηματικό μέγεθος μόνο για να
-//  μετατραπεί το model output σε fair price και ΔΕΝ εμφανίζεται ως κριτήριο Bomb.
+//  Πολύ μεγάλες αποκλίσεις ΔΕΝ παίρνουν υψηλότερο Bomb Score:
+//    >22pp = HIGH DIVERGENCE
+//    >30pp = MODEL–MARKET CONFLICT
+//  και ΔΕΝ αποθηκεύονται ως verified Bombs.
 // ================================================================
 
-const BOMB_MIN_MARKET_ODDS       = 2.60;  // "βόμβα" = υψηλή πραγματική τιμή αγοράς
-const BOMB_MAX_MARKET_ODDS       = 12.0;  // αποφυγή illiquid / malformed quotes
-const BOMB_MIN_EXEC_EDGE         = 0.18;  // best odds ≥18% πάνω από APEX fair
-const BOMB_MIN_CONSENSUS_GAP     = 0.10;  // median odds ≥10% πάνω από APEX fair
-const BOMB_MIN_BOOKS             = 2;     // τουλάχιστον 2 ανεξάρτητες εταιρείες
-const BOMB_MIN_AGREEMENT         = 0.50;  // ≥50% των quotes πάνω από APEX fair +8%
-const BOMB_MIN_DATA_QUALITY      = 60;
-const BOMB_MIN_SCORE             = 65;
-const BOMB_MAX_FIXTURES_TO_PRICE = 24;    // background pricing, δεν μπλοκάρει Smart Scan
-let bombLoading = false;
+const BOMB_MIN_MARKET_ODDS        = 2.60;
+const BOMB_MAX_MARKET_ODDS        = MARKET_BOMB_MAX_ODDS;
+const BOMB_MIN_EXEC_EDGE          = 0.15; // APEX EV at best executable price
+const BOMB_MIN_NOVIG_GAP_PP       = 8.0;
+const BOMB_VERIFIED_MAX_GAP_PP    = 22.0;
+const BOMB_CONFLICT_GAP_PP        = 30.0;
+const BOMB_MIN_DATA_QUALITY       = 70;
+const BOMB_MIN_RADAR_SCORE        = 78;
+const BOMB_MIN_SCORE              = 70;
+const BOMB_MAX_MARKET_SPREAD_PP   = 10.0;
+const BOMB_MAX_FIXTURES_TO_PRICE  = 24;
+let bombLoading=false;
 
 function _bombOffsideMarketKey(rec){
   const sig=String(rec?.offside?.bestSignal||'').toUpperCase();
   if(!sig) return null;
-  if(sig.includes('ΣΥΝΟΛΟ') && sig.includes('2.5')) return 'OFF TOT O2.5';
-  if(sig.includes('ΣΥΝΟΛΟ') && sig.includes('3.5')) return 'OFF TOT O3.5';
-  if(sig.includes('HOME') && sig.includes('1.5')) return 'OFF HOME O1.5';
-  if(sig.includes('AWAY') && sig.includes('1.5')) return 'OFF AWAY O1.5';
+  if(sig.includes('ΣΥΝΟΛΟ')&&sig.includes('2.5')) return 'OFF TOT O2.5';
+  if(sig.includes('ΣΥΝΟΛΟ')&&sig.includes('3.5')) return 'OFF TOT O3.5';
+  if(sig.includes('HOME')&&sig.includes('1.5')) return 'OFF HOME O1.5';
+  if(sig.includes('AWAY')&&sig.includes('1.5')) return 'OFF AWAY O1.5';
   return null;
 }
 
 function _bombCandidates(rec){
   if(!rec?.pp) return [];
-  const pp=rec.pp, out=[];
+  const pp=rec.pp,out=[];
   const push=(marketKey,label,icon,p,category)=>{
     p=Number(p);
-    if(!Number.isFinite(p) || p<=0.02 || p>=0.98) return;
+    if(!Number.isFinite(p)||p<=0.02||p>=0.98) return;
     const fair=1/p;
-    if(!Number.isFinite(fair) || fair<1.02 || fair>BOMB_MAX_MARKET_ODDS) return;
+    if(!Number.isFinite(fair)||fair<1.02||fair>BOMB_MAX_MARKET_ODDS) return;
     out.push({marketKey,label,icon,category,modelProb:p,modelFairOdds:fair});
   };
   push('1','1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ','🏠',pp.pHome,'1X2');
@@ -4092,174 +4166,238 @@ function _bombCandidates(rec){
   push('O3.5','OVER 3.5 ΓΚΟΛ','🚀',pp.pO35,'GOALS');
   if(Number(rec.cornerConf||0)>0) push('COR O8.5','OVER 8.5 ΚΟΡΝΕΡ','🚩',Number(rec.cornerConf)/100,'CORNERS');
   const offKey=_bombOffsideMarketKey(rec);
-  if(offKey && Number(rec.offside?.bestProb||0)>0) push(offKey,rec.offside.bestSignal,'🚫',Number(rec.offside.bestProb)/100,'OFFSIDES');
+  if(offKey&&Number(rec.offside?.bestProb||0)>0) push(offKey,rec.offside.bestSignal,'🚫',Number(rec.offside.bestProb)/100,'OFFSIDES');
   return out;
 }
 
 function _bombDataQuality(rec){
-  return typeof _best4DataQuality==='function' ? _best4DataQuality(rec) : 60;
+  return typeof _best4DataQuality==='function'?_best4DataQuality(rec):60;
 }
 
-function _evaluateBombCandidate(rec,cand,quote){
-  if(!quote) return null;
+function _bombRadarMatch(rec,cand){
+  return (latestTopLists.radar||[]).find(s=>s.fixId===rec.fixId&&_best4MarketKey(s)===cand.marketKey)||null;
+}
+
+function _bombIndependentConfirmation(rec,cand){
+  const radar=_bombRadarMatch(rec,cand);
+  const radarScore=Number(radar?.radarScore||0);
+  const xgDiff=Number(rec.xgDiff||((rec.hXGfinal||0)-(rec.aXGfinal||0))||0);
+  const tXG=Number(rec.tXG||((rec.hXGfinal||0)+(rec.aXGfinal||0))||0);
+  let metricOK=false, metricScore=0, detail='';
+
+  if(cand.marketKey==='1'){
+    const gap=(Number(rec.pp?.pHome||0)-Math.max(Number(rec.pp?.pDraw||0),Number(rec.pp?.pAway||0)))*100;
+    metricOK=xgDiff>=0.45&&gap>=8; metricScore=clamp(55+xgDiff*20+gap*1.2,0,100); detail=`xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · gap ${gap.toFixed(1)}pp`;
+  }else if(cand.marketKey==='2'){
+    const gap=(Number(rec.pp?.pAway||0)-Math.max(Number(rec.pp?.pDraw||0),Number(rec.pp?.pHome||0)))*100;
+    metricOK=xgDiff<=-0.45&&gap>=8; metricScore=clamp(55+Math.abs(xgDiff)*20+gap*1.2,0,100); detail=`xGΔ ${xgDiff.toFixed(2)} · gap ${gap.toFixed(1)}pp`;
+  }else if(cand.marketKey==='X'){
+    const pD=Number(rec.pp?.pDraw||0), second=Math.max(Number(rec.pp?.pHome||0),Number(rec.pp?.pAway||0));
+    const gap=(pD-second)*100; metricOK=Math.abs(xgDiff)<=0.35&&gap>=3; metricScore=clamp(60+(0.35-Math.abs(xgDiff))*60+Math.max(gap,0)*2,0,100); detail=`|xGΔ| ${Math.abs(xgDiff).toFixed(2)} · draw gap ${gap.toFixed(1)}pp`;
+  }else if(cand.marketKey==='O2.5'){
+    metricOK=tXG>=2.90&&Number(rec.pp?.pO25||0)>=0.62; metricScore=clamp(55+(tXG-2.9)*20+(Number(rec.pp?.pO25||0)-0.62)*100,0,100); detail=`tXG ${tXG.toFixed(2)}`;
+  }else if(cand.marketKey==='O3.5'){
+    metricOK=tXG>=3.50&&Number(rec.pp?.pO35||0)>=0.52; metricScore=clamp(55+(tXG-3.5)*22+(Number(rec.pp?.pO35||0)-0.52)*120,0,100); detail=`tXG ${tXG.toFixed(2)}`;
+  }else if(cand.marketKey==='COR O8.5'){
+    const exp=Number(rec.expCor||0),conf=Number(rec.cornerConf||0); metricOK=exp>=9.5&&conf>=68; metricScore=clamp(conf+(exp-9.5)*4,0,100); detail=`corners ${exp.toFixed(1)} · conf ${conf.toFixed(0)}%`;
+  }else if(String(cand.marketKey).startsWith('OFF ')){
+    const conf=Number(rec.offside?.bestProb||0),lam=Number(rec.offside?.totLambda||0); metricOK=conf>=68&&_bombOffsideMarketKey(rec)===cand.marketKey; metricScore=clamp(conf+(lam-2)*3,0,100); detail=`offside λ ${lam.toFixed(2)} · signal ${conf.toFixed(0)}%`;
+  }
+
+  const radarOK=radarScore>=BOMB_MIN_RADAR_SCORE;
+  return {ok:radarOK&&metricOK,radarOK,metricOK,radarScore,metricScore,detail,radar};
+}
+
+function _bombVerifiedMinBooks(category){
+  return (category==='1X2'||category==='GOALS')?4:2;
+}
+
+function _bombGapQuality(gapPP){
+  if(gapPP<5) return 0;
+  if(gapPP<8) return 20+(gapPP-5)/3*25;
+  if(gapPP<=18) return 55+(gapPP-8)/10*45;
+  if(gapPP<=22) return 100-(gapPP-18)/4*15;
+  if(gapPP<=30) return 70-(gapPP-22)/8*40;
+  return 0;
+}
+
+function _evaluateBombCandidate(rec,cand,marketPack){
+  if(!marketPack) return null;
+  const quote=marketPack.bombQuote||marketPack;
+  const nv=marketPack.noVig;
+  if(!nv||!Number.isFinite(Number(nv.prob))||Number(nv.books)<2) return null; // no-vig is mandatory
+
   const best=Number(quote.odd), median=Number(quote.median||quote.odd), fair=Number(cand.modelFairOdds);
-  const books=Number(quote.books||1);
-  if(!Number.isFinite(best)||!Number.isFinite(median)||!Number.isFinite(fair)) return null;
-  if(best<BOMB_MIN_MARKET_ODDS || best>BOMB_MAX_MARKET_ODDS || books<BOMB_MIN_BOOKS) return null;
+  const modelProb=Number(cand.modelProb), marketProb=Number(nv.prob), noVigFair=Number(nv.fairOdds);
+  const books=Number(quote.books||1), noVigBooks=Number(nv.books||0);
+  if(!Number.isFinite(best)||!Number.isFinite(median)||!Number.isFinite(fair)||!Number.isFinite(noVigFair)) return null;
+  if(best<BOMB_MIN_MARKET_ODDS||best>BOMB_MAX_MARKET_ODDS) return null;
 
-  const execEdge=best/fair-1;
-  const consensusGap=median/fair-1;
-  const rawQuotes=Array.isArray(quote.quotes)?quote.quotes:[];
-  const agreementCount=rawQuotes.filter(q=>Number(q.odd)>=fair*1.08).length;
-  const agreement=rawQuotes.length ? agreementCount/rawQuotes.length : (consensusGap>=BOMB_MIN_CONSENSUS_GAP?1:0);
+  const probGapPP=(modelProb-marketProb)*100;
+  const execEdge=modelProb*best-1;
+  const priceGap=noVigFair/fair-1;
+  if(probGapPP<5||execEdge<0.08||priceGap<=0) return null;
+
   const dq=_bombDataQuality(rec);
+  const confirm=_bombIndependentConfirmation(rec,cand);
+  const minBooks=_bombVerifiedMinBooks(cand.category);
+  const marketSpreadPP=Number(nv.spreadPP||0);
+  const marketConsistency=clamp(100-marketSpreadPP/12*100,0,100);
+  const alignedCount=(nv.rows||[]).filter(r=>(modelProb-Number(r.prob))*100>=5).length;
+  const marketAlignedPct=noVigBooks?alignedCount/noVigBooks*100:0;
 
-  // Price-dislocation filters — όχι probability thresholds.
-  if(execEdge<BOMB_MIN_EXEC_EDGE) return null;
-  if(consensusGap<BOMB_MIN_CONSENSUS_GAP) return null;
-  if(agreement<BOMB_MIN_AGREEMENT) return null;
-  if(dq<BOMB_MIN_DATA_QUALITY) return null;
+  let status='HIGH_DIVERGENCE',statusLabel='HIGH DIVERGENCE',statusIcon='🟠';
+  if(probGapPP>=BOMB_CONFLICT_GAP_PP){status='CONFLICT';statusLabel='MODEL–MARKET CONFLICT';statusIcon='🚨';}
+  else if(probGapPP>BOMB_VERIFIED_MAX_GAP_PP){status='HIGH_DIVERGENCE';statusLabel='HIGH DIVERGENCE';statusIcon='🟠';}
+  else if(
+    probGapPP>=BOMB_MIN_NOVIG_GAP_PP &&
+    execEdge>=BOMB_MIN_EXEC_EDGE &&
+    dq>=BOMB_MIN_DATA_QUALITY &&
+    noVigBooks>=minBooks &&
+    marketSpreadPP<=BOMB_MAX_MARKET_SPREAD_PP &&
+    confirm.ok
+  ){
+    status='VERIFIED';statusLabel='VERIFIED MISPRICING';statusIcon='💣';
+  }
 
-  // Score = πόσο λάθος φαίνεται η αγορά ως ΤΙΜΗ, όχι πόσο "σίγουρο" είναι το outcome.
-  const consensusScore=clamp((consensusGap-BOMB_MIN_CONSENSUS_GAP)/0.45*45,0,45);
-  const executableScore=clamp((execEdge-BOMB_MIN_EXEC_EDGE)/0.65*25,0,25);
-  const agreementScore=clamp(agreement*15,0,15);
-  const dataScore=clamp(dq/100*10,0,10);
-  const liquidityScore=clamp((books-1)/5*5,0,5);
-  const bombScore=clamp(Math.round(consensusScore+executableScore+agreementScore+dataScore+liquidityScore),0,99);
-  if(bombScore<BOMB_MIN_SCORE) return null;
+  const gapScore=_bombGapQuality(probGapPP);
+  const execScore=clamp((execEdge-0.08)/0.42*100,0,100);
+  const radarScore=clamp(confirm.radarScore,0,100);
+  const coverageScore=clamp(noVigBooks/minBooks*80+(books-minBooks)*4,0,100);
+  let signalScore=Math.round(gapScore*0.30+execScore*0.20+radarScore*0.20+dq*0.15+marketConsistency*0.10+coverageScore*0.05);
+  if(status==='CONFLICT') signalScore=clamp(Math.round(70+(probGapPP-BOMB_CONFLICT_GAP_PP)*1.1+marketConsistency*0.10),0,99);
+  if(status==='HIGH_DIVERGENCE') signalScore=clamp(Math.round(55+Math.min(Math.max(probGapPP-12,0),18)*1.5+confirm.radarScore*0.10+dq*0.05),0,94);
+  if(status==='VERIFIED'&&signalScore<BOMB_MIN_SCORE) status='HIGH_DIVERGENCE',statusLabel='HIGH DIVERGENCE',statusIcon='🟠';
 
   return {
-    fixId:rec.fixId, ht:rec.ht, at:rec.at, lg:rec.lg,
-    date:rec.m?.fixture?.date?.split('T')[0]||'', time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||'',
-    marketKey:cand.marketKey, category:cand.category, label:cand.label, icon:cand.icon,
+    fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,
+    date:rec.m?.fixture?.date?.split('T')[0]||'',time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||'',
+    marketKey:cand.marketKey,category:cand.category,label:cand.label,icon:cand.icon,
+    status,statusLabel,statusIcon,
     modelFairOdds:parseFloat(fair.toFixed(2)),
-    marketMedian:parseFloat(median.toFixed(2)),
-    bestOdds:parseFloat(best.toFixed(2)),
-    bookmaker:quote.bookmaker||'Bookmaker', books,
-    consensusGap:parseFloat((consensusGap*100).toFixed(1)),
+    marketNoVigFairOdds:parseFloat(noVigFair.toFixed(2)),
+    marketNoVigProb:parseFloat((marketProb*100).toFixed(1)),
+    marketMedian:parseFloat(median.toFixed(2)),bestOdds:parseFloat(best.toFixed(2)),
+    bookmaker:quote.bookmaker||'Bookmaker',books,noVigBooks,
+    probabilityGapPP:parseFloat(probGapPP.toFixed(1)),
+    noVigPriceGap:parseFloat((priceGap*100).toFixed(1)),
     executableEdge:parseFloat((execEdge*100).toFixed(1)),
-    agreementPct:parseFloat((agreement*100).toFixed(0)),
-    agreementCount, dataQuality:parseFloat(dq.toFixed(0)), bombScore,
-    breakdown:{consensusScore,executableScore,agreementScore,dataScore,liquidityScore},
-    reason:`APEX fair ${fair.toFixed(2)} · median αγοράς ${median.toFixed(2)} · best ${best.toFixed(2)} · market mispricing +${(consensusGap*100).toFixed(1)}%`
+    marketSpreadPP:parseFloat(marketSpreadPP.toFixed(1)),
+    marketAlignedPct:parseFloat(marketAlignedPct.toFixed(0)),
+    dataQuality:parseFloat(dq.toFixed(0)),radarScore:parseFloat(confirm.radarScore.toFixed(1)),
+    independentOK:confirm.ok,independentDetail:confirm.detail,
+    bombScore:signalScore,
+    reason:`APEX fair ${fair.toFixed(2)} · no-vig market fair ${noVigFair.toFixed(2)} · ΔP ${probGapPP>=0?'+':''}${probGapPP.toFixed(1)}pp · best ${best.toFixed(2)}`
   };
 }
 
-function _persistBombSignals(bombs){
+function _persistBombSignals(verified,diagnostics=[]){
   try{
     const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');
     const map=new Map(store.map(x=>[String(x.fixtureId),x]));
-    // clear stale bomb flags for fixtures in the current scan
-    (window.scannedMatchesData||[]).forEach(r=>{
-      const x=map.get(String(r.fixId)); if(x){ x.isBomb=false; delete x.bombSignal; }
-    });
-    (bombs||[]).forEach(b=>{
-      const x=map.get(String(b.fixId)); if(!x) return;
+    (window.scannedMatchesData||[]).forEach(r=>{const x=map.get(String(r.fixId));if(x){x.isBomb=false;delete x.bombSignal;delete x.marketDiagnostic;}});
+    (diagnostics||[]).forEach(b=>{const x=map.get(String(b.fixId));if(x)x.marketDiagnostic={status:b.status,marketKey:b.marketKey,label:b.label,probabilityGapPP:b.probabilityGapPP,marketNoVigFairOdds:b.marketNoVigFairOdds,bestOdds:b.bestOdds,bombScore:b.bombScore};});
+    (verified||[]).forEach(b=>{
+      const x=map.get(String(b.fixId));if(!x)return;
       x.isBomb=true;
       x.bombSignal={
-        marketKey:b.marketKey,label:b.label,modelFairOdds:b.modelFairOdds,
-        marketMedian:b.marketMedian,bestOdds:b.bestOdds,bookmaker:b.bookmaker,
-        books:b.books,consensusGap:b.consensusGap,executableEdge:b.executableEdge,
-        agreementPct:b.agreementPct,bombScore:b.bombScore
+        marketKey:b.marketKey,label:b.label,modelFairOdds:b.modelFairOdds,marketNoVigFairOdds:b.marketNoVigFairOdds,
+        marketMedian:b.marketMedian,bestOdds:b.bestOdds,bookmaker:b.bookmaker,books:b.books,noVigBooks:b.noVigBooks,
+        probabilityGapPP:b.probabilityGapPP,executableEdge:b.executableEdge,radarScore:b.radarScore,dataQuality:b.dataQuality,bombScore:b.bombScore,status:'VERIFIED'
       };
     });
     localStorage.setItem(LS_PREDS,JSON.stringify([...map.values()]));
-  }catch(e){ console.warn('[APEX] Bomb vault persistence failed',e); }
+  }catch(e){console.warn('[APEX] Bomb vault persistence failed',e);}
 }
 
 window.refreshBombs=async function(opts={}){
-  if(bombLoading) return latestTopLists.bombs||[];
+  if(bombLoading)return latestTopLists.bombs||[];
   const recs=(window.scannedMatchesData||[]).filter(r=>r?.pp&&!isFinished(r.m?.fixture?.status?.short));
-  if(!recs.length){latestTopLists.bombs=[];renderTopSections();return [];}
-  bombLoading=true; latestTopLists.bombs=[]; renderTopSections();
+  if(!recs.length){latestTopLists.bombs=[];latestTopLists.bombDiagnostics=[];renderTopSections();return[];}
+  bombLoading=true;latestTopLists.bombs=[];latestTopLists.bombDiagnostics=[];renderTopSections();
   try{
-    // Prioritize RADAR fixtures so most odds calls are shared with BEST 4,
-    // then fill with highest data-quality matches. This keeps Smart Scan fast.
-    const byId=new Map(recs.map(r=>[r.fixId,r]));
-    const ids=[];
-    for(const s of (latestTopLists.radar||[])){ if(byId.has(s.fixId)&&!ids.includes(s.fixId)) ids.push(s.fixId); if(ids.length>=BOMB_MAX_FIXTURES_TO_PRICE) break; }
+    const byId=new Map(recs.map(r=>[r.fixId,r])),ids=[];
+    for(const sig of(latestTopLists.radar||[])){if(byId.has(sig.fixId)&&!ids.includes(sig.fixId))ids.push(sig.fixId);if(ids.length>=BOMB_MAX_FIXTURES_TO_PRICE)break;}
     const rest=[...recs].sort((a,b)=>_bombDataQuality(b)-_bombDataQuality(a));
-    for(const r of rest){ if(!ids.includes(r.fixId)) ids.push(r.fixId); if(ids.length>=BOMB_MAX_FIXTURES_TO_PRICE) break; }
+    for(const r of rest){if(!ids.includes(r.fixId))ids.push(r.fixId);if(ids.length>=BOMB_MAX_FIXTURES_TO_PRICE)break;}
 
     const priceMap=new Map();
-    const batchSize=Math.max(2,Math.min(5,Math.ceil((API_RATE?.maxConcurrent||4)/2)));
-    let done=0;
+    const batchSize=Math.max(2,Math.min(5,Math.ceil((API_RATE?.maxConcurrent||4)/2)));let done=0;
     for(let i=0;i<ids.length;i+=batchSize){
       const batch=ids.slice(i,i+batchSize);
-      await Promise.all(batch.map(async id=>{
-        try{priceMap.set(id,await fetchBestOddsForFixture(id));}catch{priceMap.set(id,{});}
-        finally{done++;if(!opts.silent)setProgress(done/ids.length*100,`Bomb market scan ${done}/${ids.length}`);}
-      }));
+      await Promise.all(batch.map(async id=>{try{priceMap.set(id,await fetchBestOddsForFixture(id));}catch{priceMap.set(id,{});}finally{done++;if(!opts.silent)setProgress(done/ids.length*100,`No-vig market scan ${done}/${ids.length}`);}}));
     }
 
-    const bombs=[];
+    const diagnostics=[];
     ids.forEach(id=>{
-      const rec=byId.get(id), markets=priceMap.get(id)||{};
-      let bestForMatch=null;
+      const rec=byId.get(id),markets=priceMap.get(id)||{};let bestForMatch=null;
       _bombCandidates(rec).forEach(c=>{
-        const b=_evaluateBombCandidate(rec,c,markets[c.marketKey]);
-        if(b && (!bestForMatch || b.bombScore>bestForMatch.bombScore)) bestForMatch=b;
+        const d=_evaluateBombCandidate(rec,c,markets[c.marketKey]);
+        if(!d)return;
+        const rank={VERIFIED:3,CONFLICT:2,HIGH_DIVERGENCE:1}[d.status]||0;
+        const br=bestForMatch?({VERIFIED:3,CONFLICT:2,HIGH_DIVERGENCE:1}[bestForMatch.status]||0):-1;
+        if(!bestForMatch||rank>br||(rank===br&&d.bombScore>bestForMatch.bombScore))bestForMatch=d;
       });
-      if(bestForMatch) bombs.push(bestForMatch);
+      if(bestForMatch)diagnostics.push(bestForMatch);
     });
-    latestTopLists.bombs=bombs.sort((a,b)=>b.bombScore-a.bombScore||b.consensusGap-a.consensusGap).slice(0,8);
-    _persistBombSignals(latestTopLists.bombs);
-    return latestTopLists.bombs;
-  }finally{
-    bombLoading=false;
-    renderTopSections();
-  }
+
+    const verified=diagnostics.filter(x=>x.status==='VERIFIED').sort((a,b)=>b.bombScore-a.bombScore).slice(0,8);
+    const warnings=diagnostics.filter(x=>x.status!=='VERIFIED').sort((a,b)=>{
+      const pa={CONFLICT:2,HIGH_DIVERGENCE:1}[a.status]||0,pb={CONFLICT:2,HIGH_DIVERGENCE:1}[b.status]||0;
+      return pb-pa||b.probabilityGapPP-a.probabilityGapPP;
+    }).slice(0,8);
+    latestTopLists.bombs=verified;
+    latestTopLists.bombDiagnostics=warnings;
+    _persistBombSignals(verified,warnings);
+    return verified;
+  }finally{bombLoading=false;renderTopSections();}
 };
 
 function buildBombsList(){
-  // v5.8 compatibility shim: Bombs require bookmaker pricing and are built asynchronously.
   latestTopLists.bombs=latestTopLists.bombs||[];
+  latestTopLists.bombDiagnostics=latestTopLists.bombDiagnostics||[];
   return latestTopLists.bombs;
 }
 
-function renderBombsTab(bombs){
-  if(bombLoading && (!bombs||!bombs.length)) return `
-    <div style="text-align:center;color:var(--text-muted);padding:36px 20px;">
-      <div style="font-size:2.5rem;margin-bottom:10px;">💣</div>
-      <div style="font-weight:900;color:var(--text-main);">Bomb Market Scan…</div>
-      <div style="font-size:.8rem;margin-top:6px;">Συγκρίνω APEX fair prices με median και best odds πολλών bookmakers.</div>
-    </div>`;
-  if(!bombs?.length) return `
-    <div style="text-align:center;color:var(--text-muted);padding:36px 20px;">
-      <div style="font-size:2.5rem;margin-bottom:10px;">💣</div>
-      <div style="font-weight:800;font-size:1rem;margin-bottom:6px;">Δεν βρέθηκε σαφής λανθασμένη τιμολόγηση αγοράς</div>
-      <div style="font-size:.8rem;line-height:1.6;max-width:700px;margin:0 auto;">Bomb εμφανίζεται μόνο όταν η median αγορά είναι ≥ ${(BOMB_MIN_CONSENSUS_GAP*100).toFixed(0)}% ακριβότερη από την APEX fair price, η καλύτερη εκτελέσιμη τιμή έχει edge ≥ ${(BOMB_MIN_EXEC_EDGE*100).toFixed(0)}%, και υπάρχει συμφωνία από τουλάχιστον ${BOMB_MIN_BOOKS} bookmakers.</div>
-      <button class="btn btn-outline" style="margin-top:14px;" onclick="window.refreshBombs()">↻ Νέος έλεγχος αγοράς</button>
-    </div>`;
+function _renderBombCard(b,i,diagnostic=false){
+  const statusCol=b.status==='VERIFIED'?'var(--accent-green)':b.status==='CONFLICT'?'var(--accent-red)':'var(--accent-gold)';
+  const scoreLabel=b.status==='VERIFIED'?'VERIFIED SCORE':b.status==='CONFLICT'?'CONFLICT SEVERITY':'DIVERGENCE SCORE';
+  return `<div onclick="scrollToMatchAndOpen('row-${b.fixId}')" style="padding:14px;background:var(--bg-base);border:1px solid var(--border-light);border-top:4px solid ${statusCol};border-radius:9px;cursor:pointer;box-shadow:var(--shadow-sm);">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div><div style="font-size:.62rem;color:var(--text-dim);font-weight:800;">#${i+1} · ${b.category}</div><div style="font-size:.95rem;font-weight:900;margin-top:3px;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:.68rem;color:var(--text-muted);">${esc(b.lg||'')} · ${b.date} ${b.time}</div></div>
+      <div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${statusCol};">${b.bombScore}</div><div style="font-size:.52rem;color:var(--text-dim);font-weight:800;">${scoreLabel}</div></div>
+    </div>
+    <div style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:3px 8px;border-radius:6px;background:${statusCol}12;border:1px solid ${statusCol}35;color:${statusCol};font-size:.68rem;font-weight:900;">${b.statusIcon} ${b.statusLabel}</div>
+    <div style="font-size:.9rem;font-weight:900;color:${statusCol};margin-top:8px;">${b.icon} ${esc(b.label)}</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;">
+      <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">APEX FAIR</div><b style="font-family:var(--font-mono);">${b.modelFairOdds.toFixed(2)}</b></div>
+      <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">NO-VIG FAIR</div><b style="font-family:var(--font-mono);">${b.marketNoVigFairOdds.toFixed(2)}</b></div>
+      <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">MEDIAN ODDS</div><b style="font-family:var(--font-mono);">${b.marketMedian.toFixed(2)}</b></div>
+      <div style="background:rgba(22,163,74,.08);padding:7px;border-radius:6px;text-align:center;border:1px solid rgba(22,163,74,.16);"><div style="font-size:.52rem;color:var(--text-dim);">BEST ODDS</div><b style="font-family:var(--font-mono);color:var(--accent-green);">${b.bestOdds.toFixed(2)}</b></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:7px;">
+      <div style="padding:7px;background:${statusCol}0D;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">ΔP APEX–MARKET</div><b style="font-family:var(--font-mono);color:${statusCol};">+${b.probabilityGapPP.toFixed(1)}pp</b></div>
+      <div style="padding:7px;background:rgba(22,163,74,.05);border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">EXECUTABLE EDGE</div><b style="font-family:var(--font-mono);color:var(--accent-green);">+${b.executableEdge.toFixed(1)}%</b></div>
+      <div style="padding:7px;background:var(--bg-surface);border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">MARKET SPREAD</div><b style="font-family:var(--font-mono);">${b.marketSpreadPP.toFixed(1)}pp</b></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px;padding-top:8px;border-top:1px solid var(--border);font-size:.66rem;color:var(--text-muted);">
+      <span>${esc(b.bookmaker)} · prices ${b.books} · no-vig sets ${b.noVigBooks}</span><span>RADAR ${b.radarScore.toFixed(0)} · Data ${b.dataQuality}/100 · Books aligned ${b.marketAlignedPct}%</span>
+    </div>
+    <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;">${esc(b.independentDetail||'')}</div>
+  </div>`;
+}
 
-  const col=s=>s>=85?'var(--accent-green)':s>=75?'var(--accent-gold)':'var(--accent-red)';
+function renderBombsTab(bombs){
+  const diagnostics=latestTopLists.bombDiagnostics||[];
+  if(bombLoading&&(!bombs||!bombs.length)&&!diagnostics.length)return `<div style="text-align:center;color:var(--text-muted);padding:36px 20px;"><div style="font-size:2.5rem;margin-bottom:10px;">💣</div><div style="font-weight:900;color:var(--text-main);">No-vig Market Scan…</div><div style="font-size:.8rem;margin-top:6px;">Αφαιρώ bookmaker margin και ελέγχω RADAR/xG/data quality πριν χαρακτηρίσω κάτι Bomb.</div></div>`;
+
   return `<div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:11px 13px;background:rgba(220,38,38,.05);border:1px solid rgba(220,38,38,.18);border-radius:9px;">
-      <div><strong style="color:var(--accent-red);">💣 MARKET MISPRICING BOMBS</strong><div style="font-size:.72rem;color:var(--text-muted);margin-top:3px;">Δεν ψάχνω «υψηλή πιθανότητα». Ψάχνω λάθος τιμή αγοράς σε σχέση με την APEX fair price.</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:11px 13px;background:rgba(22,163,74,.05);border:1px solid rgba(22,163,74,.18);border-radius:9px;">
+      <div><strong style="color:var(--accent-green);">💣 NO-VIG VERIFIED BOMBS</strong><div style="font-size:.72rem;color:var(--text-muted);margin-top:3px;">No-vig consensus + ανεξάρτητη επιβεβαίωση. Απόκλιση &gt;${BOMB_VERIFIED_MAX_GAP_PP.toFixed(0)}pp δεν θεωρείται αυτόματα καλύτερη· &gt;${BOMB_CONFLICT_GAP_PP.toFixed(0)}pp σημαίνεται ως Model–Market Conflict.</div></div>
       <button class="btn btn-outline" style="height:32px;font-size:.72rem;" onclick="window.refreshBombs()">↻ Refresh Market</button>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;">
-      ${bombs.map((b,i)=>`<div onclick="scrollToMatchAndOpen('row-${b.fixId}')" style="padding:14px;background:var(--bg-base);border:1px solid var(--border-light);border-top:4px solid ${col(b.bombScore)};border-radius:9px;cursor:pointer;box-shadow:var(--shadow-sm);">
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-          <div><div style="font-size:.62rem;color:var(--text-dim);font-weight:800;">#${i+1} · ${b.category}</div><div style="font-size:.95rem;font-weight:900;margin-top:3px;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:.68rem;color:var(--text-muted);">${esc(b.lg||'')} · ${b.date} ${b.time}</div></div>
-          <div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${col(b.bombScore)};">${b.bombScore}</div><div style="font-size:.55rem;color:var(--text-dim);font-weight:800;">MISPRICING SCORE</div></div>
-        </div>
-        <div style="font-size:.9rem;font-weight:900;color:var(--accent-red);margin-top:9px;">${b.icon} ${esc(b.label)}</div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">
-          <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.55rem;color:var(--text-dim);">APEX FAIR</div><b style="font-family:var(--font-mono);">${b.modelFairOdds.toFixed(2)}</b></div>
-          <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.55rem;color:var(--text-dim);">MARKET MEDIAN</div><b style="font-family:var(--font-mono);">${b.marketMedian.toFixed(2)}</b></div>
-          <div style="background:rgba(22,163,74,.08);padding:7px;border-radius:6px;text-align:center;border:1px solid rgba(22,163,74,.16);"><div style="font-size:.55rem;color:var(--text-dim);">BEST ODDS</div><b style="font-family:var(--font-mono);color:var(--accent-green);">${b.bestOdds.toFixed(2)}</b></div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px;">
-          <div style="padding:7px;background:rgba(220,38,38,.05);border-radius:6px;text-align:center;"><div style="font-size:.55rem;color:var(--text-dim);">CONSENSUS MISPRICING</div><b style="font-family:var(--font-mono);color:var(--accent-red);">+${b.consensusGap.toFixed(1)}%</b></div>
-          <div style="padding:7px;background:rgba(22,163,74,.05);border-radius:6px;text-align:center;"><div style="font-size:.55rem;color:var(--text-dim);">EXECUTABLE EDGE</div><b style="font-family:var(--font-mono);color:var(--accent-green);">+${b.executableEdge.toFixed(1)}%</b></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:9px;padding-top:8px;border-top:1px solid var(--border);font-size:.68rem;color:var(--text-muted);">
-          <span>${esc(b.bookmaker)} · ${b.books} books</span><span>Agreement ${b.agreementPct}% · Data ${b.dataQuality}/100</span>
-        </div>
-      </div>`).join('')}
-    </div>
+    ${bombs?.length?`<div style="font-size:.68rem;font-weight:900;color:var(--accent-green);margin:4px 0 8px;">✅ VERIFIED MISPRICINGS — ${bombs.length}</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;">${bombs.map((b,i)=>_renderBombCard(b,i,false)).join('')}</div>`:`<div style="text-align:center;color:var(--text-muted);padding:24px 16px;border:1px dashed var(--border-light);border-radius:9px;"><div style="font-size:1.8rem;">🛡️</div><div style="font-weight:900;margin-top:5px;">Δεν βρέθηκε Verified Bomb</div><div style="font-size:.75rem;margin-top:4px;">Το σύστημα δεν μετατρέπει ακραία διαφωνία με την αγορά σε «σίγουρη βόμβα».</div></div>`}
+    ${diagnostics.length?`<div style="font-size:.68rem;font-weight:900;color:var(--accent-gold);margin:16px 0 8px;">⚠️ MARKET DIAGNOSTICS — δεν καταγράφονται ως Bombs</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;">${diagnostics.map((b,i)=>_renderBombCard(b,i,true)).join('')}</div>`:''}
   </div>`;
 }
 
