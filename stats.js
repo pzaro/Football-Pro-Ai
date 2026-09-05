@@ -95,7 +95,7 @@ let teamStatsCache = new BoundedCache(150),
     liveStatsCache = new BoundedCache(50),
     lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[], valueBets:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -182,7 +182,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.0';
+const APP_VERSION   = 'v5.1';
 const BUILD_DATE    = '05/09/2026';
 const BUILD_TIME    = 'API-DIAG FIX';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
@@ -466,6 +466,13 @@ window.exportExcel = function() {
       'Οφσάιντ HOME (avg)': o.hLambda,
       'Οφσάιντ AWAY (avg)': o.aLambda,
       'Οφσάιντ Σύνολο':     o.totLambda,
+      'P HOME ≥2 Οφσάιντ':  o.hPOff2,
+      'P AWAY ≥2 Οφσάιντ':  o.aPOff2,
+      'P Σύνολο ≥3':        d.offside?.pTotOff25 ?? '',
+      'P Σύνολο ≥4':        d.offside?.pTotOff35 ?? '',
+      'P Αμφότερες ≥1':     d.offside?.pBothOff1 ?? '',
+      'Offside Signal':      d.offside?.bestSignal ?? '',
+      'Offside Conf %':      d.offside?.bestProb ?? '',
       'P(HOME ≥2 Off)':     o.hPOff2,
       'P(AWAY ≥2 Off)':     o.aPOff2,
       'P(Αμφότερες ≥2 Off)':o.pBothOff2,
@@ -1514,8 +1521,26 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
   const aPOff1  = poissonOffGe(aOffLambda, 1);  // P(AWAY ≥1)
   const aPOff2  = poissonOffGe(aOffLambda, 2);  // P(AWAY ≥2)
   const aPOff3  = poissonOffGe(aOffLambda, 3);  // P(AWAY ≥3)
+  const pBothOff1 = hPOff1 * aPOff1;            // P(αμφότερες ≥1)
   const pBothOff2 = hPOff2 * aPOff2;            // P(αμφότερες ≥2)
-  const pTotOff35 = poissonOffGe(totOffLambda, 4); // P(σύνολο ≥4)
+  const pTotOff25 = poissonOffGe(totOffLambda, 3); // P(σύνολο ≥3 = Over 2.5)
+  const pTotOff35 = poissonOffGe(totOffLambda, 4); // P(σύνολο ≥4 = Over 3.5)
+  const pTotOff45 = poissonOffGe(totOffLambda, 5); // P(σύνολο ≥5 = Over 4.5)
+
+  // Αυτόνομο offside market signal. Δεν αλλάζει το κύριο omegaPick.
+  // Δίνει ξεχωριστή ένδειξη μόνο όταν η Poisson πιθανότητα είναι επαρκής.
+  const offsideCandidates = [
+    { market:'ΣΥΝΟΛΟ OVER 2.5 ΟΦΣΑΪΝΤ', prob:pTotOff25 },
+    { market:'HOME OVER 1.5 ΟΦΣΑΪΝΤ',   prob:hPOff2 },
+    { market:'AWAY OVER 1.5 ΟΦΣΑΪΝΤ',   prob:aPOff2 },
+    { market:'ΑΜΦΟΤΕΡΕΣ ≥1 ΟΦΣΑΪΝΤ',    prob:pBothOff1 },
+    { market:'ΣΥΝΟΛΟ OVER 3.5 ΟΦΣΑΪΝΤ', prob:pTotOff35 },
+    { market:'ΑΜΦΟΤΕΡΕΣ ≥2 ΟΦΣΑΪΝΤ',    prob:pBothOff2 },
+  ].sort((a,b)=>b.prob-a.prob);
+  const bestOffside = offsideCandidates[0];
+  const offsideConf = bestOffside ? bestOffside.prob*100 : 0;
+  const offsideGrade = offsideConf>=82?'A+':offsideConf>=76?'A':offsideConf>=70?'B+':offsideConf>=65?'B':'C';
+
   const offside = {
     hLambda:parseFloat(hOffLambda.toFixed(2)),
     aLambda:parseFloat(aOffLambda.toFixed(2)),
@@ -1526,8 +1551,15 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
     aPOff1:parseFloat((aPOff1*100).toFixed(1)),
     aPOff2:parseFloat((aPOff2*100).toFixed(1)),
     aPOff3:parseFloat((aPOff3*100).toFixed(1)),
+    pBothOff1:parseFloat((pBothOff1*100).toFixed(1)),
     pBothOff2:parseFloat((pBothOff2*100).toFixed(1)),
+    pTotOff25:parseFloat((pTotOff25*100).toFixed(1)),
     pTotOff35:parseFloat((pTotOff35*100).toFixed(1)),
+    pTotOff45:parseFloat((pTotOff45*100).toFixed(1)),
+    bestSignal: bestOffside?.market || 'ΧΩΡΙΣ ΣΗΜΑ',
+    bestProb: parseFloat(offsideConf.toFixed(1)),
+    grade: offsideGrade,
+    reliable: offsideConf >= 70,
   };
   
   let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Δεν υπάρχει σαφές στατιστικό πλεονέκτημα για αυτό το ματς.',pickScore=0;
@@ -1742,6 +1774,7 @@ async function analyzeMatchSafe(m,index,total){
           hPoss: statVal(hs, 'Ball Possession'), aPoss: statVal(as, 'Ball Possession'),
           hCor: statVal(hs, 'Corner Kicks'), aCor: statVal(as, 'Corner Kicks'),
           hCrd: statVal(hs, 'Yellow Cards') + statVal(hs, 'Red Cards'), aCrd: statVal(as, 'Yellow Cards') + statVal(as, 'Red Cards'),
+          hOff: statVal(hs, 'Offsides'), aOff: statVal(as, 'Offsides'),
           hXg: statVal(hs, 'expected_goals'), aXg: statVal(as, 'expected_goals')
         };
       }
@@ -2998,6 +3031,14 @@ function rebuildTopLists(){
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
   latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('ΠΑΝΩ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
+
+  // 🚫 OFFSIDES — ανεξάρτητη αγορά από το κύριο omegaPick
+  // Περιλαμβάνει όλους τους ενεργούς αγώνες με επαρκή offside confidence.
+  latestTopLists.offsides = (window.scannedMatchesData||[])
+    .filter(x => !isFinished(x.m?.fixture?.status?.short) && x.offside && (x.offside.bestProb||0) >= 65)
+    .sort((a,b) => (b.offside?.bestProb||0) - (a.offside?.bestProb||0))
+    .slice(0,12);
+
   // Build value bets from existing odds data
   buildValueBetsList();
   // Build bombs
@@ -3043,6 +3084,7 @@ function renderTopSections(){
     {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
     {id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'},
+    {id:'offsides', lbl:'🚫 Οφσάιντ',                                      d:latestTopLists.offsides||[], sk:null,         sl:null, special:'offsides'},
     {id:'exact',    lbl:`🎯 Ακριβές`,                                      d:latestTopLists.exact,      sk:'exactConf',  sl:'CONF'},
     {id:'players',  lbl:'👥 Παίκτες',                                      d:latestTopLists.players,    sk:null,         sl:null}
   ];
@@ -3073,6 +3115,8 @@ function renderTopSections(){
       html += renderTop3Certainty(tab.d);
     } else if(tab.id==='bombs'){
       html += renderBombsTab(tab.d);
+    } else if(tab.id==='offsides'){
+      html += renderOffsidesTab(tab.d);
     } else if(!tab.d.length){
       html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
     } else {
@@ -3106,6 +3150,42 @@ function renderTopSections(){
     html+=`</div>`;
   });
   html+=`</div>`;t.innerHTML=html;
+}
+
+function renderOffsidesTab(matches) {
+  if(!matches?.length) return `<div style="text-align:center;color:var(--text-muted);padding:30px;font-weight:600;">Δεν βρέθηκαν offside signals ≥65%. Εκτελέστε Scan ή επιλέξτε περισσότερα πρωταθλήματα.</div>`;
+
+  const rows = matches.map((x, i) => {
+    const o = x.offside || {};
+    const conf = Number(o.bestProb||0);
+    const col = conf>=80?'var(--accent-green)':conf>=70?'var(--accent-gold)':'var(--accent-blue)';
+    const reliable = conf>=70;
+    return `<div style="background:var(--bg-base);border:1px solid ${reliable?'rgba(45,212,191,0.28)':'var(--border-light)'};border-radius:8px;padding:12px 14px;margin-bottom:9px;">
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        <div style="font-family:var(--font-mono);font-size:0.95rem;color:var(--text-dim);min-width:24px;">#${i+1}</div>
+        <div style="flex:1;min-width:220px;cursor:pointer;" onclick="scrollToMatchAndOpen('row-${x.fixId}')">
+          <div style="font-size:0.95rem;font-weight:800;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;text-transform:uppercase;">${esc(x.lg||'')}</div>
+          <div style="font-size:0.8rem;color:${col};font-weight:800;margin-top:5px;">🚫 ${esc(o.bestSignal||'ΧΩΡΙΣ ΣΗΜΑ')} · ${conf.toFixed(1)}% · Grade ${esc(o.grade||'—')}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(86px,1fr));gap:5px;min-width:300px;">
+          <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-dim);">HOME λ</div><div style="font-family:var(--font-mono);font-weight:800;color:var(--accent-gold);">${Number(o.hLambda||0).toFixed(2)}</div></div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-dim);">AWAY λ</div><div style="font-family:var(--font-mono);font-weight:800;color:var(--accent-blue);">${Number(o.aLambda||0).toFixed(2)}</div></div>
+          <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-dim);">TOTAL λ</div><div style="font-family:var(--font-mono);font-weight:800;">${Number(o.totLambda||0).toFixed(2)}</div></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(6,minmax(85px,1fr));gap:5px;margin-top:9px;font-family:var(--font-mono);font-size:0.68rem;">
+        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">H ≥2<br><b>${Number(o.hPOff2||0).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">A ≥2<br><b>${Number(o.aPOff2||0).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Tot ≥3<br><b>${Number(o.pTotOff25||0).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Tot ≥4<br><b>${Number(o.pTotOff35||0).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Both ≥1<br><b>${Number(o.pBothOff1||0).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Both ≥2<br><b>${Number(o.pBothOff2||0).toFixed(1)}%</b></div>
+      </div>
+      <div style="font-size:0.62rem;color:var(--text-dim);margin-top:7px;line-height:1.45;">Poisson projection από πρόσφατο μέσο όρο οφσάιντ της κάθε ομάδας. Το offside signal είναι ανεξάρτητο από το κύριο match pick.</div>
+    </div>`;
+  }).join('');
+  return `<div>${rows}</div>`;
 }
 
 // ── Sort state για Players tab ──────────────────────────────
@@ -3622,12 +3702,16 @@ function buildAccordionHTML(x) {
         <div class="accordion-row">
           <span>Σύνολο</span>
           <span class="data-num">${x.offside.totLambda.toFixed(1)}
-            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥4: ${x.offside.pTotOff35}%</span>
+            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥3: ${x.offside.pTotOff25}% · ≥4: ${x.offside.pTotOff35}% · ≥5: ${x.offside.pTotOff45}%</span>
           </span>
         </div>
         <div class="accordion-row" style="color:${x.offside.pBothOff2>=50?'var(--accent-green)':x.offside.pBothOff2>=35?'var(--accent-gold)':'var(--text-muted)'};">
-          <span>Αμφότερες ≥2</span>
-          <span class="data-num">${x.offside.pBothOff2}%</span>
+          <span>Αμφότερες ≥1 / ≥2</span>
+          <span class="data-num">${x.offside.pBothOff1}% / ${x.offside.pBothOff2}%</span>
+        </div>
+        <div style="margin-top:7px;padding:7px 9px;border-radius:6px;background:${x.offside.reliable?'rgba(45,212,191,0.08)':'rgba(77,184,255,0.06)'};border:1px solid ${x.offside.reliable?'rgba(45,212,191,0.22)':'var(--border)'};">
+          <div style="font-size:0.6rem;color:var(--text-dim);text-transform:uppercase;font-weight:700;">Καλύτερο Offside Signal</div>
+          <div style="font-size:0.78rem;font-weight:800;color:${x.offside.bestProb>=80?'var(--accent-green)':x.offside.bestProb>=70?'var(--accent-gold)':'var(--accent-blue)'};margin-top:2px;">${x.offside.bestSignal} — ${x.offside.bestProb}% · Grade ${x.offside.grade}</div>
         </div>
         <div style="display:flex;gap:4px;margin-top:6px;font-size:0.62rem;font-family:var(--font-mono);">
           <span style="flex:1;text-align:center;background:var(--bg-surface);border-radius:4px;padding:3px;">🏠≥1: ${x.offside.hPOff1}%</span>
@@ -4236,6 +4320,7 @@ function renderSummaryTable() {
       const aPoss   = x.actStats?.aPoss||'—';
       const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
       const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
+      const hOffAct = x.actStats?.hOff||0, aOffAct = x.actStats?.aOff||0;
 
       // ── Προβλέψεις μοντέλου
       const hXGPred  = Number(x.hXGfinal||0).toFixed(2);
@@ -4251,6 +4336,12 @@ function renderSummaryTable() {
       const totCrdAct  = hCrdAct + aCrdAct;
       const crdDev = Math.abs(totCrdAct - Number(totCrdPred));
       const crdCol = crdDev < 1.5 ? 'var(--accent-green)' : crdDev < 3 ? 'var(--accent-gold)' : 'var(--accent-red)';
+      const hOffPred = Number(x.offside?.hLambda||0);
+      const aOffPred = Number(x.offside?.aLambda||0);
+      const totOffPred = hOffPred + aOffPred;
+      const totOffAct = hOffAct + aOffAct;
+      const offDev = Math.abs(totOffAct - totOffPred);
+      const offCol = offDev < 1.0 ? 'var(--accent-green)' : offDev < 2.0 ? 'var(--accent-gold)' : 'var(--accent-red)';
 
       // ── Σύγκριση: πράσινο αν η πρόβλεψη ήταν εντός ±20%, κόκκινο αν πολύ έξω
       const xgDev = Math.abs((Number(hXGAct)+Number(aXGAct)) - Number(tXGPred));
@@ -4306,6 +4397,7 @@ function renderSummaryTable() {
           </td>
           <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${hCorAct}–${aCorAct} (${hCorAct+aCorAct})`, corCol)}</td>
           <td>${pvA(`${hCrdPred}–${aCrdPred} (${totCrdPred})`, `${hCrdAct}–${aCrdAct} (${totCrdAct})`, crdCol)}</td>
+          <td>${pvA(`${hOffPred.toFixed(1)}–${aOffPred.toFixed(1)} (${totOffPred.toFixed(1)})`, `${hOffAct}–${aOffAct} (${totOffAct})`, offCol)}</td>
           <td style="font-size:0.78rem;font-weight:700;color:${x.strength>=70?'var(--accent-green)':'var(--text-muted)'};max-width:140px;">
             ${esc(pick.split(' ').slice(0,4).join(' ')||'—')}
             ${x.strength>=70?`<div style="font-size:0.6rem;color:var(--text-muted);">${x.strength?.toFixed(0)}% conf</div>`:''}
@@ -4332,6 +4424,7 @@ function renderSummaryTable() {
         tXG:   { label:'Total xG',        pred:[], actual:[], errors:[] },
         corners:{ label:'Κόρνερ (Σύν.)', pred:[], actual:[], errors:[] },
         cards:  { label:'Κάρτες (Σύν.)', pred:[], actual:[], errors:[] },
+        offsides:{ label:'Οφσάιντ (Σύν.)', pred:[], actual:[], errors:[] },
         goals:  { label:'Γκολ (Σύν.)',   pred:[], actual:[], errors:[] },
       };
 
@@ -4341,18 +4434,22 @@ function renderSummaryTable() {
         const aXGAct = Number(x.actStats?.aXg||0);
         const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
         const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
+        const hOffAct = x.actStats?.hOff||0, aOffAct = x.actStats?.aOff||0;
         const hXGPred = Number(x.hXGfinal||0);
         const aXGPred = Number(x.aXGfinal||0);
         const hCorPred = Number(x.hProjCor || x.expCor/2 || 0);
         const aCorPred = Number(x.aProjCor || x.expCor/2 || 0);
         const hCrdPred = Number(x.hS?.crd||0);
         const aCrdPred = Number(x.aS?.crd||0);
+        const hOffPred = Number(x.offside?.hLambda||0);
+        const aOffPred = Number(x.offside?.aLambda||0);
 
         metrics.xGH.pred.push(hXGPred);   metrics.xGH.actual.push(hXGAct);
         metrics.xGA.pred.push(aXGPred);   metrics.xGA.actual.push(aXGAct);
         metrics.tXG.pred.push(hXGPred+aXGPred); metrics.tXG.actual.push(hXGAct+aXGAct);
         metrics.corners.pred.push(hCorPred+aCorPred); metrics.corners.actual.push(hCorAct+aCorAct);
         metrics.cards.pred.push(hCrdPred+aCrdPred);   metrics.cards.actual.push(hCrdAct+aCrdAct);
+        metrics.offsides.pred.push(hOffPred+aOffPred); metrics.offsides.actual.push(hOffAct+aOffAct);
         metrics.goals.pred.push(hXGPred+aXGPred);     metrics.goals.actual.push(ah+aa);
       });
 
@@ -4436,7 +4533,7 @@ function renderSummaryTable() {
 
       const rankHtml = ranked.map((r,i) => {
         const col = r.corr>=0.7?'var(--accent-green)':r.corr>=0.4?'var(--accent-gold)':'var(--accent-red)';
-        const medal = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣'][i]||`${i+1}.`;
+        const medal = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣'][i]||`${i+1}.`;
         return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
           <span style="font-size:0.9rem;flex-shrink:0;">${medal}</span>
           <span style="font-size:0.72rem;color:var(--text-sub);flex:1;">${r.label}</span>
@@ -4461,7 +4558,7 @@ function renderSummaryTable() {
           <!-- Metric Cards Grid -->
           <div>
             <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Ακρίβεια ανά Μέγεθος</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">${mCards}</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">${mCards}</div>
           </div>
 
           <!-- Correlation Ranking -->
@@ -4499,6 +4596,7 @@ function renderSummaryTable() {
             <th>Possession</th>
             <th>Κόρνερ (Π→Α)</th>
             <th>Κάρτες (Π→Α)</th>
+            <th>Οφσάιντ (Π→Α)</th>
             <th>Signal</th>
             <th>Result</th>
           </tr></thead>
