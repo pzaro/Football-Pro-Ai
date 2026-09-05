@@ -173,10 +173,10 @@ const _apiQueue = []; let _apiActive = 0;
 // Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
 // Ultra Plan: 75.000 req/day → ~52 req/sec max
 // 25 concurrent + 20ms gap = ~40 req/sec (ασφαλές)
-// Ultra plan: 75k req/day — ασφαλές όριο για σταθερά δεδομένα
-// Browser: max ~6 concurrent per host → 10 είναι ήδη το πρακτικό max
-const MAX_CONCURRENT = 10;
-const REQUEST_GAP_MS = 100; // 100ms gap = ~8 req/sec σταθερά χωρίς drops
+// Ultra plan: 75k req/day = ~52 req/sec
+// Browser HTTP/2: concurrent multiplexing → 20 safe, 35ms gap = ~25 req/sec
+const MAX_CONCURRENT = 20;
+const REQUEST_GAP_MS = 35;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -184,7 +184,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '08:20 EET';
+const BUILD_TIME    = '08:39 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -613,8 +613,8 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
 async function _executeRequest(path,resolve){
-  // Jitter 0-50ms για ομαλή κατανομή requests (αποφυγή burst)
-  await new Promise(r=>setTimeout(r,Math.random()*50));
+  // Jitter 0-20ms
+  await new Promise(r=>setTimeout(r,Math.random()*20));
   const MAX_RETRIES=3;
   let resolved=false;
   try{
@@ -656,9 +656,38 @@ async function _executeRequest(path,resolve){
 }
 window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
 
-async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
-async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
-async function getStand(lg,s){const k=`${lg}_${s}`;if(standCache.has(k))return standCache.get(k);const d=await apiReq(`standings?league=${lg}&season=${s}`);const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];standCache.set(k,f);return f;}
+async function getTStats(t,lg,s){
+  const k=`${t}_${lg}_${s}`;
+  if(teamStatsCache.has(k))return teamStatsCache.get(k);
+  const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);
+  const res=d?.response||{};
+  teamStatsCache.set(k,res);
+  return res;
+}
+
+async function getLFix(t,lg,s){
+  const k=`${t}_${lg}_${s}`;
+  if(lastFixCache.has(k))return lastFixCache.get(k);
+  // Πρώτα: ζητά season=2026
+  const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);
+  let res=d?.response||[];
+  // Αν λίγα ματς στη σεζόν 2026 (αρχές σεζόν), παίρνουμε τα τελευταία 20 cross-season
+  if(res.length<6){
+    const d2=await apiReq(`fixtures?team=${t}&league=${lg}&last=20&status=FT`);
+    const cross=d2?.response||[];
+    if(cross.length>res.length) res=cross;
+  }
+  lastFixCache.set(k,res);
+  return res;
+}
+async function getStand(lg,s){
+  const k=`${lg}_${s}`;
+  if(standCache.has(k))return standCache.get(k);
+  const d=await apiReq(`standings?league=${lg}&season=${s}`);
+  const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
+  standCache.set(k,f);
+  return f;
+}
 async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
 
 // 📋 LINEUPS per fixture (1 credit, cached until sub detected)
@@ -888,6 +917,7 @@ async function buildIntel(tId,lg,s,isHome){
 
 async function _buildIntelImpl(tId,lg,s,isHome){
   try{
+    // Άντληση δεδομένων σεζόν 2026 — cross-season fallback αν λίγα ματς
     const[ss,allFix]=await Promise.all([getTStats(tId,lg,s),getLFix(tId,lg,s)]);
     const gen=allFix.slice(0,8);
     const split=allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
@@ -1706,6 +1736,7 @@ window.runScan=async function(){
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
+  console.log('[APEX] Scan started. API_KEY:', API_KEY.slice(0,8)+'...', 'MAX_CONCURRENT:', MAX_CONCURRENT, 'GAP:', REQUEST_GAP_MS+'ms');
   // Clear team intel cache — fresh data για κάθε scan
   try { _buildIntelPromises.clear(); _buildIntelCache.clear(); } catch {}
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
@@ -1734,7 +1765,7 @@ window.runScan=async function(){
 
     // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
     // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
-    const SCAN_BATCH = 4; // Ασφαλές: 4 ταυτόχρονα, καθένα κάνει ~8 API calls = 32 total
+    const SCAN_BATCH = 6; // Ultra: 6 ταυτόχρονα = ~60 calls in-flight
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
