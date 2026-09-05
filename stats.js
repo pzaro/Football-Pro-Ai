@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.0 — MASTER ENGINE (ULTIMATE EDITION)
+// APEX OMEGA v5.4 — MASTER ENGINE · RADAR EDITION
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -76,26 +76,64 @@ function acr(term) {
 // Όταν γεμίσει, διαγράφει το παλαιότερο entry (FIFO approximation)
 // ----------------------------------------------------------------
 class BoundedCache {
-  constructor(maxSize=120){this._map=new Map();this._max=maxSize;}
-  has(k){return this._map.has(k);}
-  get(k){if(!this._map.has(k))return undefined;const v=this._map.get(k);this._map.delete(k);this._map.set(k,v);return v;}
-  set(k,v){if(this._map.has(k))this._map.delete(k);else if(this._map.size>=this._max)this._map.delete(this._map.keys().next().value);this._map.set(k,v);}
+  constructor(maxSize=120, defaultTtlMs=Infinity){
+    this._map=new Map(); this._max=maxSize; this._ttl=defaultTtlMs;
+  }
+  _isExpired(entry){return !!entry && Number.isFinite(entry.expiresAt) && Date.now()>=entry.expiresAt;}
+  has(k){
+    const e=this._map.get(k);
+    if(!e)return false;
+    if(this._isExpired(e)){this._map.delete(k);return false;}
+    return true;
+  }
+  get(k){
+    const e=this._map.get(k);
+    if(!e)return undefined;
+    if(this._isExpired(e)){this._map.delete(k);return undefined;}
+    this._map.delete(k); this._map.set(k,e); // LRU touch
+    return e.value;
+  }
+  set(k,v,ttlMs=this._ttl){
+    if(this._map.has(k))this._map.delete(k);
+    else if(this._map.size>=this._max)this._map.delete(this._map.keys().next().value);
+    const expiresAt=Number.isFinite(ttlMs)?Date.now()+Math.max(0,ttlMs):Infinity;
+    this._map.set(k,{value:v,expiresAt});
+    return v;
+  }
+  delete(k){this._map.delete(k);}
   clear(){this._map.clear();}
-  get size(){return this._map.size;}
+  get size(){
+    for(const [k,e] of this._map){if(this._isExpired(e))this._map.delete(k);}
+    return this._map.size;
+  }
 }
 
-let teamStatsCache = new BoundedCache(150),
-    lastFixCache   = new BoundedCache(150),
-    standCache     = new BoundedCache(60),
-    h2hCache       = new BoundedCache(200),
-    scorersCache   = new BoundedCache(60),
-    assistsCache   = new BoundedCache(60),
-    cardsCache     = new BoundedCache(60),
-    injuryCache    = new BoundedCache(200),
-    liveStatsCache = new BoundedCache(50),
-    lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
+const CACHE_TTL = Object.freeze({
+  TEAM_STATS:      6*60*60*1000,   // team statistics: αργή μεταβολή
+  LAST_FIXTURES:   15*60*1000,     // πρόσφατα FT fixtures
+  STANDINGS:       60*60*1000,     // standings ~ hourly
+  H2H:             12*60*60*1000,  // historical
+  LEAGUE_PLAYERS:  60*60*1000,     // scorers / assists / cards
+  INJURIES:        2*60*60*1000,
+  LIVE_STATS:      45*1000,
+  LINEUPS:         5*60*1000,
+  FIXTURE_STATS:   12*60*60*1000,  // χρησιμοποιείται κυρίως σε finished recent matches
+  ODDS:            30*1000,
+  FIXTURE_DAY:     45*1000
+});
+
+let teamStatsCache = new BoundedCache(180, CACHE_TTL.TEAM_STATS),
+    lastFixCache   = new BoundedCache(180, CACHE_TTL.LAST_FIXTURES),
+    standCache     = new BoundedCache(80,  CACHE_TTL.STANDINGS),
+    h2hCache       = new BoundedCache(240, CACHE_TTL.H2H),
+    scorersCache   = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
+    assistsCache   = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
+    cardsCache     = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
+    injuryCache    = new BoundedCache(240, CACHE_TTL.INJURIES),
+    liveStatsCache = new BoundedCache(80,  CACHE_TTL.LIVE_STATS),
+    lineupsCache   = new BoundedCache(140, CACHE_TTL.LINEUPS);  // starting XI per fixture
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
+let latestTopLists = { radar:[], exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -169,22 +207,85 @@ const SETTINGS_MAP = {
 };
 
 const _apiQueue = []; let _apiActive = 0;
-// 🚀 Paid Plan (30 req/sec limit)
-// Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
-// Ultra Plan: 75.000 req/day → ~52 req/sec max
-// 25 concurrent + 20ms gap = ~40 req/sec (ασφαλές)
-// Ultra plan: 75k req/day = ~52 req/sec
-// Browser HTTP/2: concurrent multiplexing → 20 safe, 35ms gap = ~25 req/sec
-const MAX_CONCURRENT = 20;
-const REQUEST_GAP_MS = 35;
+const _apiInflight = new Map();
+const _apiResponseCache = new BoundedCache(300, 30*1000);
+let _apiDrainTimer = null;
+let _nextRequestAt = 0;
+let _globalBackoffUntil = 0;
+
+// Adaptive limiter: ξεκινά με ασφαλές Pro-like pace και αυτορυθμίζεται
+// από τα X-RateLimit-* headers κάθε πραγματικής API απόκρισης.
+const API_RATE = {
+  minuteLimit: null,
+  minuteRemaining: null,
+  dailyLimit: null,
+  dailyRemaining: null,
+  baseRps: 4.5,
+  penalty: 1.0,
+  maxConcurrent: 4,
+  detected: false,
+  last429At: 0,
+  lastLatencyMs: null
+};
+
+const sleep = ms => new Promise(r=>setTimeout(r,Math.max(0,ms||0)));
+const apiClamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+function _headerNum(headers,name){
+  const raw=headers?.get?.(name);
+  if(raw===null||raw===undefined||raw==='')return null;
+  const n=Number(raw); return Number.isFinite(n)?n:null;
+}
+function _effectiveRps(){return apiClamp(API_RATE.baseRps*API_RATE.penalty,0.12,18);}
+function _effectiveGapMs(){
+  let gap=1000/_effectiveRps();
+  if(API_RATE.minuteLimit && API_RATE.minuteRemaining!==null){
+    const ratio=API_RATE.minuteRemaining/Math.max(1,API_RATE.minuteLimit);
+    if(ratio<0.03)gap*=4;
+    else if(ratio<0.08)gap*=2.2;
+    else if(ratio<0.15)gap*=1.4;
+  }
+  return Math.ceil(gap);
+}
+function _updateApiRateFromHeaders(headers){
+  const mLimit=_headerNum(headers,'X-RateLimit-Limit');
+  const mRemain=_headerNum(headers,'X-RateLimit-Remaining');
+  const dLimit=_headerNum(headers,'x-ratelimit-requests-limit');
+  const dRemain=_headerNum(headers,'x-ratelimit-requests-remaining');
+  if(mLimit && mLimit>0){
+    API_RATE.minuteLimit=mLimit;
+    API_RATE.baseRps=apiClamp((mLimit/60)*0.90,0.12,18); // 10% safety margin
+    API_RATE.maxConcurrent=API_RATE.baseRps<1 ? 1 : apiClamp(Math.ceil(API_RATE.baseRps*0.75),2,10);
+    API_RATE.detected=true;
+  }
+  if(mRemain!==null)API_RATE.minuteRemaining=mRemain;
+  if(dLimit!==null)API_RATE.dailyLimit=dLimit;
+  if(dRemain!==null){
+    API_RATE.dailyRemaining=dRemain; currentCredits=dRemain;
+    const el=document.getElementById('creditDisplay');
+    if(el){
+      el.textContent=dRemain;
+      el.className='credit-value'+(dRemain<50?' low':'');
+      const lim=API_RATE.minuteLimit?`${API_RATE.minuteLimit}/min`:'adaptive';
+      el.title=`API online · ${lim} · target ${_effectiveRps().toFixed(1)} req/s`;
+    }
+  }
+}
+function _scheduleDrain(delay=0){
+  if(_apiDrainTimer!==null)return;
+  _apiDrainTimer=setTimeout(()=>{_apiDrainTimer=null;_drainQueue();},Math.max(0,Math.ceil(delay)));
+}
+function _priorityValue(v){return v==='high'||v===0?0:v==='low'||v===2?2:1;}
+
+// Backward-compatible diagnostics aliases (dynamic values)
+Object.defineProperty(window,'APEX_API_RATE',{get:()=>({...API_RATE,effectiveRps:_effectiveRps(),gapMs:_effectiveGapMs(),queue:_apiQueue.length,active:_apiActive})});
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.1';
+const APP_VERSION   = 'v5.3';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = 'API-DIAG FIX';
+const BUILD_TIME    = 'ADAPTIVE API';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -198,7 +299,7 @@ const GLOSSARY_GROUPS = [
   { label:'Στατιστικοί Δείκτες', badge:null,     keys:['Conf%','D-C','GAP','H2H','INJ','Card%','Adj🟨%'] },
   { label:'Live Δείκτες', badge:'live',           keys:['SQD','MSI','Edge','Volatility'] },
   { label:'Engine & Calibration', badge:'engine', keys:['xG Mult','Vault','LRU'] },
-  { label:'Value & Χρήματα', badge:'money',       keys:['EV%','Kelly'] },
+  { label:'Value & Χρήματα', badge:'money',       keys:['RADAR','EV%','Kelly'] },
 ];
 
 // ── Εννοιολογικός Πίνακας — όλοι οι δείκτες με ερμηνεία & action ──
@@ -239,6 +340,7 @@ const CONCEPT_TABLE = [
   ['H2H','Ιστορικές απευθείας αναμετρήσεις','≥4 ματς','12% blend στο λ | <4 ματς: αγνοείται'],
   ['Φόρμα','Τελευταία 5-6 ματς (W/D/L)','≥3W τελευταία 5','Βάρη: W1×1.0, W2×0.82, W3×0.67, W4×0.54, W5×0.43'],
   // ── Value ────────────────────────────────────────────────────
+  ['RADAR','Composite superiority ranking — καθαρή υπεροχή σήματος','Score ≥72','1/X/2: probability gap+xG | Goals: Poisson+tXG | Corners: P>8.5 | Offsides: Poisson signal'],
   ['EV%','Expected Value = (P×Απόδοση)−1','> 0%','+5%: αξιόπιστο | +10%: εξαιρετικό | <0%: ΜΗΝ παίξεις'],
   ['Kelly','Βέλτιστο ποσό στοιχήματος','Fractional 25%','APEX χρησιμοποιεί Kelly/4 — μεγιστοποιεί χωρίς χρεοκοπία'],
   // ── Calibration ──────────────────────────────────────────────
@@ -285,7 +387,7 @@ window.openGlossary = function() {
       { label:'🚫 Οφσάιντ', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Offside')||r[0].includes('off')||r[0].includes('αμφ')) },
       { label:'📡 Live', rows: CONCEPT_TABLE.filter(r=>['SQD','Edge','SoT Ratio','GK Saves'].includes(r[0])) },
       { label:'📉 Volatility & Φόρμα', rows: CONCEPT_TABLE.filter(r=>['σ (sigma)','ΔΕ₉₅','H2H','Φόρμα'].includes(r[0])) },
-      { label:'💰 Value & Calibration', rows: CONCEPT_TABLE.filter(r=>['EV%','Kelly','GOLD','TIGHT','TRAP','CL/EL Cal.'].includes(r[0])) },
+      { label:'💰 Value & Calibration', rows: CONCEPT_TABLE.filter(r=>['RADAR','EV%','Kelly','GOLD','TIGHT','TRAP','CL/EL Cal.'].includes(r[0])) },
     ];
 
     return cats.map(cat => `
@@ -624,77 +726,148 @@ function getApiErrorMessage(data){
   if(typeof e==='string' && e.trim()) return e.trim();
   return '';
 }
-async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
-async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
-async function _executeRequest(path,resolve){
-  // Jitter 0-20ms
-  await new Promise(r=>setTimeout(r,Math.random()*20));
+async function apiReq(path,opts={}){
+  const priority=_priorityValue(opts.priority);
+  const cacheMs=Number(opts.cacheMs)||0;
+  if(cacheMs>0){
+    const cached=_apiResponseCache.get(path);
+    if(cached!==undefined)return cached;
+  }
+  if(_apiInflight.has(path))return _apiInflight.get(path);
+
+  let wrapped;
+  const core=new Promise(resolve=>{
+    _apiQueue.push({path,resolve,priority,cacheMs});
+    _apiQueue.sort((a,b)=>a.priority-b.priority);
+    _scheduleDrain(0);
+  });
+  wrapped=core.finally(()=>{if(_apiInflight.get(path)===wrapped)_apiInflight.delete(path);});
+  _apiInflight.set(path,wrapped);
+  return wrapped;
+}
+
+function _drainQueue(){
+  if(!_apiQueue.length)return;
+  const now=Date.now();
+  const blockedUntil=Math.max(_nextRequestAt,_globalBackoffUntil);
+  if(now<blockedUntil){_scheduleDrain(blockedUntil-now);return;}
+  if(_apiActive>=API_RATE.maxConcurrent)return;
+
+  const item=_apiQueue.shift();
+  _apiActive++;
+  _nextRequestAt=Date.now()+_effectiveGapMs();
+  _executeRequest(item.path,item.resolve,item.cacheMs);
+
+  // Launch επόμενο request μόνο όταν ανοίξει το επόμενο rate slot.
+  if(_apiQueue.length && _apiActive<API_RATE.maxConcurrent)_scheduleDrain(_effectiveGapMs());
+}
+
+async function _executeRequest(path,resolve,cacheMs=0){
   const MAX_RETRIES=3;
   let resolved=false;
   try{
     for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
+      const globalWait=_globalBackoffUntil-Date.now();
+      if(globalWait>0)await sleep(globalWait);
+
+      const ctrl=new AbortController();
+      const timeout=setTimeout(()=>ctrl.abort(),15000);
+      const started=performance?.now?.() ?? Date.now();
       try{
-        const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
+        const r=await fetch(`${API_BASE}/${path}`,{
+          headers:{'x-apisports-key':API_KEY,'Accept':'application/json'},
+          signal:ctrl.signal
+        });
+        clearTimeout(timeout);
+        API_RATE.lastLatencyMs=Math.round((performance?.now?.() ?? Date.now())-started);
+        _updateApiRateFromHeaders(r.headers);
+
         if(r.ok){
           const data=await r.json();
           const apiErr=getApiErrorMessage(data);
           if(apiErr){
-            console.error(`[APEX] API error on ${path}:`, apiErr);
-            resolve({...data,response:data?.response||[],__apiError:apiErr}); resolved=true; return;
+            console.error(`[APEX] API error on ${path}:`,apiErr);
+            const out={...data,response:data?.response||[],__apiError:apiErr};
+            resolve(out); resolved=true; return;
           }
-          // Έλεγχος αν το response έχει πραγματικά δεδομένα (όχι κενό array)
-          if(data.response&&typeof currentCredits==='number'){
-            currentCredits--;
-            const el=document.getElementById('creditDisplay');
-            if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
-          }
+          API_RATE.penalty=Math.min(1,API_RATE.penalty+0.03); // gradual recovery
+          if(cacheMs>0)_apiResponseCache.set(path,data,cacheMs);
           resolve(data); resolved=true; return;
         }
-        // 429 Rate limit → aggressive backoff + log
+
+        let body=null;
+        try{body=await r.json();}catch{}
+        const apiErr=getApiErrorMessage(body)||`HTTP ${r.status}`;
+
         if(r.status===429){
-          const wait=2000*(attempt+1);
-          console.warn(`[APEX] 429 Rate limit on: ${path} — waiting ${wait}ms`);
-          await new Promise(r=>setTimeout(r,wait));
-          continue;
+          API_RATE.last429At=Date.now();
+          API_RATE.penalty=Math.max(0.45,API_RATE.penalty*0.72);
+          const retryAfter=Number(r.headers.get('Retry-After'));
+          const wait=Number.isFinite(retryAfter)&&retryAfter>0
+            ? retryAfter*1000
+            : Math.min(12000,1500*(2**attempt)+Math.random()*500);
+          _globalBackoffUntil=Math.max(_globalBackoffUntil,Date.now()+wait);
+          console.warn(`[APEX] 429 on ${path} — adaptive backoff ${Math.round(wait)}ms; target ${_effectiveRps().toFixed(1)} req/s`);
+          if(attempt<MAX_RETRIES){await sleep(wait);continue;}
+        }else if([499,500,502,503,504].includes(r.status) && attempt<MAX_RETRIES){
+          const wait=600*(2**attempt)+Math.random()*300;
+          await sleep(wait); continue;
         }
-        // Άλλα errors (500, 503 κλπ)
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,800*(attempt+1)));continue;}
+
+        resolve({...(body||{}),response:body?.response||[],__apiError:apiErr,__httpStatus:r.status});
+        resolved=true; return;
       }catch(err){
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,600*(attempt+1)));continue;}
-        console.warn(`[APEX] Network error: ${path}`,err.message);
+        clearTimeout(timeout);
+        const retryable=err?.name==='AbortError'||err instanceof TypeError;
+        if(retryable && attempt<MAX_RETRIES){
+          const wait=500*(2**attempt)+Math.random()*350;
+          await sleep(wait); continue;
+        }
+        console.warn(`[APEX] Network error: ${path}`,err?.message||err);
+        resolve({response:[],__apiError:`Network: ${err?.message||err}`}); resolved=true; return;
       }
     }
     if(!resolved){
       console.warn(`[APEX] Failed after ${MAX_RETRIES} retries: ${path}`);
-      resolve({response:[]});
+      resolve({response:[],__apiError:'Request failed after retries'});
     }
   }finally{
-    await new Promise(r=>setTimeout(r,REQUEST_GAP_MS));
-    _apiActive--;_drainQueue();
+    _apiActive=Math.max(0,_apiActive-1);
+    _scheduleDrain(Math.max(0,Math.max(_nextRequestAt,_globalBackoffUntil)-Date.now()));
   }
 }
 window.initCredits=async function(){
   const el=document.getElementById('creditDisplay');
+  if(el){el.textContent='SYNC…';el.className='credit-value';el.title='Έλεγχος API status…';}
   try{
-    const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
+    const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),7000);
+    const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'},signal:ctrl.signal});
+    clearTimeout(timer);
+    _updateApiRateFromHeaders(r.headers);
     if(!r.ok){
-      if(el){el.textContent=`HTTP ${r.status}`;el.className='credit-value low';}
-      console.error('[APEX] API /status HTTP error:',r.status);
+      if(el && currentCredits===null){el.textContent='STATUS ?';el.className='credit-value';el.title=`/status HTTP ${r.status} · το κύριο API θα ελεγχθεί στο scan`;}
+      console.warn('[APEX] /status unavailable, main API may still work:',r.status);
       return false;
     }
     const d=await r.json();
     const apiErr=getApiErrorMessage(d);
     if(apiErr){
-      if(el){el.textContent='API ERR';el.className='credit-value low';}
-      console.error('[APEX] API /status error:',apiErr);
+      if(el && currentCredits===null){el.textContent='STATUS ?';el.className='credit-value';el.title='Το /status επέστρεψε error · το scan θα ελέγξει το κύριο API';}
+      console.warn('[APEX] API /status error:',apiErr);
       return false;
     }
-    currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);
-    if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
+    const lim=d.response?.requests?.limit_day;
+    const cur=d.response?.requests?.current;
+    if(Number.isFinite(Number(lim))&&Number.isFinite(Number(cur))){
+      currentCredits=Number(lim)-Number(cur);
+      if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');el.title='API online';}
+    }
     return true;
   }catch(err){
-    if(el){el.textContent='OFFLINE';el.className='credit-value low';}
-    console.error('[APEX] API /status network error:',err);
+    // Το /status μπορεί να αποτύχει ενώ τα κανονικά endpoints λειτουργούν.
+    // Δεν εμφανίζουμε πλέον παραπλανητικό OFFLINE.
+    if(el && currentCredits===null){el.textContent='STATUS ?';el.className='credit-value';el.title='Το /status δεν απάντησε · το κύριο API θα ελεγχθεί στο πρώτο scan';}
+    console.warn('[APEX] API /status unavailable:',err?.message||err);
     return false;
   }
 };
@@ -737,7 +910,7 @@ async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2h
 async function getFixtureLineups(fixtureId) {
   const k = String(fixtureId);
   if(lineupsCache.has(k)) return lineupsCache.get(k);
-  const d = await apiReq(`fixtures/lineups?fixture=${fixtureId}`);
+  const d = await apiReq(`fixtures/lineups?fixture=${fixtureId}`,{priority:'high'});
   const result = parseLineup(d?.response || []);
   if(result.available) lineupsCache.set(k, result);
   return result;
@@ -817,7 +990,7 @@ function variance(arr){if(!arr||arr.length<2)return null;const mean=arr.reduce((
 function stdDev(arr){const v=variance(arr);return v!==null?Math.sqrt(v):null;}
 
 // Cache for fixture statistics (corners/cards/shots per game)
-let fixStatsCache = new BoundedCache(200);
+let fixStatsCache = new BoundedCache(260, CACHE_TTL.FIXTURE_STATS);
 
 async function getFixStats(fixtureId){
   const k=String(fixtureId);
@@ -1809,15 +1982,15 @@ window.runScan=async function(){
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
-  console.log('[APEX] Scan started. API_KEY:', API_KEY.slice(0,8)+'...', 'MAX_CONCURRENT:', MAX_CONCURRENT, 'GAP:', REQUEST_GAP_MS+'ms');
+  console.log('[APEX] Scan started · adaptive API', window.APEX_API_RATE);
   // Clear team intel cache — fresh data για κάθε scan
   try { _buildIntelPromises.clear(); _buildIntelCache.clear(); } catch {}
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
-  window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();scorersCache.clear();assistsCache.clear();cardsCache.clear();injuryCache.clear();
+  window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
     const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
-      setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
+      setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:CACHE_TTL.FIXTURE_DAY});
       if(res?.__apiError) throw new Error(`API-Football: ${res.__apiError}`);
       const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
       all.push(...dm);if(all.length>350)break;
@@ -1827,19 +2000,19 @@ window.runScan=async function(){
 
     // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
     // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
-    const leagueIds = [...new Set(all.map(m=>m.league.id))];
-    const season    = all[0]?.league?.season;
-    setProgress(8, `Pre-fetching ${leagueIds.length} leagues…`);
-    await Promise.all(leagueIds.map(lid => Promise.all([
+    const leagueSeasonPairs=[...new Map(all.map(m=>[`${m.league.id}_${m.league.season}`,{lid:m.league.id,season:m.league.season}])).values()];
+    setProgress(8, `Pre-fetching ${leagueSeasonPairs.length} league/season sets…`);
+    await Promise.all(leagueSeasonPairs.map(({lid,season}) => Promise.all([
       getStand(lid, season),
       getLeagueTopScorers(lid, season),
       getLeagueTopAssists(lid, season),
       getLeagueTopCards(lid, season),
     ])));
 
-    // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
-    // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
-    const SCAN_BATCH = 6; // Ultra: 6 ταυτόχρονα = ~60 calls in-flight
+    // Match concurrency follows detected API capacity. The global queue still
+    // enforces the exact request-launch rate, so bigger plans scale automatically.
+    const SCAN_BATCH = apiClamp(Math.max(2,Math.ceil(API_RATE.maxConcurrent/2)),2,6);
+    console.log(`[APEX] Adaptive profile: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · batch ${SCAN_BATCH}`);
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
@@ -1862,7 +2035,7 @@ window.runScan=async function(){
     } else {
       showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
     }
-    window.fetchAllOdds().catch(()=>{});
+    // RADAR v5.4: no automatic bookmaker-odds fetch — saves API calls and uses model superiority only.
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
@@ -2476,13 +2649,13 @@ function tickerRefresh(){
 const ODDS_BOOKMAKER_ID   = 8;   // Pinnacle
 const ODDS_BOOKMAKER_NAME = 'Pinnacle';
 const MIN_EV_THRESHOLD    = 0.015; // ≥1.5% EV για εμφάνιση στο Value Bets
-let oddsCache = new BoundedCache(150);
+let oddsCache = new BoundedCache(180, CACHE_TTL.ODDS);
 let _oddsLoadedFixtures = new Set(); // αποφυγή διπλής φόρτωσης
 
 async function fetchOddsForFixture(fixtureId) {
   const k = String(fixtureId);
   if(oddsCache.has(k)) return oddsCache.get(k);
-  const d = await apiReq(`odds?fixture=${fixtureId}&bookmaker=${ODDS_BOOKMAKER_ID}`);
+  const d = await apiReq(`odds?fixture=${fixtureId}&bookmaker=${ODDS_BOOKMAKER_ID}`,{priority:'low',cacheMs:CACHE_TTL.ODDS});
   const result = parseOddsResponse(d?.response || []);
   oddsCache.set(k, result);
   return result;
@@ -2674,6 +2847,178 @@ window.fetchAllOdds = async function() {
     if(btn) { btn.disabled = false; btn.textContent = '💰 Αποδόσεις'; }
   }
 };
+
+
+// ================================================================
+//  RADAR ENGINE — σαφής υπεροχή μοντέλου, χωρίς bookmaker odds
+// ================================================================
+function buildRadarList() {
+  const matches = (window.scannedMatchesData || []).filter(rec =>
+    rec?.pp &&
+    !isFinished(rec.m?.fixture?.status?.short) &&
+    !String(rec.reason||'').startsWith('Analysis error')
+  );
+  const signals = [];
+
+  const gradeFor = score => score >= 90 ? 'A+' : score >= 84 ? 'A' : score >= 78 ? 'B+' : score >= 72 ? 'B' : 'C';
+  const add = (rec, signal) => {
+    const score = clamp(Number(signal.radarScore)||0, 0, 99);
+    if(score < 72) return; // RADAR = μόνο σαφής υπεροχή
+    signals.push({
+      fixId: rec.fixId,
+      ht: rec.ht, at: rec.at, lg: rec.lg,
+      date: rec.m?.fixture?.date?.split('T')[0] || '',
+      time: rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
+      radarScore: parseFloat(score.toFixed(1)),
+      grade: gradeFor(score),
+      ...signal,
+    });
+  };
+
+  matches.forEach(rec => {
+    const pp = rec.pp;
+    const xgDiff = Number(rec.xgDiff || ((rec.hXGfinal||0) - (rec.aXGfinal||0)) || 0);
+    const tXG = Number(rec.tXG || ((rec.hXGfinal||0) + (rec.aXGfinal||0)) || 0);
+
+    // ── 1 / X / 2: μόνο ο πρώτος outcome και μόνο με gap από τον δεύτερο ──
+    const outcomes = [
+      { key:'1', prob:Number(pp.pHome||0), label:'1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ', icon:'🏠' },
+      { key:'X', prob:Number(pp.pDraw||0), label:'X — ΙΣΟΠΑΛΙΑ', icon:'🤝' },
+      { key:'2', prob:Number(pp.pAway||0), label:'2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ', icon:'✈️' },
+    ].sort((a,b)=>b.prob-a.prob);
+    const lead = outcomes[0], second = outcomes[1];
+    const gap = Math.max(0, lead.prob - second.prob);
+
+    if(lead.key === '1' && lead.prob >= 0.50 && gap >= 0.10 && xgDiff >= 0.50) {
+      const score = lead.prob*100 + gap*65 + Math.min(xgDiff,1.5)*7;
+      add(rec, {
+        category:'1X2', market:'1', label:lead.label, icon:lead.icon,
+        probability:lead.prob*100, dominanceGap:gap*100,
+        radarScore:score,
+        reason:`Πρώτη πιθανότητα ${pct(lead.prob)} · υπεροχή από 2ο outcome +${(gap*100).toFixed(1)} π.μ. · xG Diff +${xgDiff.toFixed(2)}`,
+        metric:`P1 ${(lead.prob*100).toFixed(1)}% · Δ2ου +${(gap*100).toFixed(1)}pp · xG +${xgDiff.toFixed(2)}`
+      });
+    } else if(lead.key === '2' && lead.prob >= 0.50 && gap >= 0.10 && xgDiff <= -0.50) {
+      const score = lead.prob*100 + gap*65 + Math.min(Math.abs(xgDiff),1.5)*7;
+      add(rec, {
+        category:'1X2', market:'2', label:lead.label, icon:lead.icon,
+        probability:lead.prob*100, dominanceGap:gap*100,
+        radarScore:score,
+        reason:`Πρώτη πιθανότητα ${pct(lead.prob)} · υπεροχή από 2ο outcome +${(gap*100).toFixed(1)} π.μ. · xG Diff ${xgDiff.toFixed(2)}`,
+        metric:`P2 ${(lead.prob*100).toFixed(1)}% · Δ2ου +${(gap*100).toFixed(1)}pp · xG ${xgDiff.toFixed(2)}`
+      });
+    } else if(lead.key === 'X' && lead.prob >= 0.34 && gap >= 0.04 && Math.abs(xgDiff) <= 0.30) {
+      // Η ισοπαλία έχει χαμηλότερο φυσιολογικό base-rate, άρα βαθμολογείται σε draw-specific scale.
+      const score = 66 + (lead.prob-0.34)*160 + (gap-0.04)*180 + Math.max(0,0.30-Math.abs(xgDiff))*20;
+      add(rec, {
+        category:'1X2', market:'X', label:lead.label, icon:lead.icon,
+        probability:lead.prob*100, dominanceGap:gap*100,
+        radarScore:score,
+        reason:`Η ισοπαλία είναι το #1 outcome · +${(gap*100).toFixed(1)} π.μ. από το 2ο · ισορροπία xG (${xgDiff>=0?'+':''}${xgDiff.toFixed(2)})`,
+        metric:`PX ${(lead.prob*100).toFixed(1)}% · Δ2ου +${(gap*100).toFixed(1)}pp · |xGΔ| ${Math.abs(xgDiff).toFixed(2)}`
+      });
+    }
+
+    // ── GOALS: επιλέγουμε την πιο απαιτητική γραμμή που περνά το φίλτρο ──
+    const pO35 = Number(pp.pO35||0), pO25 = Number(pp.pO25||0);
+    if(pO35 >= 0.55 && tXG >= 3.50) {
+      add(rec, {
+        category:'GOALS', market:'O3.5', label:'OVER 3.5 ΓΚΟΛ', icon:'🚀',
+        probability:pO35*100,
+        radarScore:pO35*100 + Math.min(Math.max(tXG-3.5,0)*10,12),
+        reason:`Poisson O3.5 ${pct(pO35)} · Total xG ${tXG.toFixed(2)} — ισχυρή υπεροχή high-scoring σεναρίου`,
+        metric:`P(O3.5) ${(pO35*100).toFixed(1)}% · tXG ${tXG.toFixed(2)}`
+      });
+    } else if(pO25 >= 0.66 && tXG >= 2.90) {
+      add(rec, {
+        category:'GOALS', market:'O2.5', label:'OVER 2.5 ΓΚΟΛ', icon:'🔥',
+        probability:pO25*100,
+        radarScore:pO25*100 + Math.min(Math.max(tXG-2.9,0)*8,12),
+        reason:`Poisson O2.5 ${pct(pO25)} · Total xG ${tXG.toFixed(2)} — σαφής κλίση προς ≥3 γκολ`,
+        metric:`P(O2.5) ${(pO25*100).toFixed(1)}% · tXG ${tXG.toFixed(2)}`
+      });
+    }
+
+    // ── CORNERS: η cornerConf είναι ήδη P(Over 8.5) με sample penalty ──
+    const corConf = Number(rec.cornerConf||0), expCor = Number(rec.expCor||0);
+    if(corConf >= 70 && expCor >= 9.5) {
+      add(rec, {
+        category:'CORNERS', market:'COR O8.5', label:'OVER 8.5 ΚΟΡΝΕΡ', icon:'🚩',
+        probability:corConf,
+        radarScore:corConf + Math.min(Math.max(expCor-9.5,0)*3,10),
+        reason:`P(Over 8.5 corners) ${corConf.toFixed(1)}% · προβολή ${expCor.toFixed(1)} κόρνερ`,
+        metric:`P>8.5 ${corConf.toFixed(1)}% · Exp ${expCor.toFixed(1)}`
+      });
+    }
+
+    // ── OFFSIDES: αυτόνομο Poisson market ──
+    const off = rec.offside;
+    if(off && Number(off.bestProb||0) >= 70 && off.bestSignal && !String(off.bestSignal).includes('ΧΩΡΙΣ')) {
+      const offProb = Number(off.bestProb||0), lambda = Number(off.totLambda||0);
+      add(rec, {
+        category:'OFFSIDES', market:'OFFSIDE', label:off.bestSignal, icon:'🚫',
+        probability:offProb,
+        radarScore:offProb + Math.min(Math.max(lambda-2.0,0)*2.5,8),
+        reason:`Offside Poisson ${offProb.toFixed(1)}% · λ HOME ${Number(off.hLambda||0).toFixed(2)} / AWAY ${Number(off.aLambda||0).toFixed(2)}`,
+        metric:`P ${offProb.toFixed(1)}% · λ total ${lambda.toFixed(2)}`
+      });
+    }
+  });
+
+  // Κατάταξη συνολικά, αλλά όχι πάνω από 3 signals από τον ίδιο αγώνα.
+  const sorted = signals.sort((a,b)=>b.radarScore-a.radarScore);
+  const perMatch = new Map();
+  latestTopLists.radar = sorted.filter(s => {
+    const n = perMatch.get(s.fixId) || 0;
+    if(n >= 3) return false;
+    perMatch.set(s.fixId, n+1);
+    return true;
+  }).slice(0,20);
+}
+
+function renderRadarTab(signals) {
+  if(!signals?.length) {
+    return `<div style="text-align:center;color:var(--text-muted);padding:34px 20px;">
+      <div style="font-size:2.2rem;margin-bottom:10px;">📡</div>
+      <div style="font-weight:800;margin-bottom:6px;">Το RADAR δεν βρήκε σαφή υπεροχή</div>
+      <div style="font-size:0.82rem;line-height:1.6;">Εμφανίζονται μόνο 1 / X / 2, Over 2.5, Over 3.5, Corners και Offsides που περνούν αυστηρά thresholds πιθανότητας και επιβεβαίωσης.</div>
+    </div>`;
+  }
+
+  const catColor = c => c==='1X2'?'var(--accent-blue)':c==='GOALS'?'var(--accent-green)':c==='CORNERS'?'var(--accent-gold)':'var(--accent-red)';
+  return `<div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;background:rgba(37,99,235,0.06);border:1px solid rgba(37,99,235,0.12);border-radius:8px;">
+      <div><strong style="color:var(--accent-blue);">📡 APEX RADAR</strong><div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">Μόνο καθαρή υπεροχή μοντέλου — χωρίς bookmaker odds.</div></div>
+      <div style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted);">${signals.length} SIGNALS</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:9px;">
+      ${signals.map((r,i)=>{
+        const col = catColor(r.category);
+        const p = Number(r.probability||0);
+        const score = Number(r.radarScore||0);
+        return `<div onclick="scrollToMatchAndOpen('row-${r.fixId}')" style="display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;background:var(--bg-base);border:1px solid var(--border-light);border-left:4px solid ${col};border-radius:8px;cursor:pointer;transition:all .15s;" onmouseover="this.style.transform='translateY(-1px)';this.style.borderColor='${col}'" onmouseout="this.style.transform='';this.style.borderColor='var(--border-light)'">
+          <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:var(--text-dim);text-align:center;">#${i+1}</div>
+          <div style="min-width:0;">
+            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:4px;">
+              <span style="font-size:.62rem;font-weight:900;color:${col};background:${col}14;border:1px solid ${col}30;border-radius:5px;padding:2px 7px;">${esc(r.category)}</span>
+              <span style="font-size:.65rem;color:var(--text-muted);">${esc(r.lg||'')}</span>
+              <span style="font-size:.65rem;color:var(--text-dim);">${esc(r.date||'')} ${esc(r.time||'')}</span>
+            </div>
+            <div style="font-size:.95rem;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.ht)} <span style="color:var(--text-muted);font-weight:500;">vs</span> ${esc(r.at)}</div>
+            <div style="font-size:.86rem;font-weight:900;color:${col};margin-top:4px;">${r.icon} ${esc(r.label)}</div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;line-height:1.45;">${esc(r.reason||'')}</div>
+          </div>
+          <div style="min-width:118px;text-align:right;">
+            <div style="font-family:var(--font-mono);font-size:1.22rem;font-weight:900;color:${col};">${score.toFixed(1)}</div>
+            <div style="font-size:.58rem;color:var(--text-dim);text-transform:uppercase;font-weight:800;">RADAR SCORE · ${esc(r.grade)}</div>
+            <div style="font-family:var(--font-mono);font-size:.72rem;color:var(--text-sub);margin-top:5px;">P ${p.toFixed(1)}%</div>
+            <div style="font-size:.62rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;">${esc(r.metric||'')}</div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
 
 function buildValueBetsList() {
   const sd = window.scannedMatchesData || [];
@@ -3039,8 +3384,8 @@ function rebuildTopLists(){
     .sort((a,b) => (b.offside?.bestProb||0) - (a.offside?.bestProb||0))
     .slice(0,12);
 
-  // Build value bets from existing odds data
-  buildValueBetsList();
+  // 📡 RADAR — αυτόνομη κατάταξη σαφών model signals
+  buildRadarList();
   // Build bombs
   buildBombsList();
 
@@ -3074,10 +3419,10 @@ function rebuildTopLists(){
 }
 
 function renderTopSections(){
-  if(!latestTopLists.valueBets) latestTopLists.valueBets = [];
-  const vbCount = latestTopLists.valueBets.length;
+  if(!latestTopLists.radar) latestTopLists.radar = [];
+  const radarCount = latestTopLists.radar.length;
   const tabs=[
-    {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
+    {id:'radar',    lbl:`📡 RADAR`,                                      d:latestTopLists.radar,      sk:'radarScore', sl:'SCORE', special:'radar'},
     {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
@@ -3091,26 +3436,26 @@ function renderTopSections(){
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
   tabs.forEach((tab,i)=>{
-    const isVB   = tab.id==='valuebets';
+    const isRadar= tab.id==='radar';
     const isTop  = tab.id==='top3';
     const isBomb = tab.id==='bombs';
     const bombCount = latestTopLists.bombs?.length || 0;
-    const badge = isVB && vbCount > 0
-      ? `<span style="background:var(--accent-green);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${vbCount}</span>`
+    const badge = isRadar && radarCount > 0
+      ? `<span style="background:var(--accent-blue);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${radarCount}</span>`
       : isTop
         ? `<span style="background:var(--accent-gold);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">3</span>`
         : isBomb && bombCount > 0
           ? `<span style="background:var(--accent-red);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${bombCount}</span>`
           : `<span class="tab-count">${tab.d.length}</span>`;
-    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
+    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isRadar?'color:var(--accent-blue);font-weight:900;':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
   });
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
     if(tab.id==='players'){
       html += renderPlayersTab(tab.d);
-    } else if(tab.id==='valuebets'){
-      html += renderValueBetsTab(tab.d);
+    } else if(tab.id==='radar'){
+      html += renderRadarTab(tab.d);
     } else if(tab.id==='top3'){
       html += renderTop3Certainty(tab.d);
     } else if(tab.id==='bombs'){
