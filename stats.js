@@ -182,7 +182,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '08:02 EET';
+const BUILD_TIME    = '08:07 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -538,9 +538,9 @@ async function batchCalc(fixtures,tId){
   const recent=fixtures.slice(0,8);
   const statsPerFix=await Promise.all(recent.map(f=>getFixStats(f.fixture.id)));
 
-  let tXG=0,tXGA=0,tCor=0,tCorAgainst=0,tCrd=0,tShotsOn=0,tShotsOff=0,tOppShotsOn=0,tw=0;
-  let nCor=0,nCrd=0,nShots=0;
-  const goalsArr=[],goalsAgainstArr=[],cornersArr=[],cardsArr=[];
+  let tXG=0,tXGA=0,tCor=0,tCorAgainst=0,tCrd=0,tShotsOn=0,tShotsOff=0,tOppShotsOn=0,tOff=0,tw=0;
+  let nCor=0,nCrd=0,nShots=0,nOff=0;
+  const goalsArr=[],goalsAgainstArr=[],cornersArr=[],cardsArr=[],offsidesArr=[];
 
   for(let i=0;i<recent.length;i++){
     const f=recent[i],st=statsPerFix[i];
@@ -568,6 +568,11 @@ async function batchCalc(fixtures,tId){
       if(mySOn!==null){tShotsOn+=mySOn*w;nShots++;}
       if(mySOff!==null)tShotsOff+=mySOff*w;
       if(oppSOn!==null)tOppShotsOn+=oppSOn*w;
+
+      // Offsides
+      const myOff=extractFixStatFor(st,tId,'Offsides');
+      if(myOff!==null){tOff+=myOff*w;offsidesArr.push(myOff);nOff++;}
+      else offsidesArr.push(isH?1.8:1.5); // fallback avg
     }else{
       // fallback simulated corners/cards (recency-weighted)
       const simCor=3.5+(myG*1.2)+(opG*0.3);
@@ -575,7 +580,9 @@ async function batchCalc(fixtures,tId){
       tCor+=simCor*w;tCrd+=simCrd*w;
       if(cornersArr.length===i)cornersArr.push(simCor);
       if(cardsArr.length===i)cardsArr.push(simCrd);
-      nCor++;nCrd++;
+      const simOff=isH?1.8:1.5; // home teams avg more offsides
+      tOff+=simOff*w;offsidesArr.push(simOff);
+      nCor++;nCrd++;nOff++;
     }
   }
 
@@ -584,6 +591,7 @@ async function batchCalc(fixtures,tId){
   const avgCrd=nCrd>0?tCrd/nCrd:2.0;
   const avgSOn=nShots>0?tShotsOn/nShots:4.5,avgSOff=nShots>0?tShotsOff/nShots:3.5;
   const avgOppSOn=nShots>0?tOppShotsOn/nShots:4.0;
+  const avgOff=nOff>0?tOff/nOff:1.8; // avg offsides per match
   const totalShots=avgSOn+avgSOff;
   const corRatio=totalShots>0?avgCor/totalShots:0.40;
   const shotsCor=totalShots>0?clamp(avgCor/(totalShots*2.5),0.05,0.60):0.22;
@@ -595,6 +603,8 @@ async function batchCalc(fixtures,tId){
     crd:parseFloat(avgCrd.toFixed(2)),
     shotsOn:parseFloat(avgSOn.toFixed(2)),shotsOff:parseFloat(avgSOff.toFixed(2)),
     oppShotsOn:parseFloat(avgOppSOn.toFixed(2)),
+    off:parseFloat(avgOff.toFixed(2)), // avg offsides per match
+    offsidesArr,
     goalsArr,goalsAgainstArr,cornersArr,cardsArr,
     varGoals:variance(goalsArr),sdGoals:stdDev(goalsArr),
     varGoalsAgainst:variance(goalsAgainstArr),sdGoalsAgainst:stdDev(goalsAgainstArr),
@@ -713,6 +723,7 @@ async function _buildIntelImpl(tId,lg,s,isHome){
       corRatio:safeNum(fData.corRatio,0.40),cor:safeNum(fData.cor,5.0),corAgainst:safeNum(fData.corAgainst,4.5),
       shotsCor:safeNum(fData.shotsCor,0.22),crd:safeNum(fData.crd,2.0),
       shotsOn:safeNum(fData.shotsOn,4.5),shotsOff:safeNum(fData.shotsOff,3.5),oppShotsOn:safeNum(fData.oppShotsOn,4.0),
+      off:safeNum(fData.off, isHome?1.8:1.5), // avg offsides per match
       uiXG:fData.xg,uiXGA:fData.xga,uiSXG:sData.xg,uiSXGA:sData.xga,
       history:getFormHistory(gen,tId),
       totalTeamGoalsSeason,
@@ -1175,6 +1186,40 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
 
   const cornerRes=computeCornerConfidence(hS,aS,hXG,aXG,leagueId);
   const totCards=safeNum(hS.crd,2.1)+safeNum(aS.crd,2.1);
+
+  // ── Offside projection (Poisson model) ──────────────────────────
+  // λ = avg offsides per match ανά ομάδα (από batchCalc)
+  // Home teams tend to have more offsides (+10%) due to high defensive line
+  const hOffLambda = clamp(safeNum(hS.off, 1.8) * 1.05, 0.5, 6.0);
+  const aOffLambda = clamp(safeNum(aS.off, 1.5) * 0.95, 0.5, 6.0);
+  const totOffLambda = hOffLambda + aOffLambda;
+  // P(team ≥ N offsides) via Poisson CDF
+  const poissonOffGe = (lambda, n) => {
+    let cumP = 0;
+    for(let k=0; k<n; k++) cumP += poissonProb(lambda, k);
+    return clamp(1 - cumP, 0, 1);
+  };
+  const hPOff1  = poissonOffGe(hOffLambda, 1);  // P(HOME ≥1)
+  const hPOff2  = poissonOffGe(hOffLambda, 2);  // P(HOME ≥2)
+  const hPOff3  = poissonOffGe(hOffLambda, 3);  // P(HOME ≥3)
+  const aPOff1  = poissonOffGe(aOffLambda, 1);  // P(AWAY ≥1)
+  const aPOff2  = poissonOffGe(aOffLambda, 2);  // P(AWAY ≥2)
+  const aPOff3  = poissonOffGe(aOffLambda, 3);  // P(AWAY ≥3)
+  const pBothOff2 = hPOff2 * aPOff2;            // P(αμφότερες ≥2)
+  const pTotOff35 = poissonOffGe(totOffLambda, 4); // P(σύνολο ≥4)
+  const offside = {
+    hLambda:parseFloat(hOffLambda.toFixed(2)),
+    aLambda:parseFloat(aOffLambda.toFixed(2)),
+    totLambda:parseFloat(totOffLambda.toFixed(2)),
+    hPOff1:parseFloat((hPOff1*100).toFixed(1)),
+    hPOff2:parseFloat((hPOff2*100).toFixed(1)),
+    hPOff3:parseFloat((hPOff3*100).toFixed(1)),
+    aPOff1:parseFloat((aPOff1*100).toFixed(1)),
+    aPOff2:parseFloat((aPOff2*100).toFixed(1)),
+    aPOff3:parseFloat((aPOff3*100).toFixed(1)),
+    pBothOff2:parseFloat((pBothOff2*100).toFixed(1)),
+    pTotOff35:parseFloat((pTotOff35*100).toFixed(1)),
+  };
   
   let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Δεν υπάρχει σαφές στατιστικό πλεονέκτημα για αυτό το ματς.',pickScore=0;
 
@@ -1408,6 +1453,7 @@ async function analyzeMatchSafe(m,index,total){
       actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
       sitCtx,    // Situational context (motivation flags, derby)
       dcResult,  // Dixon-Coles attack/defense strengths
+      offside,   // Offside projection (Poisson model)
     });
   }catch(err){
     window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:'Analysis error',strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
@@ -3234,6 +3280,39 @@ function buildAccordionHTML(x) {
       <div class="accordion-row"><span>Proj. Cards</span><span class="data-num">${hCrdExp.toFixed(1)} vs ${aCrdExp.toFixed(1)} <span style="font-size:0.7em;color:var(--text-muted)">(Tot: ${totalCrd.toFixed(1)})</span></span></div>
       <div class="accordion-row"><span>Poisson O2.5</span><span class="data-num" style="color:var(--accent-blue)">${x.pp?pct(x.pp.pO25):'—'}</span></div>
       <div class="accordion-row" style="color:var(--accent-green);"><span>P(Over 8.5 Cor)</span><span class="data-num">${(x.cornerConf||0).toFixed(1)}%</span></div>
+
+      ${x.offside ? `
+      <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;">
+        <div style="font-size:0.62rem;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:6px;">🚫 Εκτίμηση Οφσάιντ</div>
+        <div class="accordion-row">
+          <span>Αναμ. HOME</span>
+          <span class="data-num" style="color:var(--accent-gold);">${x.offside.hLambda.toFixed(1)}
+            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥2: ${x.offside.hPOff2}%</span>
+          </span>
+        </div>
+        <div class="accordion-row">
+          <span>Αναμ. AWAY</span>
+          <span class="data-num" style="color:var(--accent-blue);">${x.offside.aLambda.toFixed(1)}
+            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥2: ${x.offside.aPOff2}%</span>
+          </span>
+        </div>
+        <div class="accordion-row">
+          <span>Σύνολο</span>
+          <span class="data-num">${x.offside.totLambda.toFixed(1)}
+            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥4: ${x.offside.pTotOff35}%</span>
+          </span>
+        </div>
+        <div class="accordion-row" style="color:${x.offside.pBothOff2>=50?'var(--accent-green)':x.offside.pBothOff2>=35?'var(--accent-gold)':'var(--text-muted)'};">
+          <span>Αμφότερες ≥2</span>
+          <span class="data-num">${x.offside.pBothOff2}%</span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:6px;font-size:0.62rem;font-family:var(--font-mono);">
+          <span style="flex:1;text-align:center;background:var(--bg-surface);border-radius:4px;padding:3px;">🏠≥1: ${x.offside.hPOff1}%</span>
+          <span style="flex:1;text-align:center;background:var(--bg-surface);border-radius:4px;padding:3px;">🏠≥3: ${x.offside.hPOff3}%</span>
+          <span style="flex:1;text-align:center;background:var(--bg-surface);border-radius:4px;padding:3px;">✈️≥1: ${x.offside.aPOff1}%</span>
+          <span style="flex:1;text-align:center;background:var(--bg-surface);border-radius:4px;padding:3px;">✈️≥3: ${x.offside.aPOff3}%</span>
+        </div>
+      </div>` : ''}
     </div>
   `;
 
