@@ -173,8 +173,10 @@ const _apiQueue = []; let _apiActive = 0;
 // Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
 // Ultra Plan: 75.000 req/day → ~52 req/sec max
 // 25 concurrent + 20ms gap = ~40 req/sec (ασφαλές)
-const MAX_CONCURRENT = 25;
-const REQUEST_GAP_MS = 20;
+// Ultra plan: 75k req/day — ασφαλές όριο για σταθερά δεδομένα
+// Browser: max ~6 concurrent per host → 10 είναι ήδη το πρακτικό max
+const MAX_CONCURRENT = 10;
+const REQUEST_GAP_MS = 100; // 100ms gap = ~8 req/sec σταθερά χωρίς drops
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -182,7 +184,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '08:18 EET';
+const BUILD_TIME    = '08:20 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -611,9 +613,9 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
 async function _executeRequest(path,resolve){
-  // Μικρό jitter για να αποφύγουμε burst (10ms max αντί για 80ms)
-  await new Promise(r=>setTimeout(r,Math.random()*10));
-  const MAX_RETRIES=2;
+  // Jitter 0-50ms για ομαλή κατανομή requests (αποφυγή burst)
+  await new Promise(r=>setTimeout(r,Math.random()*50));
+  const MAX_RETRIES=3;
   let resolved=false;
   try{
     for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
@@ -621,6 +623,7 @@ async function _executeRequest(path,resolve){
         const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
         if(r.ok){
           const data=await r.json();
+          // Έλεγχος αν το response έχει πραγματικά δεδομένα (όχι κενό array)
           if(data.response&&typeof currentCredits==='number'){
             currentCredits--;
             const el=document.getElementById('creditDisplay');
@@ -628,15 +631,24 @@ async function _executeRequest(path,resolve){
           }
           resolve(data); resolved=true; return;
         }
-        // 429 Rate limit → backoff αμέσως
-        if(r.status===429){await new Promise(r=>setTimeout(r,1000*(attempt+1)));continue;}
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,400*(attempt+1)));continue;}
+        // 429 Rate limit → aggressive backoff + log
+        if(r.status===429){
+          const wait=2000*(attempt+1);
+          console.warn(`[APEX] 429 Rate limit on: ${path} — waiting ${wait}ms`);
+          await new Promise(r=>setTimeout(r,wait));
+          continue;
+        }
+        // Άλλα errors (500, 503 κλπ)
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,800*(attempt+1)));continue;}
       }catch(err){
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,500*(attempt+1)));continue;}
-        console.warn(`[APEX] API failed: ${path}`,err);
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,600*(attempt+1)));continue;}
+        console.warn(`[APEX] Network error: ${path}`,err.message);
       }
     }
-    if(!resolved)resolve({response:[]});
+    if(!resolved){
+      console.warn(`[APEX] Failed after ${MAX_RETRIES} retries: ${path}`);
+      resolve({response:[]});
+    }
   }finally{
     await new Promise(r=>setTimeout(r,REQUEST_GAP_MS));
     _apiActive--;_drainQueue();
@@ -1722,7 +1734,7 @@ window.runScan=async function(){
 
     // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
     // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
-    const SCAN_BATCH = 8; // Paid: 8 ταυτόχρονα (ισορροπία ταχύτητας/αξιοπιστίας)
+    const SCAN_BATCH = 4; // Ασφαλές: 4 ταυτόχρονα, καθένα κάνει ~8 API calls = 32 total
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
@@ -1734,7 +1746,17 @@ window.runScan=async function(){
     pushToSheets(window.scannedMatchesData).catch(()=>{});
     // Συγχρονισμός Audit UI με το τρέχον scan
     syncAuditFromScan(window.scannedMatchesData, startD, endD);
-    showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
+    // ── Data quality check ───────────────────────────────────────
+    const fallbackCount = window.scannedMatchesData.filter(d =>
+      d.hXGfinal && Math.abs(Number(d.hXGfinal) - 1.10) < 0.02 &&
+      Math.abs(Number(d.aXGfinal) - 1.10) < 0.02
+    ).length;
+    if(fallbackCount > 0) {
+      const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
+      showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
+    } else {
+      showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
+    }
     window.fetchAllOdds().catch(()=>{});
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
