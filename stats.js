@@ -171,8 +171,10 @@ const SETTINGS_MAP = {
 const _apiQueue = []; let _apiActive = 0;
 // 🚀 Paid Plan (30 req/sec limit)
 // Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
-const MAX_CONCURRENT = 15;
-const REQUEST_GAP_MS = 35;
+// Ultra Plan: 75.000 req/day → ~52 req/sec max
+// 25 concurrent + 20ms gap = ~40 req/sec (ασφαλές)
+const MAX_CONCURRENT = 25;
+const REQUEST_GAP_MS = 20;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
@@ -180,7 +182,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '07:49 EET';
+const BUILD_TIME    = '07:59 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
