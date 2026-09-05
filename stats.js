@@ -184,7 +184,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '08:39 EET';
+const BUILD_TIME    = 'API-DIAG FIX';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -610,6 +610,13 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 // ================================================================
 //  API FETCHING & CACHING
 // ================================================================
+function getApiErrorMessage(data){
+  const e=data?.errors;
+  if(Array.isArray(e) && e.length) return e.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' | ');
+  if(e && typeof e==='object' && Object.keys(e).length) return Object.entries(e).map(([k,v])=>`${k}: ${typeof v==='string'?v:JSON.stringify(v)}`).join(' | ');
+  if(typeof e==='string' && e.trim()) return e.trim();
+  return '';
+}
 async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
 async function _executeRequest(path,resolve){
@@ -623,6 +630,11 @@ async function _executeRequest(path,resolve){
         const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
         if(r.ok){
           const data=await r.json();
+          const apiErr=getApiErrorMessage(data);
+          if(apiErr){
+            console.error(`[APEX] API error on ${path}:`, apiErr);
+            resolve({...data,response:data?.response||[],__apiError:apiErr}); resolved=true; return;
+          }
           // Έλεγχος αν το response έχει πραγματικά δεδομένα (όχι κενό array)
           if(data.response&&typeof currentCredits==='number'){
             currentCredits--;
@@ -654,7 +666,31 @@ async function _executeRequest(path,resolve){
     _apiActive--;_drainQueue();
   }
 }
-window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
+window.initCredits=async function(){
+  const el=document.getElementById('creditDisplay');
+  try{
+    const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
+    if(!r.ok){
+      if(el){el.textContent=`HTTP ${r.status}`;el.className='credit-value low';}
+      console.error('[APEX] API /status HTTP error:',r.status);
+      return false;
+    }
+    const d=await r.json();
+    const apiErr=getApiErrorMessage(d);
+    if(apiErr){
+      if(el){el.textContent='API ERR';el.className='credit-value low';}
+      console.error('[APEX] API /status error:',apiErr);
+      return false;
+    }
+    currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);
+    if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
+    return true;
+  }catch(err){
+    if(el){el.textContent='OFFLINE';el.className='credit-value low';}
+    console.error('[APEX] API /status network error:',err);
+    return false;
+  }
+};
 
 async function getTStats(t,lg,s){
   const k=`${t}_${lg}_${s}`;
@@ -1434,7 +1470,9 @@ function adjustPlayerCardProbs(players, oppStats, matchCtx) {
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
-  const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
+  // hXG/aXG έχουν ήδη βαθμονομηθεί με lp.mult πριν φτάσουν εδώ.
+  // ΜΗΝ εφαρμόζεις δεύτερη φορά τον league multiplier.
+  const hL=clamp(hXG,0.15,4.0),aL=clamp(aXG,0.15,4.0);
   const pp=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
   let outPick='X';
   if(pp.pHome-pp.pAway>0.15&&xgDiff>lp.xgDiff)outPick='1';
@@ -1570,7 +1608,8 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
     hG:pp.bestScore.h,aG:pp.bestScore.a,
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
     hExp:hL,aExp:aL,exactConf,xgDiff,pp,
-    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL};
+    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL,
+    offside};
 }
 
 // ================================================================
@@ -1724,10 +1763,11 @@ async function analyzeMatchSafe(m,index,total){
       actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
       sitCtx,    // Situational context (motivation flags, derby)
       dcResult,  // Dixon-Coles attack/defense strengths
-      offside,   // Offside projection (Poisson model)
+      offside: result.offside,   // Offside projection (Poisson model)
     });
   }catch(err){
-    window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:'Analysis error',strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
+    console.error('[APEX] Analysis failed:', m?.teams?.home?.name, 'vs', m?.teams?.away?.name, err);
+    window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
   }
 }
 
@@ -1745,6 +1785,7 @@ window.runScan=async function(){
     const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
       setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
+      if(res?.__apiError) throw new Error(`API-Football: ${res.__apiError}`);
       const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
       all.push(...dm);if(all.length>350)break;
     }
@@ -1992,7 +2033,7 @@ function applySubstitution(d, newLineupData) {
     exact: `${result.hG}-${result.aG}`, exact2: `${result.hG2}-${result.aG2}`,
     exactConf: result.exactConf, omegaPick: result.omegaPick,
     strength: result.pickScore, reason: result.reason,
-    hExp: result.hExp, aExp: result.aExp, pp: result.pp,
+    hExp: result.hExp, aExp: result.aExp, pp: result.pp, offside: result.offside,
     lambdaTotal: result.lambdaTotal, cornerConf: result.cornerConf, expCor: result.expCor,
     lastSubEvents: subEvents,   // για accordion display
     subChanged: changed,        // για flash animation
@@ -2300,7 +2341,7 @@ window.fetchAllLineups = async function() {
         Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
           outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
           exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
-          hExp:res.hExp,aExp:res.aExp,pp:res.pp});
+          hExp:res.hExp,aExp:res.aExp,pp:res.pp,offside:res.offside});
         confirmed++;
       } else { unavailable++; }
     }catch(_){ unavailable++; }
@@ -2341,7 +2382,7 @@ window.fetchLineupForMatch = async function(fixId) {
       exact:`${result.hG}-${result.aG}`, exact2:`${result.hG2}-${result.aG2}`,
       exactConf:result.exactConf, omegaPick:result.omegaPick,
       strength:result.pickScore, reason:result.reason,
-      hExp:result.hExp, aExp:result.aExp, pp:result.pp,
+      hExp:result.hExp, aExp:result.aExp, pp:result.pp, offside:result.offside,
       lambdaTotal:result.lambdaTotal, cornerConf:result.cornerConf, expCor:result.expCor,
     });
     // Refresh the open accordion row
@@ -6113,7 +6154,7 @@ window.resimulateMatches=function(){
       outPick:res.outPick,xgDiff:res.xgDiff,
       exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
       omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
-      hExp:res.hExp,aExp:res.aExp,pp:res.pp,
+      hExp:res.hExp,aExp:res.aExp,pp:res.pp,offside:res.offside,
       lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor
     });
     // Re-adjust card probabilities με νέο xgDiff
