@@ -63,7 +63,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.0 · 03/05/2026 14:46 EET</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.0 · 05/09/2026 08:12 EET</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -176,12 +176,67 @@
         <span id="myLeaguesArrow" class="arrow">▼</span>
       </div>
       <div id="myLeaguesBody" style="display:none;margin-top:12px;">
+
+        <!-- Εννοιολογικός πίνακας κατηγοριών -->
+        <div style="margin-bottom:14px;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+          <div style="background:rgba(252,211,77,0.06);padding:7px 12px;font-size:0.62rem;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);border-bottom:1px solid var(--border);">
+            📖 Οδηγός Κατηγοριών
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:0.72rem;">
+            <thead>
+              <tr style="background:var(--bg-surface);">
+                <th style="padding:6px 10px;text-align:left;color:var(--text-dim);font-weight:600;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid var(--border);">Κατηγορία</th>
+                <th style="padding:6px 10px;text-align:center;color:var(--text-dim);font-weight:600;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid var(--border);">xG Mult</th>
+                <th style="padding:6px 10px;text-align:left;color:var(--text-dim);font-weight:600;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid var(--border);">Χαρακτηριστικό</th>
+                <th style="padding:6px 10px;text-align:left;color:var(--text-dim);font-weight:600;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid var(--border);">Καλύτερο για</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                <td style="padding:7px 10px;"><span style="background:rgba(252,211,77,0.15);color:var(--gold);padding:2px 7px;border-radius:4px;font-weight:700;font-size:0.65rem;">⭐ GOLD</span></td>
+                <td style="padding:7px 10px;text-align:center;font-family:var(--font-mono);color:var(--gold);">×1.12</td>
+                <td style="padding:7px 10px;color:var(--text-sub);">Επιθετικό, πολλά γκολ, Poisson fit ★★★</td>
+                <td style="padding:7px 10px;color:var(--text-muted);">Over 2.5 · Over 3.5 · GG</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                <td style="padding:7px 10px;"><span style="background:rgba(45,212,191,0.12);color:var(--teal);padding:2px 7px;border-radius:4px;font-weight:700;font-size:0.65rem;">🔒 TIGHT</span></td>
+                <td style="padding:7px 10px;text-align:center;font-family:var(--font-mono);color:var(--teal);">×0.95</td>
+                <td style="padding:7px 10px;color:var(--text-sub);">Αμυντικό, λίγα γκολ, τακτικό</td>
+                <td style="padding:7px 10px;color:var(--text-muted);">Under 2.5 · 1X2 · Σκορ</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                <td style="padding:7px 10px;"><span style="background:rgba(251,113,133,0.12);color:var(--red);padding:2px 7px;border-radius:4px;font-weight:700;font-size:0.65rem;">⚠️ TRAP</span></td>
+                <td style="padding:7px 10px;text-align:center;font-family:var(--font-mono);color:var(--red);">×0.90</td>
+                <td style="padding:7px 10px;color:var(--text-sub);">Υψηλή αστάθεια, μεγάλες ανατροπές</td>
+                <td style="padding:7px 10px;color:var(--text-muted);">Αποφυγή — μόνο υψηλής conf. σήματα</td>
+              </tr>
+              <tr>
+                <td style="padding:7px 10px;"><span style="background:rgba(255,255,255,0.07);color:var(--text-muted);padding:2px 7px;border-radius:4px;font-weight:700;font-size:0.65rem;">⚪ STANDARD</span></td>
+                <td style="padding:7px 10px;text-align:center;font-family:var(--font-mono);color:var(--text-muted);">×1.00</td>
+                <td style="padding:7px 10px;color:var(--text-sub);">Ισορροπημένο, global ρυθμίσεις</td>
+                <td style="padding:7px 10px;color:var(--text-muted);">Balanced — όλα τα σήματα</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Κουμπιά ταχείας επιλογής -->
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:0.62rem;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-cond);">Μαζική επιλογή:</span>
+          <button class="btn btn-gold" onclick="selectByType('GOLD')" style="font-size:0.72rem;height:28px;padding:0 12px;" title="Μόνο επιθετικά πρωταθλήματα — Over/GG">⭐ Gold</button>
+          <button class="btn" onclick="selectByType('TIGHT')" style="font-size:0.72rem;height:28px;padding:0 12px;background:rgba(45,212,191,0.1);border-color:rgba(45,212,191,0.3);color:var(--teal);" title="Μόνο αμυντικά πρωταθλήματα — Under/1X2">🔒 Tight</button>
+          <button class="btn" onclick="selectByType('STANDARD')" style="font-size:0.72rem;height:28px;padding:0 12px;background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.12);color:var(--text-sub);" title="Balanced πρωταθλήματα χωρίς ακραία χαρακτηριστικά">⚪ Standard</button>
+          <button class="btn" onclick="selectByType('GOLD+TIGHT')" style="font-size:0.72rem;height:28px;padding:0 12px;background:rgba(77,184,255,0.1);border-color:rgba(77,184,255,0.25);color:var(--blue);" title="Gold + Tight — τα πιο αξιόπιστα">💎 Αξιόπιστα</button>
+        </div>
+
+        <!-- Βασικά κουμπιά -->
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-          <button class="btn btn-gold" onclick="selectAllLeagues(true)" style="font-size:0.75rem;height:30px;">✅ Όλα</button>
-          <button class="btn btn-outline" onclick="selectAllLeagues(false)" style="font-size:0.75rem;height:30px;">☐ Κανένα</button>
-          <button class="btn btn-outline" onclick="selectDefaultLeagues()" style="font-size:0.75rem;height:30px;">⭐ Default High-Yield</button>
+          <button class="btn btn-outline" onclick="selectAllLeagues(true)" style="font-size:0.72rem;height:28px;">✅ Όλα</button>
+          <button class="btn btn-outline" onclick="selectAllLeagues(false)" style="font-size:0.72rem;height:28px;">☐ Κανένα</button>
+          <button class="btn btn-outline" onclick="selectDefaultLeagues()" style="font-size:0.72rem;height:28px;">⭐ Default High-Yield</button>
           <span id="activeLeagueCount" style="font-size:0.72rem;color:var(--text-muted);align-self:center;margin-left:auto;font-family:var(--font-mono);"></span>
         </div>
+
         <div id="myLeaguesContainer"></div>
       </div>
     </div>

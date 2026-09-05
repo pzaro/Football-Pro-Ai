@@ -182,7 +182,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '08:07 EET';
+const BUILD_TIME    = '08:12 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -199,12 +199,62 @@ const GLOSSARY_GROUPS = [
   { label:'Value & Χρήματα', badge:'money',       keys:['EV%','Kelly'] },
 ];
 
+// ── Εννοιολογικός Πίνακας — όλοι οι δείκτες με ερμηνεία & action ──
+const CONCEPT_TABLE = [
+  // [Δείκτης, Τι μετράει, Καλή τιμή, Σήμα / Τι κάνεις]
+  // ── xG ──────────────────────────────────────────────────────
+  ['xG','Ποιότητα επίθεσης (Αναμ. Γκολ)','> 1.50','Πάνω ≥1.50: ισχυρή επίθεση → Over / 1X2'],
+  ['xGA','Ποιότητα άμυνας (Αναμ. Γκολ κατά)','< 1.20','Κάτω <1.20: ισχυρή άμυνα → Under / Νίκη'],
+  ['tXG','Συνολικά Αναμ. Γκολ (HOME+AWAY)','2.5–3.5','<2.20 → Under 2.5 | >2.80 → Over 2.5 | >3.40 → Over 3.5'],
+  ['xG Diff','Διαφορά επιθετικής ισχύος','>0.60 ή <-0.60','|Diff|>0.60 → 1X2 σήμα | ~0 → Ισοπαλία / BTTS'],
+  ['xG Mult','Πολλαπλασιαστής ανά πρωτάθλημα','1.00 (standard)','GOLD×1.12 | Standard×1.00 | TIGHT×0.95 | TRAP×0.90'],
+  // ── Αγορές ──────────────────────────────────────────────────
+  ['Conf%','Βεβαιότητα μοντέλου (0-99%)','≥70%','<70%: ΧΩΡΙΣ ΣΥΣΤΑΣΗ | 70-79%: Καλό | ≥80%: Ισχυρό'],
+  ['O2.5','P(Σύνολο γκολ ≥3)','≥62%','≥62% + tXG≥2.80 → ΠΑΝΩ ΑΠΟ 2.5'],
+  ['O3.5','P(Σύνολο γκολ ≥4)','≥52%','≥52% + tXG≥3.40 → ΠΑΝΩ ΑΠΟ 3.5'],
+  ['U2.5','P(Σύνολο γκολ ≤2)','≥58%','≥58% + tXG≤1.80 → ΚΑΤΩ ΑΠΟ 2.5'],
+  ['BTTS','P(Αμφότερες να σκοράρουν)','≥68%','≥68% + min(hXG,aXG)≥1.10 → GG'],
+  ['AH','Asian Handicap -1.5','≥42%','≥42% + |xgDiff|≥0.90 → Handicap νίκη με 2+'],
+  ['HT','Πρώτο ημίχρονο προβάδισμα','≥48%','≥48% + xgDiff≥0.80 → Ημιτελικό'],
+  // ── Κόρνερ & Κάρτες ─────────────────────────────────────────
+  ['Κόρνερ λ','Αναμ. κόρνερ ανά αγώνα','9.0–12.0','<8.5: Under corners | >10.5: Over 8.5 Cor (≥72%)'],
+  ['P(>8.5 Cor)','Poisson P(κόρνερ ≥9)','≥72%','≥72%: ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ σήμα'],
+  ['Card% 🟨','Adj. πιθανότητα κίτρινης','> 20%','Μόνο παίκτες >20% εμφανίζονται στο Card Risk'],
+  ['Κάρτες λ','Αναμ. κάρτες ανά αγώνα','≥5.5','≥5.5 + |xgDiff|<0.40 → ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ'],
+  // ── Οφσάιντ ─────────────────────────────────────────────────
+  ['Offside λ','Αναμ. οφσάιντ ανά αγώνα HOME','1.8–2.5 (HOME), 1.5–2.0 (AWAY)','λ×Poisson → P(≥1), P(≥2), P(≥3) — για bet builder'],
+  ['P(≥2 off)','P(ομάδα με ≥2 οφσάιντ)','≥65%','Αξιόπιστο σήμα αν λ>2.0 | AWAY λ χαμηλότερο από HOME'],
+  ['P(αμφ. ≥2)','P(ΚΑΙ οι δύο ≥2 οφσάιντ)','≥40%','Χρήσιμο για bet builder combo'],
+  // ── Live ────────────────────────────────────────────────────
+  ['SQD','xG/Shot Differential — ποιότητα φάσεων','>+0.04','Θετικό → HOME καλύτερες φάσεις | Αρνητικό → AWAY'],
+  ['Edge','Composite Live Score (SoT×50%+SQD×30%+GK×20%)','> 58% ή < 42%','>58%: HOME κυριαρχεί | <42%: AWAY κυριαρχεί | 42-58%: Ισόρροπο'],
+  ['SoT Ratio','Shots on Target αναλογία','> 60%','Ο πιο αξιόπιστος live predictor (r>0.65 με outcome)'],
+  ['GK Saves','Σεβές τερματοφύλακα — κρυφή πίεση','> 2','>2: η αντίπαλη ομάδα ασκεί πίεση που δεν φαίνεται στο σκορ'],
+  // ── Volatility ───────────────────────────────────────────────
+  ['σ (sigma)','Τυπική απόκλιση επιδόσεων','< 0.8','<0.8: STABLE ▼ αξιόπιστο | >1.2: VOLATILE ▲ αποφυγή'],
+  ['ΔΕ₉₅','Διάστημα Εμπιστοσύνης 95%','Στενό εύρος','Πλατύ ΔΕ = αστάθεια = μειωμένος σταθμός Kelly'],
+  // ── H2H & Form ───────────────────────────────────────────────
+  ['H2H','Ιστορικές απευθείας αναμετρήσεις','≥4 ματς','12% blend στο λ | <4 ματς: αγνοείται'],
+  ['Φόρμα','Τελευταία 5-6 ματς (W/D/L)','≥3W τελευταία 5','Βάρη: W1×1.0, W2×0.82, W3×0.67, W4×0.54, W5×0.43'],
+  // ── Value ────────────────────────────────────────────────────
+  ['EV%','Expected Value = (P×Απόδοση)−1','> 0%','+5%: αξιόπιστο | +10%: εξαιρετικό | <0%: ΜΗΝ παίξεις'],
+  ['Kelly','Βέλτιστο ποσό στοιχήματος','Fractional 25%','APEX χρησιμοποιεί Kelly/4 — μεγιστοποιεί χωρίς χρεοκοπία'],
+  // ── Calibration ──────────────────────────────────────────────
+  ['GOLD','Επιθετικό πρωτάθλημα (mult×1.12)','—','Bundesliga, Eredivisie, MLS, Jupiler Pro, Austrian BL'],
+  ['TIGHT','Αμυντικό πρωτάθλημα (mult×0.95)','—','Serie A, La Liga, Super League GR, Champions League, Ligue 1'],
+  ['TRAP','Αστάθεια / Δύσκολο (mult×0.90)','—','Championship, League One, 2. Bundesliga, Segunda División'],
+  ['CL/EL Cal.','Βαθμονόμηση από 280 ματς','—','CL: mult×0.88, minO25:2.20 | EL: mult×0.90, minO25:2.35'],
+];
+
 window.openGlossary = function() {
   const modal = document.getElementById('glossaryModal');
   const content = document.getElementById('glossaryContent');
   if(!modal || !content) return;
 
-  content.innerHTML = GLOSSARY_GROUPS.map(group => {
+  // ── Tab state ─────────────────────────────────────────────────
+  let activeTab = 'glossary';
+
+  const renderGlossary = () => GLOSSARY_GROUPS.map(group => {
     const badgeHtml = group.badge
       ? `<span class="gloss-badge ${group.badge}">${group.badge==='live'?'🟢 LIVE':group.badge==='engine'?'⚙️ ENGINE':'💰 VALUE'}</span>`
       : '';
@@ -216,7 +266,6 @@ window.openGlossary = function() {
         <div class="gloss-desc">${desc.replace(/\\n/g,'\n')}</div>
       </div>`;
     }).filter(Boolean).join('');
-
     return `<div style="margin-bottom:16px;">
       <div style="font-size:0.65rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,0.06);">
         ${group.label}${badgeHtml}
@@ -225,6 +274,70 @@ window.openGlossary = function() {
     </div>`;
   }).join('');
 
+  const renderConceptTable = () => {
+    // Group rows by category
+    const cats = [
+      { label:'📐 xG & Μοντέλο', rows: CONCEPT_TABLE.filter(r=>['xG','xGA','tXG','xG Diff','xG Mult'].includes(r[0])) },
+      { label:'🎯 Αγορές & Σήματα', rows: CONCEPT_TABLE.filter(r=>['Conf%','O2.5','O3.5','U2.5','BTTS','AH','HT'].includes(r[0])) },
+      { label:'🚩 Κόρνερ & Κάρτες', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Κόρνερ')||r[0].includes('Κάρτες')||r[0].includes('Card%')||r[0].includes('P(>8')) },
+      { label:'🚫 Οφσάιντ', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Offside')||r[0].includes('off')||r[0].includes('αμφ')) },
+      { label:'📡 Live', rows: CONCEPT_TABLE.filter(r=>['SQD','Edge','SoT Ratio','GK Saves'].includes(r[0])) },
+      { label:'📉 Volatility & Φόρμα', rows: CONCEPT_TABLE.filter(r=>['σ (sigma)','ΔΕ₉₅','H2H','Φόρμα'].includes(r[0])) },
+      { label:'💰 Value & Calibration', rows: CONCEPT_TABLE.filter(r=>['EV%','Kelly','GOLD','TIGHT','TRAP','CL/EL Cal.'].includes(r[0])) },
+    ];
+
+    return cats.map(cat => `
+      <div style="margin-bottom:18px;">
+        <div style="font-size:0.66rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,0.06);">${cat.label}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.72rem;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border-md);">
+              <th style="text-align:left;padding:4px 8px 6px 0;color:var(--text-dim);font-weight:700;font-family:var(--font-cond);font-size:0.60rem;text-transform:uppercase;letter-spacing:0.08em;width:15%;">Δείκτης</th>
+              <th style="text-align:left;padding:4px 8px 6px;color:var(--text-dim);font-weight:700;font-family:var(--font-cond);font-size:0.60rem;text-transform:uppercase;letter-spacing:0.08em;width:28%;">Τι μετράει</th>
+              <th style="text-align:left;padding:4px 8px 6px;color:var(--text-dim);font-weight:700;font-family:var(--font-cond);font-size:0.60rem;text-transform:uppercase;letter-spacing:0.08em;width:20%;">Καλή τιμή</th>
+              <th style="text-align:left;padding:4px 0 6px 8px;color:var(--text-dim);font-weight:700;font-family:var(--font-cond);font-size:0.60rem;text-transform:uppercase;letter-spacing:0.08em;width:37%;">Ερμηνεία / Ενέργεια</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${cat.rows.map((r,i) => `
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);${i%2===1?'background:rgba(255,255,255,0.012)':''}">
+              <td style="padding:6px 8px 6px 0;font-family:var(--font-mono);font-weight:700;color:var(--blue);font-size:0.68rem;vertical-align:top;">${r[0]}</td>
+              <td style="padding:6px 8px;color:var(--text-sub);vertical-align:top;">${r[1]}</td>
+              <td style="padding:6px 8px;font-family:var(--font-mono);color:var(--accent-green);font-size:0.68rem;vertical-align:top;">${r[2]}</td>
+              <td style="padding:6px 0 6px 8px;color:var(--text-muted);vertical-align:top;font-size:0.68rem;">${r[3]}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`).join('');
+  };
+
+  const render = () => {
+    content.innerHTML = `
+      <!-- Tabs -->
+      <div style="display:flex;gap:4px;margin-bottom:18px;background:var(--bg-surface);border-radius:8px;padding:3px;">
+        <button onclick="window._glossTab('glossary')" id="gtab-glossary"
+          style="flex:1;padding:7px 12px;border-radius:6px;border:none;cursor:pointer;font-family:var(--font-cond);font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;transition:all 0.15s;
+          background:${activeTab==='glossary'?'var(--bg-raised)':'transparent'};color:${activeTab==='glossary'?'var(--text-main)':'var(--text-muted)'};">
+          📚 Γλωσσάριο
+        </button>
+        <button onclick="window._glossTab('concepts')" id="gtab-concepts"
+          style="flex:1;padding:7px 12px;border-radius:6px;border:none;cursor:pointer;font-family:var(--font-cond);font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;transition:all 0.15s;
+          background:${activeTab==='concepts'?'var(--bg-raised)':'transparent'};color:${activeTab==='concepts'?'var(--text-main)':'var(--text-muted)'};">
+          📊 Εννοιολογικός Πίνακας
+        </button>
+      </div>
+      <!-- Content -->
+      <div id="glossary-tab-content">
+        ${activeTab==='glossary' ? renderGlossary() : renderConceptTable()}
+      </div>`;
+  };
+
+  window._glossTab = (tab) => {
+    activeTab = tab;
+    render();
+  };
+
+  render();
   modal.classList.add('open');
 };
 
@@ -4679,6 +4792,56 @@ window.selectDefaultLeagues = function() {
   saveUserMyLeagues(def);
   window.renderMyLeaguesPanel();
   updateLeagueFilterOption();
+};
+
+// Μαζική επιλογή ανά κατηγορία (Gold / Tight / Standard / Gold+Tight)
+window.selectByType = function(type) {
+  if(typeof LEAGUES_DATA === 'undefined') return;
+  let ids = [];
+  switch(type) {
+    case 'GOLD':
+      ids = LEAGUES_DATA
+        .filter(l => typeof GOLD_LEAGUES!=='undefined' && GOLD_LEAGUES.has(l.id))
+        .map(l=>l.id);
+      break;
+    case 'TIGHT':
+      ids = LEAGUES_DATA
+        .filter(l => typeof TIGHT_LEAGUES!=='undefined' && TIGHT_LEAGUES.has(l.id))
+        .map(l=>l.id);
+      break;
+    case 'TRAP':
+      ids = LEAGUES_DATA
+        .filter(l => typeof TRAP_LEAGUES!=='undefined' && TRAP_LEAGUES.has(l.id))
+        .map(l=>l.id);
+      break;
+    case 'STANDARD':
+      // Standard = δεν είναι GOLD, TIGHT ή TRAP
+      ids = LEAGUES_DATA
+        .filter(l => {
+          const id = l.id;
+          const isGold  = typeof GOLD_LEAGUES !=='undefined' && GOLD_LEAGUES.has(id);
+          const isTight = typeof TIGHT_LEAGUES!=='undefined' && TIGHT_LEAGUES.has(id);
+          const isTrap  = typeof TRAP_LEAGUES !=='undefined' && TRAP_LEAGUES.has(id);
+          return !isGold && !isTight && !isTrap;
+        })
+        .map(l=>l.id);
+      break;
+    case 'GOLD+TIGHT':
+      // Τα πιο αξιόπιστα: Gold (καλό Poisson fit) + Tight (αμυντικά αλλά σταθερά)
+      ids = LEAGUES_DATA
+        .filter(l => {
+          const id = l.id;
+          return (typeof GOLD_LEAGUES !=='undefined' && GOLD_LEAGUES.has(id)) ||
+                 (typeof TIGHT_LEAGUES!=='undefined' && TIGHT_LEAGUES.has(id));
+        })
+        .map(l=>l.id);
+      break;
+  }
+  if(!ids.length) { showErr(`Δεν βρέθηκαν πρωταθλήματα τύπου ${type}.`); return; }
+  saveUserMyLeagues(ids);
+  window.renderMyLeaguesPanel();
+  updateLeagueFilterOption();
+  showOk(`✅ ${ids.length} πρωταθλήματα επιλέχτηκαν (${type})`);
 };
 
 window.toggleLeague = function(id, checked) {
