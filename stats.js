@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.8 — MASTER ENGINE · MARKET MISPRICING BOMBS + PROGRESSIVE SMART SCAN
+// APEX OMEGA v5.9 — MASTER ENGINE · LIVE LEARNING ENGINE + MARKET MISPRICING BOMBS + PROGRESSIVE SMART SCAN
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -164,6 +164,16 @@ const LIVE_POLL_MS       = 60000;
 const LS_LIVE_ALERTS     = 'omega_live_alerts_v5.0';
 const LS_MY_LEAGUES      = 'omega_my_leagues_v5.0';
 
+// ── v5.9 Live Learning State ────────────────────────────────────────────────
+// Η μάθηση γίνεται ΜΟΝΟ αφού ολοκληρωθεί ο αγώνας.
+// Τα pre-match priors παγώνουν πριν χρησιμοποιηθούν live δεδομένα.
+const LS_LIVE_LEARNING        = 'omega_live_learning_v5.9';
+const LIVE_LEARN_MILESTONES   = [15,30,45,60,75];
+const LIVE_LEARN_MIN_N        = 8;
+const LIVE_LEARN_MAX_MATCHES  = 500;
+const LIVE_LEARN_DEFAULT_W    = {15:0.30,30:0.40,45:0.50,60:0.65,75:0.80};
+let liveLearningState         = null;
+
 // ── Dynamic My Leagues ────────────────────────────────────────────────────────
 // Επιστρέφει τα επιλεγμένα πρωταθλήματα του χρήστη.
 // Προτεραιότητα: localStorage > hardcoded default από leagues.js
@@ -300,9 +310,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.8';
+const APP_VERSION   = 'v5.9';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = 'PROGRESSIVE SMART SCAN';
+const BUILD_TIME    = 'LIVE LEARNING ENGINE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -2474,12 +2484,374 @@ function computeInPlayPick(baseRec,liveFixture){
   return{inPlayPick,inPlayConf:clamp(inPlayConf,0,99),inPlayReason,hGoals,aGoals,elapsed,status,decayed,ppAdj};
 }
 
+
+// ================================================================
+//  🧠 LIVE LEARNING ENGINE v5.9
+//  Pre-match baseline → live snapshots → FT settlement → calibration
+//
+//  Anti-leakage rule:
+//  • Training baseline only when captured before the fixture is live.
+//  • Live snapshots never rewrite the frozen pre-match baseline.
+//  • Calibration changes only after FT using settled snapshots.
+// ================================================================
+
+function _defaultLiveLearningState(){
+  return {
+    version:1,
+    matches:{},
+    weights:{...LIVE_LEARN_DEFAULT_W},
+    metrics:{},
+    settledCount:0,
+    updatedAt:null
+  };
+}
+
+function _getLiveLearningState(){
+  if(liveLearningState) return liveLearningState;
+  try{
+    const raw=JSON.parse(localStorage.getItem(LS_LIVE_LEARNING)||'null');
+    if(raw && typeof raw==='object'){
+      liveLearningState={
+        ..._defaultLiveLearningState(),
+        ...raw,
+        matches:raw.matches&&typeof raw.matches==='object'?raw.matches:{},
+        weights:{...LIVE_LEARN_DEFAULT_W,...(raw.weights||{})},
+        metrics:raw.metrics&&typeof raw.metrics==='object'?raw.metrics:{}
+      };
+      return liveLearningState;
+    }
+  }catch{}
+  liveLearningState=_defaultLiveLearningState();
+  return liveLearningState;
+}
+
+function _saveLiveLearningState(){
+  const st=_getLiveLearningState();
+  try{
+    const rows=Object.values(st.matches||{}).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0));
+    if(rows.length>LIVE_LEARN_MAX_MATCHES){
+      st.matches=Object.fromEntries(rows.slice(0,LIVE_LEARN_MAX_MATCHES).map(x=>[String(x.fixId),x]));
+    }
+    st.updatedAt=Date.now();
+    localStorage.setItem(LS_LIVE_LEARNING,JSON.stringify(st));
+  }catch(e){console.warn('[APEX] Live learning save failed',e);}
+}
+
+function _outcomeFromPP(pp){
+  if(!pp) return 'X';
+  const a=[['1',safeNum(pp.pHome,0)],['X',safeNum(pp.pDraw,0)],['2',safeNum(pp.pAway,0)]];
+  a.sort((x,y)=>y[1]-x[1]);
+  return a[0][0];
+}
+
+function _baselineFromRec(rec,lf=null,source='SMART_SCAN'){
+  if(!rec) return null;
+  const pp=rec.pp||{};
+  const status=rec.m?.fixture?.status?.short||lf?.fixture?.status?.short||'';
+  const eligible=!isLive(status)&&!isFinished(status);
+  const baseline={
+    fixId:rec.fixId||lf?.fixture?.id,
+    capturedAt:Date.now(),
+    source,
+    eligible,
+    capturedStatus:status||'UNKNOWN',
+    ht:rec.ht||lf?.teams?.home?.name||'',
+    at:rec.at||lf?.teams?.away?.name||'',
+    leagueId:rec.leagueId||lf?.league?.id||0,
+    league:rec.lg||lf?.league?.name||'',
+    pHome:safeNum(pp.pHome,0),
+    pDraw:safeNum(pp.pDraw,0),
+    pAway:safeNum(pp.pAway,0),
+    pO25:safeNum(pp.pO25,0),
+    pO35:safeNum(pp.pO35,0),
+    pBTTS:safeNum(pp.pBTTS,0),
+    hExp:safeNum(rec.hExp??rec.hXGfinal,0),
+    aExp:safeNum(rec.aExp??rec.aXGfinal,0),
+    tXG:safeNum(rec.tXG,0),
+    omegaPick:rec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ',
+    strength:safeNum(rec.strength,0)
+  };
+  baseline.outcomePick=_outcomeFromPP(baseline);
+  return baseline;
+}
+
+function _ensureLiveLearningMatch(rec,lf=null,source='SMART_SCAN'){
+  const st=_getLiveLearningState();
+  const fixId=String(rec?.fixId||lf?.fixture?.id||'');
+  if(!fixId) return null;
+  let row=st.matches[fixId];
+  if(!row){
+    const baseline=_baselineFromRec(rec,lf,source);
+    if(!baseline) return null;
+    row=st.matches[fixId]={
+      fixId:Number(fixId),
+      createdAt:Date.now(),
+      updatedAt:Date.now(),
+      baseline,
+      snapshots:{},
+      settled:false,
+      actualOutcome:null,
+      actualScore:null
+    };
+    _saveLiveLearningState();
+  }else{
+    row.updatedAt=Date.now();
+  }
+  return row;
+}
+
+function _seedLiveBaselinesFromScan(data){
+  if(!Array.isArray(data)) return;
+  let changed=false;
+  const st=_getLiveLearningState();
+  data.forEach(rec=>{
+    if(!rec?.fixId||!rec?.pp) return;
+    const key=String(rec.fixId);
+    if(st.matches[key]?.baseline) return;
+    const b=_baselineFromRec(rec,null,'SMART_SCAN');
+    if(!b) return;
+    st.matches[key]={fixId:rec.fixId,createdAt:Date.now(),updatedAt:Date.now(),baseline:b,snapshots:{},settled:false,actualOutcome:null,actualScore:null};
+    changed=true;
+  });
+  if(changed)_saveLiveLearningState();
+}
+
+function _liveFeatureSignal(intel){
+  if(!intel) return 0;
+  const edge=clamp((safeNum(intel.hLiveEdge,50)-50)/50,-1,1);
+  const xgTot=safeNum(intel.hLiveXG,0)+safeNum(intel.aLiveXG,0);
+  const xg=xgTot>0?clamp((safeNum(intel.hLiveXG,0)/xgTot-0.5)*2,-1,1):0;
+  const sot=clamp((safeNum(intel.hSoTRatio,0.5)-0.5)*2,-1,1);
+  const mom=clamp((safeNum(intel.hMomentum,50)-50)/50,-1,1);
+  return clamp(edge*0.40+xg*0.25+sot*0.25+mom*0.10,-1,1);
+}
+
+function _learnBucket(elapsed){
+  const e=safeNum(elapsed,0);
+  let best=15,dist=Infinity;
+  LIVE_LEARN_MILESTONES.forEach(m=>{const d=Math.abs(e-m);if(d<dist){best=m;dist=d;}});
+  return best;
+}
+
+function _adjust1X2ByLiveSignal(pp,signal,weight){
+  if(!pp) return {pHome:0,pDraw:0,pAway:0};
+  const s=clamp(safeNum(signal,0),-1,1)*clamp(safeNum(weight,0),0,1.5);
+  let h=Math.max(1e-6,safeNum(pp.pHome,0))*Math.exp(s);
+  let a=Math.max(1e-6,safeNum(pp.pAway,0))*Math.exp(-s);
+  let d=Math.max(1e-6,safeNum(pp.pDraw,0))*Math.exp(-Math.abs(s)*0.18);
+  const z=h+d+a||1;
+  return {pHome:h/z,pDraw:d/z,pAway:a/z};
+}
+
+function _liveLearnWeight(elapsed){
+  const st=_getLiveLearningState();
+  const b=_learnBucket(elapsed);
+  return safeNum(st.weights?.[b],LIVE_LEARN_DEFAULT_W[b]??0.5);
+}
+
+function _computeLiveValidation(baseline,inPlay,intel,lf){
+  if(!baseline||!inPlay) return null;
+  const rawPP=inPlay.ppAdj||{pHome:baseline.pHome,pDraw:baseline.pDraw,pAway:baseline.pAway};
+  const signal=_liveFeatureSignal(intel);
+  const weight=_liveLearnWeight(inPlay.elapsed||lf?.fixture?.status?.elapsed||0);
+  const currentPP=_adjust1X2ByLiveSignal(rawPP,signal,weight);
+  const basePick=baseline.outcomePick||_outcomeFromPP(baseline);
+  const key=basePick==='1'?'pHome':basePick==='2'?'pAway':'pDraw';
+  const preP=safeNum(baseline[key],0);
+  const liveP=safeNum(currentPP[key],0);
+  const driftPP=(liveP-preP)*100;
+  const hG=safeNum(lf?.goals?.home,0),aG=safeNum(lf?.goals?.away,0);
+
+  let support=0;
+  if(basePick==='1') support=signal;
+  else if(basePick==='2') support=-signal;
+  else {
+    support=1-Math.min(1,Math.abs(signal)*1.4);
+    if(hG===aG) support=clamp(support+0.15,-1,1);
+    else support=clamp(support-0.35,-1,1);
+  }
+
+  const confirmation=clamp(50+driftPP*1.15+support*24,0,100);
+  let label='WEAKENING',icon='🟠';
+  if(confirmation>=70){label='CONFIRMED';icon='🟢';}
+  else if(confirmation<40){label='INVALIDATED';icon='🔴';}
+  else if(Math.abs(driftPP)<4){label='STABLE';icon='🟡';}
+
+  return {baselinePick:basePick,preP,liveP,driftPP,signal,weight,currentPP,confirmation,label,icon};
+}
+
+async function _fetchTrackerLiveIntel(lf){
+  const fixId=String(lf?.fixture?.id||'');
+  if(!fixId) return null;
+  const elapsed=lf?.fixture?.status?.elapsed||1;
+  const cached=liveStatsCache.get(fixId);
+  if(cached?.h&&cached?.a) return computeLiveIntelligence(cached.h,cached.a,elapsed);
+  try{
+    const sr=await apiReq(`fixtures/statistics?fixture=${fixId}`,{priority:'high'});
+    if(sr.response?.length>=2){
+      const h=sr.response[0].statistics||[],a=sr.response[1].statistics||[];
+      liveStatsCache.set(fixId,{h,a,ts:Date.now()});
+      return computeLiveIntelligence(h,a,elapsed);
+    }
+  }catch(e){console.warn('[APEX] tracker live stats',fixId,e.message);}
+  return null;
+}
+
+function _maybeRecordLiveSnapshot(row,lf,inPlay,intel,validation){
+  if(!row||!lf||!inPlay) return false;
+  const elapsed=safeNum(lf.fixture?.status?.elapsed,0);
+  const status=lf.fixture?.status?.short||'';
+  let milestone=null;
+  if(status==='HT') milestone=45;
+  else{
+    for(const m of LIVE_LEARN_MILESTONES){
+      if(Math.abs(elapsed-m)<=3){milestone=m;break;}
+    }
+  }
+  if(!milestone||row.snapshots?.[milestone]) return false;
+  row.snapshots=row.snapshots||{};
+  row.snapshots[milestone]={
+    minute:milestone,
+    capturedMinute:elapsed,
+    capturedAt:Date.now(),
+    scoreHome:safeNum(lf.goals?.home,0),
+    scoreAway:safeNum(lf.goals?.away,0),
+    rawPP:{
+      pHome:safeNum(inPlay.ppAdj?.pHome,0),
+      pDraw:safeNum(inPlay.ppAdj?.pDraw,0),
+      pAway:safeNum(inPlay.ppAdj?.pAway,0)
+    },
+    liveSignal:safeNum(validation?.signal,_liveFeatureSignal(intel)),
+    liveEdge:safeNum(intel?.hLiveEdge,50),
+    liveXGHome:safeNum(intel?.hLiveXG,0),
+    liveXGAway:safeNum(intel?.aLiveXG,0),
+    hSoTRatio:safeNum(intel?.hSoTRatio,0.5),
+    hMomentum:safeNum(intel?.hMomentum,50),
+    confirmation:safeNum(validation?.confirmation,50)
+  };
+  row.updatedAt=Date.now();
+  _saveLiveLearningState();
+  return true;
+}
+
+function _brier1X2(pp,outcome){
+  const yH=outcome==='1'?1:0,yD=outcome==='X'?1:0,yA=outcome==='2'?1:0;
+  return ((safeNum(pp.pHome,0)-yH)**2+(safeNum(pp.pDraw,0)-yD)**2+(safeNum(pp.pAway,0)-yA)**2)/3;
+}
+
+function _recalibrateLiveLearning(){
+  const st=_getLiveLearningState();
+  const metrics={};
+  LIVE_LEARN_MILESTONES.forEach(minute=>{
+    const samples=[];
+    Object.values(st.matches||{}).forEach(row=>{
+      if(!row?.settled||!row?.baseline?.eligible||!row.actualOutcome) return;
+      const s=row.snapshots?.[minute];
+      if(!s?.rawPP) return;
+      samples.push({rawPP:s.rawPP,signal:s.liveSignal||0,outcome:row.actualOutcome});
+    });
+    if(samples.length<LIVE_LEARN_MIN_N){
+      metrics[minute]={n:samples.length,weight:safeNum(st.weights?.[minute],LIVE_LEARN_DEFAULT_W[minute]),ready:false};
+      return;
+    }
+    let bestW=0,bestB=Infinity;
+    for(let i=0;i<=30;i++){
+      const w=i*0.05;
+      let sum=0;
+      samples.forEach(s=>{sum+=_brier1X2(_adjust1X2ByLiveSignal(s.rawPP,s.signal,w),s.outcome);});
+      const b=sum/samples.length;
+      if(b<bestB){bestB=b;bestW=w;}
+    }
+    const baselineB=samples.reduce((z,s)=>z+_brier1X2(_adjust1X2ByLiveSignal(s.rawPP,s.signal,0),s.outcome),0)/samples.length;
+    const old=safeNum(st.weights?.[minute],LIVE_LEARN_DEFAULT_W[minute]);
+    const learned=clamp(old*0.70+bestW*0.30,0,1.5);
+    st.weights[minute]=parseFloat(learned.toFixed(3));
+    metrics[minute]={
+      n:samples.length,ready:true,weight:st.weights[minute],bestGridWeight:bestW,
+      brier:parseFloat(bestB.toFixed(4)),baselineBrier:parseFloat(baselineB.toFixed(4)),
+      improvementPct:baselineB>0?parseFloat(((baselineB-bestB)/baselineB*100).toFixed(1)):0
+    };
+  });
+  st.metrics=metrics;
+  st.settledCount=Object.values(st.matches||{}).filter(x=>x?.settled&&x?.baseline?.eligible).length;
+  st.updatedAt=Date.now();
+  _saveLiveLearningState();
+  _renderLiveLearningStatus();
+  return metrics;
+}
+
+async function _settleLiveLearningFixture(fix){
+  if(!fix?.fixture?.id||!isFinished(fix.fixture.status?.short)) return false;
+  const st=_getLiveLearningState(),key=String(fix.fixture.id),row=st.matches[key];
+  if(!row||row.settled) return false;
+  const h=safeNum(fix.goals?.home,0),a=safeNum(fix.goals?.away,0);
+  row.actualOutcome=h>a?'1':a>h?'2':'X';
+  row.actualScore=`${h}-${a}`;
+  row.settled=true;
+  row.settledAt=Date.now();
+  row.updatedAt=Date.now();
+  _saveLiveLearningState();
+  _recalibrateLiveLearning();
+  return true;
+}
+
+async function _settleDisappearedLiveMatches(activeIds){
+  const st=_getLiveLearningState();
+  const candidates=Object.values(st.matches||{})
+    .filter(r=>!r?.settled&&r?.lastSeenLiveAt&&!activeIds.has(Number(r.fixId)))
+    .sort((a,b)=>(a.lastSeenLiveAt||0)-(b.lastSeenLiveAt||0))
+    .slice(0,4);
+  if(!candidates.length) return;
+  await Promise.all(candidates.map(async row=>{
+    if(Date.now()-(row.lastSeenLiveAt||0)<45000) return;
+    try{
+      const fr=await apiReq(`fixtures?id=${row.fixId}`,{priority:'low',cacheMs:15000});
+      const fix=fr?.response?.[0];
+      if(fix&&isFinished(fix.fixture?.status?.short)) await _settleLiveLearningFixture(fix);
+    }catch{}
+  }));
+}
+
+function _renderLiveLearningStatus(){
+  const el=document.getElementById('liveLearningStatus'); if(!el)return;
+  const st=_getLiveLearningState();
+  const settled=Object.values(st.matches||{}).filter(x=>x?.settled&&x?.baseline?.eligible).length;
+  const eligible=Object.values(st.matches||{}).filter(x=>x?.baseline?.eligible).length;
+  const ready=LIVE_LEARN_MILESTONES.filter(m=>st.metrics?.[m]?.ready);
+  const chips=LIVE_LEARN_MILESTONES.map(m=>{
+    const mt=st.metrics?.[m]||{};
+    const n=mt.n||0,w=safeNum(st.weights?.[m],LIVE_LEARN_DEFAULT_W[m]);
+    const imp=mt.ready?` · ΔBrier ${safeNum(mt.improvementPct,0)>=0?'+':''}${safeNum(mt.improvementPct,0).toFixed(1)}%`:'';
+    return `<span style="font-family:var(--font-mono);font-size:.62rem;padding:4px 7px;border-radius:7px;background:var(--bg-surface);border:1px solid var(--border-light);">${m}' w=${w.toFixed(2)} · n=${n}${imp}</span>`;
+  }).join('');
+  el.innerHTML=`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+      <div><div style="font-weight:900;color:var(--accent-purple);font-size:.78rem;">🧠 LIVE LEARNING ENGINE</div>
+      <div style="font-size:.66rem;color:var(--text-muted);margin-top:2px;">${settled} settled training matches · ${eligible} frozen pre-match baselines · ${ready.length}/${LIVE_LEARN_MILESTONES.length} calibrated time buckets</div></div>
+      <button type="button" class="btn btn-outline" style="font-size:.66rem;padding:5px 8px;" onclick="window.resetLiveLearning()">Reset Learning</button>
+    </div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">${chips}</div>`;
+}
+
+window.resetLiveLearning=function(){
+  if(!confirm('Διαγραφή όλων των Live Learning snapshots και calibration weights;')) return;
+  liveLearningState=_defaultLiveLearningState();
+  _saveLiveLearningState();
+  _renderLiveLearningStatus();
+  showOk('🧠 Live Learning reset.');
+};
+
+window.recalibrateLiveLearning=function(){
+  const m=_recalibrateLiveLearning();
+  showOk('🧠 Live calibration updated from settled snapshots.');
+  return m;
+};
+
+
 // ── Live Tracker Engine ───────────────────────────────────────────────────────
 window.startLiveTracker=async function(){
   if(isLiveTracking)return;
   const lgEl=document.getElementById('liveTrackerLeague');
   liveTrackerLeagues=lgEl?.value||'MY_LEAGUES';
-  isLiveTracking=true;_updateLiveTrackerUI();
+  isLiveTracking=true;_updateLiveTrackerUI();_renderLiveLearningStatus();
   await _liveTrackerTick();
   liveTrackerInterval=setInterval(_liveTrackerTick,LIVE_POLL_MS);
 };
@@ -2491,30 +2863,50 @@ window.stopLiveTracker=function(){
 
 async function _liveTrackerTick(){
   const statusEl=document.getElementById('liveTrackerStatus'),lastEl=document.getElementById('liveTrackerLastPoll'),countEl=document.getElementById('liveMatchCount');
-  if(statusEl)statusEl.textContent='Polling live fixtures...';
+  if(statusEl)statusEl.textContent='Polling live fixtures + stats...';
   try{
-    const res=await apiReq('fixtures?live=all');
+    const res=await apiReq('fixtures?live=all',{priority:'high'});
     const all=(res.response||[]).filter(m=>{
       if(liveTrackerLeagues==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);
       if(liveTrackerLeagues==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);
       return m.league.id===parseInt(liveTrackerLeagues);
     });
     if(countEl)countEl.textContent=all.length;
-    const liveRecs=[];
-    for(const lf of all){
+    const activeIds=new Set(all.map(x=>Number(x.fixture.id)));
+
+    const liveRecs=(await Promise.all(all.map(async lf=>{
       const fixId=lf.fixture.id;
-      const preMatch=(window.scannedMatchesData||[]).find(r=>r.fixId===fixId);
-      let inPlay=null;
-      if(preMatch){inPlay=computeInPlayPick(preMatch,lf);}
-      else{
+      let preMatch=(window.scannedMatchesData||[]).find(r=>r.fixId===fixId);
+      let baseRec=preMatch;
+      let baselineSource='SMART_SCAN';
+
+      if(!baseRec){
         try{
-          const[hS,aS]=await Promise.all([buildIntel(lf.teams.home.id,lf.league.id,lf.league.season,true),buildIntel(lf.teams.away.id,lf.league.id,lf.league.season,false)]);
-          const lp=getLeagueParams(lf.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
-          const tXG=hXG+aXG;const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS,lf.league.id);
-          const syn={fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS};
-          inPlay=computeInPlayPick(syn,lf);
-        }catch{}
+          const[hS,aS]=await Promise.all([
+            buildIntel(lf.teams.home.id,lf.league.id,lf.league.season,true),
+            buildIntel(lf.teams.away.id,lf.league.id,lf.league.season,false)
+          ]);
+          const lp=getLeagueParams(lf.league.id);
+          const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
+          const tXG=hXG+aXG;
+          const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS,lf.league.id);
+          baseRec={
+            fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,
+            hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS,
+            pp:res2.pp,m:{fixture:{status:{short:lf.fixture.status.short}}}
+          };
+          baselineSource='LIVE-START SYNTHETIC';
+        }catch{return null;}
       }
+
+      const row=_ensureLiveLearningMatch(baseRec,lf,baselineSource);
+      if(row) row.lastSeenLiveAt=Date.now();
+      const baseline=row?.baseline||_baselineFromRec(baseRec,lf,baselineSource);
+      const inPlay=computeInPlayPick(baseRec,lf);
+      const liveIntel=await _fetchTrackerLiveIntel(lf);
+      const validation=_computeLiveValidation(baseline,inPlay,liveIntel,lf);
+      if(row){_maybeRecordLiveSnapshot(row,lf,inPlay,liveIntel,validation);row.updatedAt=Date.now();}
+
       const prev=liveMatchesState[fixId];
       if(prev&&inPlay&&prev.inPlayPick!==inPlay.inPlayPick){
         const alert={time:new Date().toLocaleTimeString('el-GR'),fixId,ht:lf.teams.home.name,at:lf.teams.away.name,elapsed:lf.fixture.status.elapsed,from:prev.inPlayPick,to:inPlay.inPlayPick,score:`${lf.goals.home}-${lf.goals.away}`};
@@ -2522,10 +2914,16 @@ async function _liveTrackerTick(){
         _flashSignalAlert(alert);
         try{localStorage.setItem(LS_LIVE_ALERTS,JSON.stringify(liveAlerts.slice(0,20)));}catch{}
       }
-      liveMatchesState[fixId]={...inPlay,lf};liveRecs.push({lf,inPlay,preMatch});
-    }
-    _renderLiveDashboard(liveRecs);_renderLiveAlerts();
-    if(statusEl)statusEl.textContent=`Ενεργό — poll σε ${LIVE_POLL_MS/1000}s`;
+
+      liveMatchesState[fixId]={...inPlay,lf,liveIntel,validation,baseline,lastSeenAt:Date.now()};
+      return {lf,inPlay,preMatch:baseRec,baseline,liveIntel,validation,learningEligible:!!baseline?.eligible};
+    }))).filter(Boolean);
+
+    _renderLiveDashboard(liveRecs);_renderLiveAlerts();_renderLiveLearningStatus();
+    _settleDisappearedLiveMatches(activeIds).catch(()=>{});
+    _saveLiveLearningState();
+
+    if(statusEl)statusEl.textContent=`Ενεργό — ${all.length} live · poll σε ${LIVE_POLL_MS/1000}s`;
     if(lastEl)lastEl.textContent=new Date().toLocaleTimeString('el-GR');
   }catch(e){if(statusEl)statusEl.textContent=`Poll error: ${e.message}`;}
 }
@@ -2552,55 +2950,102 @@ function _renderLiveDashboard(liveRecs){
   const el=document.getElementById('liveDashboard');if(!el)return;
   if(!liveRecs.length){el.innerHTML=`<div style="text-align:center;color:var(--text-muted);padding:32px 0;font-size:0.8rem;">Δεν υπάρχουν live αγώνες για τα επιλεγμένα πρωταθλήματα.</div>`;return;}
   liveRecs.sort((a,b)=>{
-    const aF=a.inPlay&&liveMatchesState[a.lf.fixture.id]?.inPlayPick!==a.preMatch?.omegaPick?1:0;
-    const bF=b.inPlay&&liveMatchesState[b.lf.fixture.id]?.inPlayPick!==b.preMatch?.omegaPick?1:0;
-    if(bF!==aF)return bF-aF;
+    const ac=safeNum(a.validation?.confirmation,50),bc=safeNum(b.validation?.confirmation,50);
+    const aAlert=ac<40?1:0,bAlert=bc<40?1:0;
+    if(bAlert!==aAlert)return bAlert-aAlert;
     return(b.lf.fixture.status.elapsed||0)-(a.lf.fixture.status.elapsed||0);
   });
-  el.innerHTML=liveRecs.map(({lf,inPlay,preMatch})=>{
+
+  el.innerHTML=liveRecs.map(({lf,inPlay,preMatch,baseline,liveIntel,validation,learningEligible})=>{
     const hG=lf.goals?.home??0,aG=lf.goals?.away??0,el_min=lf.fixture.status.elapsed||0,status=lf.fixture.status.short;
     const conf=inPlay?clamp(inPlay.inPlayConf,0,99):0;
     const confColor=conf>=70?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--accent-red)';
     const pick=inPlay?.inPlayPick||'NO BET ⏱',reason=inPlay?.inPlayReason||'';
     const isNoBet=pick.includes('ΧΩΡΙΣ ΣΥΣΤΑΣΗ');
     const pickColor=isNoBet?'var(--text-muted)':pick.includes('ΚΑΤΩ')?'var(--accent-teal)':pick.includes('ΠΑΝΩ ΑΠΟ 3.5')?'var(--accent-purple)':pick.includes('ΓΚΟΛ/ΓΚΟΛ')?'var(--accent-gold)':'var(--accent-green)';
-    const preMatchPick=preMatch?.omegaPick||'';
+    const preMatchPick=baseline?.omegaPick||preMatch?.omegaPick||'';
     const isFlip=inPlay&&!isNoBet&&preMatchPick&&preMatchPick!==pick&&!preMatchPick.includes('ΧΩΡΙΣ ΣΥΣΤΑΣΗ');
     const flipBadge=isFlip?`<span style="font-size:0.6rem;background:rgba(251,191,36,0.2);color:var(--accent-gold);border:1px solid var(--accent-gold);border-radius:4px;padding:1px 6px;font-weight:700;margin-left:6px;">ΑΛΛΑΓΗ</span>`:'';
     const timeProgress=status==='HT'?50:clamp(el_min/90*100,0,100);
     const d=inPlay?.decayed;
-    // Ισχυρή σύσταση: conf >= 75 και όχι ΧΩΡΙΣ ΣΥΣΤΑΣΗ
-    const isStrong = !isNoBet && conf >= 75;
-    const cardBorder = isFlip ? 'var(--accent-gold)' : isStrong ? 'var(--accent-green)' : isNoBet ? 'var(--border-light)' : 'rgba(16,185,129,0.25)';
+    const isStrong=!isNoBet&&conf>=75;
+    const cardBorder=validation?.confirmation<40?'var(--accent-red)':isFlip?'var(--accent-gold)':isStrong?'var(--accent-green)':'var(--border-light)';
+    const cur=validation?.currentPP||inPlay?.ppAdj||{};
+    const vCol=validation?.confirmation>=70?'var(--accent-green)':validation?.confirmation<40?'var(--accent-red)':'var(--accent-gold)';
+    const drift=safeNum(validation?.driftPP,0);
+    const driftTxt=`${drift>=0?'+':''}${drift.toFixed(1)}pp`;
+    const rowExists=(window.scannedMatchesData||[]).some(r=>r.fixId===lf.fixture.id);
+    const st=_getLiveLearningState().matches?.[String(lf.fixture.id)];
+    const snaps=LIVE_LEARN_MILESTONES.map(m=>`<span style="font-family:var(--font-mono);font-size:.58rem;padding:2px 5px;border-radius:5px;border:1px solid ${st?.snapshots?.[m]?'rgba(124,58,237,.35)':'var(--border-light)'};color:${st?.snapshots?.[m]?'var(--accent-purple)':'var(--text-dim)'};">${m}'${st?.snapshots?.[m]?' ✓':''}</span>`).join('');
+
     return`<div class="match-card${isStrong?' live-strong-signal':''}" id="live-card-${lf.fixture.id}" style="border-color:${cardBorder};${isStrong?'border-width:2px;':''}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:160px;">
+      <div style="display:grid;grid-template-columns:minmax(190px,1fr) auto minmax(220px,1.2fr);gap:14px;align-items:start;">
+        <div style="min-width:0;">
           <div class="match-league"><span class="live-dot"></span><span class="league-badge">${esc(status)}</span><span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span></div>
-          <div style="font-weight:700;font-size:0.95rem;margin:6px 0 2px;">${esc(lf.teams.home.name)}</div>
-          <div style="font-weight:600;font-size:0.85rem;color:var(--text-muted);">${esc(lf.teams.away.name)}</div>
+          <div style="font-weight:800;font-size:1rem;margin:6px 0 2px;">${esc(lf.teams.home.name)}</div>
+          <div style="font-weight:700;font-size:.88rem;color:var(--text-muted);">${esc(lf.teams.away.name)}</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;">${snaps}</div>
         </div>
-        <div style="text-align:center;min-width:80px;">
-          <div style="font-size:2rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-green);line-height:1;">${hG} - ${aG}</div>
+
+        <div style="text-align:center;min-width:88px;">
+          <div style="font-size:2.05rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-green);line-height:1;">${hG} - ${aG}</div>
           <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">${status==='HT'?'ΗΜ/ΝΙΟ':`${el_min}'`}</div>
           <div style="margin-top:6px;background:var(--bg-base);border-radius:4px;overflow:hidden;height:4px;"><div style="height:4px;width:${timeProgress}%;background:var(--accent-green);border-radius:4px;"></div></div>
         </div>
-        <div style="flex:1;min-width:160px;text-align:right;">
+
+        <div style="min-width:0;text-align:right;">
           <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Σήμα Live${flipBadge}</div>
-          <div class="${isStrong?'live-pick-pulse':''}" style="font-size:0.85rem;font-weight:800;color:${pickColor};">${esc(pick)}</div>
+          <div class="${isStrong?'live-pick-pulse':''}" style="font-size:0.86rem;font-weight:900;color:${pickColor};">${esc(pick)}</div>
           <div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px;">${esc(reason)}</div>
-          <div style="margin-top:6px;">
-            <div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:0.65rem;"><span style="color:var(--text-muted);">Βεβαιότητα</span><span style="font-family:var(--font-mono);color:${confColor};font-weight:700;">${conf.toFixed(0)}%</span></div>
-            <div style="background:var(--bg-base);border-radius:3px;height:5px;margin-top:3px;"><div style="height:5px;width:${conf}%;background:${confColor};border-radius:3px;"></div></div>
+          <div style="display:flex;justify-content:flex-end;align-items:center;gap:7px;margin-top:7px;flex-wrap:wrap;">
+            <span style="font-size:.66rem;color:var(--text-muted);">Live conf <b style="font-family:var(--font-mono);color:${confColor};">${conf.toFixed(0)}%</b></span>
+            ${validation?`<span style="font-size:.66rem;padding:3px 7px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--border-light);color:${vCol};font-weight:900;">${validation.icon} ${validation.label} ${validation.confirmation.toFixed(0)}/100</span>`:''}
           </div>
-          ${isStrong?`<div class="live-strong-badge">🔔 ΙΣΧΥΡΗ ΣΥΣΤΑΣΗ</div>`:''}
         </div>
       </div>
-      ${d?`<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
-        ${[{lbl:'Πάνω 2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'Πάνω 3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'Κάτω 2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'ΓΓ',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+        <div style="background:rgba(37,99,235,.045);border:1px solid rgba(37,99,235,.15);border-radius:8px;padding:9px 10px;">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+            <div style="font-size:.62rem;color:var(--accent-blue);font-weight:900;letter-spacing:.07em;">PRE-MATCH BASELINE</div>
+            <span style="font-size:.56rem;color:${learningEligible?'var(--accent-green)':'var(--text-dim)'};">${learningEligible?'TRAINING ELIGIBLE':'OBSERVATION ONLY'}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:7px;">
+            ${[['1',baseline?.pHome],['X',baseline?.pDraw],['2',baseline?.pAway]].map(([l,p])=>`<div style="text-align:center;background:var(--bg-base);border-radius:6px;padding:5px;"><div style="font-size:.56rem;color:var(--text-dim);">${l}</div><b style="font-family:var(--font-mono);font-size:.82rem;">${Number(p||0)*100?((Number(p||0)*100).toFixed(1)+'%'):'—'}</b></div>`).join('')}
+          </div>
+          <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;">${esc(preMatchPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ')} · xG ${safeNum(baseline?.hExp,0).toFixed(2)}–${safeNum(baseline?.aExp,0).toFixed(2)}</div>
+        </div>
+
+        <div style="background:rgba(124,58,237,.045);border:1px solid rgba(124,58,237,.15);border-radius:8px;padding:9px 10px;">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+            <div style="font-size:.62rem;color:var(--accent-purple);font-weight:900;letter-spacing:.07em;">LIVE NOW · LEARNED CALIBRATION</div>
+            ${validation?`<span style="font-size:.58rem;color:var(--text-muted);">w=${validation.weight.toFixed(2)}</span>`:''}
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:7px;">
+            ${[['1',cur.pHome],['X',cur.pDraw],['2',cur.pAway]].map(([l,p])=>`<div style="text-align:center;background:var(--bg-base);border-radius:6px;padding:5px;"><div style="font-size:.56rem;color:var(--text-dim);">${l}</div><b style="font-family:var(--font-mono);font-size:.82rem;">${Number(p||0)*100?((Number(p||0)*100).toFixed(1)+'%'):'—'}</b></div>`).join('')}
+          </div>
+          <div style="display:flex;justify-content:space-between;gap:6px;align-items:center;margin-top:6px;font-size:.66rem;color:var(--text-muted);">
+            <span>Prediction Drift (${validation?.baselinePick||'—'}): <b style="font-family:var(--font-mono);color:${drift>=0?'var(--accent-green)':'var(--accent-red)'};">${driftTxt}</b></span>
+            ${liveIntel?`<span>Live Edge 🏠 <b style="font-family:var(--font-mono);">${safeNum(liveIntel.hLiveEdge,50).toFixed(0)}</b></span>`:''}
+          </div>
+        </div>
+      </div>
+
+      ${liveIntel?`<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">Live xG <b>${safeNum(liveIntel.hLiveXG,0).toFixed(2)}–${safeNum(liveIntel.aLiveXG,0).toFixed(2)}</b></span>
+        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">SoT <b>${safeNum(liveIntel.hSoT,0)}–${safeNum(liveIntel.aSoT,0)}</b></span>
+        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">Momentum <b>${safeNum(liveIntel.hMomentum,50)}–${safeNum(liveIntel.aMomentum,50)}</b></span>
+        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">Corners <b>${safeNum(liveIntel.hCor,0)}–${safeNum(liveIntel.aCor,0)}</b></span>
+      </div>`:''}
+
+      ${d?`<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        ${[{lbl:'O2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'O3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'U2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'BTTS',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
           const p=Math.round(m.v*100);
-          return`<div style="flex:1;min-width:55px;background:var(--bg-base);border-radius:6px;padding:6px 8px;text-align:center;"><div style="font-size:0.66rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">${m.lbl}</div><div style="font-size:0.9rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
+          return`<div style="min-width:70px;background:var(--bg-base);border-radius:6px;padding:5px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;">${m.lbl}</div><div style="font-size:0.82rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
         }).join('')}
-        ${preMatchPick&&!isNoBet?`<div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;"><div style="font-size:0.66rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Πρό-αγώνα</div><div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div></div>`:''}
+        <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">
+          ${rowExists?`<button type="button" class="btn btn-outline" style="font-size:.68rem;padding:6px 9px;" onclick="scrollToMatchAndOpen('row-${lf.fixture.id}')">📊 Πλήρη Στατιστικά</button>`:''}
+        </div>
       </div>`:''}
     </div>`;
   }).join('');
@@ -5726,6 +6171,7 @@ function saveToVault(data){
       });
     });
     localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));
+    try{_seedLiveBaselinesFromScan(data);}catch{}
   }catch(e){}
 }
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
@@ -7347,6 +7793,7 @@ window.addEventListener('DOMContentLoaded',()=>{
               <div style="font-size:0.65rem;color:var(--text-muted);">Last poll: <span id="liveTrackerLastPoll" style="font-family:var(--font-mono);">—</span></div>
             </div>
           </div>
+          <div id="liveLearningStatus" style="margin-bottom:12px;padding:10px 12px;background:rgba(124,58,237,.045);border:1px solid rgba(124,58,237,.16);border-radius:9px;"></div>
           <div id="liveAlertFlash" style="margin-bottom:12px;"></div>
           <div id="liveDashboard" style="display:flex;flex-direction:column;gap:12px;"></div>
           <div id="liveAlertSection" style="margin-top:20px;display:none;">
@@ -7361,6 +7808,7 @@ window.addEventListener('DOMContentLoaded',()=>{
       }
       // Load saved live alerts
       try{const la=JSON.parse(localStorage.getItem(LS_LIVE_ALERTS));if(Array.isArray(la))liveAlerts=la;}catch{}
+      try{_renderLiveLearningStatus();}catch{}
     }
   });
   const today=todayISO();const ss=document.getElementById('scanStart'),se=document.getElementById('scanEnd');if(ss)ss.value=today;if(se)se.value=today;
