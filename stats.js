@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.4 — MASTER ENGINE · RADAR EDITION
+// APEX OMEGA v5.5 — MASTER ENGINE · BEST 4 + RADAR EDITION
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -133,7 +133,7 @@ let teamStatsCache = new BoundedCache(180, CACHE_TTL.TEAM_STATS),
     liveStatsCache = new BoundedCache(80,  CACHE_TTL.LIVE_STATS),
     lineupsCache   = new BoundedCache(140, CACHE_TTL.LINEUPS);  // starting XI per fixture
 let isRunning = false, currentCredits = null;
-let latestTopLists = { radar:[], exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
+let latestTopLists = { best4:[], radar:[], exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -2035,7 +2035,8 @@ window.runScan=async function(){
     } else {
       showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
     }
-    // RADAR v5.4: no automatic bookmaker-odds fetch — saves API calls and uses model superiority only.
+    // BEST 4 v5.5: price only the strongest RADAR fixtures across all available bookmakers.
+    window.refreshBest4({silent:true}).catch(err=>console.warn('[APEX] BEST 4 odds refresh failed:',err?.message||err));
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
@@ -3020,6 +3021,258 @@ function renderRadarTab(signals) {
   </div>`;
 }
 
+// ================================================================
+//  BEST 4 ENGINE — market-confirmed elite selections (v5.5)
+//  • Uses only strong RADAR signals
+//  • Fetches ALL bookmakers available for each fixture
+//  • Requires best valid market price >= 1.60
+//  • One selection per fixture; never pads to four
+// ================================================================
+const BEST4_MIN_ODDS = 1.60;
+const BEST4_MAX_ODDS = 8.00;
+const BEST4_MAX_FIXTURES_TO_PRICE = 18;
+let best4OddsCache = new BoundedCache(80, CACHE_TTL.ODDS);
+let best4Loading = false;
+
+function _best4Norm(s){
+  return String(s||'').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/\s+/g,' ').trim();
+}
+
+function _best4PushQuote(store,key,odd,bkName){
+  const o=Number(odd);
+  if(!key || !Number.isFinite(o) || o<1.01 || o>BEST4_MAX_ODDS) return;
+  if(!store[key]) store[key]=[];
+  store[key].push({odd:o, bookmaker:bkName||'Bookmaker'});
+}
+
+// Robust best price: when 3+ books exist, reject a single quote >25% above median.
+// This protects BEST 4 from stale/malformed outliers while still taking the top valid price.
+function _best4ChooseQuote(quotes){
+  if(!quotes?.length) return null;
+  const q=quotes.filter(x=>Number.isFinite(x.odd)&&x.odd>=1.01&&x.odd<=BEST4_MAX_ODDS).sort((a,b)=>a.odd-b.odd);
+  if(!q.length) return null;
+  const mid=q[Math.floor(q.length/2)].odd;
+  const clean=q.length>=3 ? q.filter(x=>x.odd <= mid*1.25) : q;
+  const best=(clean.length?clean:q).sort((a,b)=>b.odd-a.odd)[0];
+  return {...best, books:q.length, median:mid};
+}
+
+/** Parse ALL bookmakers returned by /odds?fixture=... into best-price market keys. */
+function parseBestOddsAcrossBookmakers(response){
+  const buckets={};
+  (response||[]).forEach(item=>{
+    (item?.bookmakers||[]).forEach(bk=>{
+      const bkName=bk?.name||`Bookmaker ${bk?.id??''}`;
+      (bk?.bets||[]).forEach(bet=>{
+        const n=_best4Norm(bet?.name);
+        const isHalf = n.includes('half') || n.includes('1st') || n.includes('2nd') || n.includes('1st half') || n.includes('2nd half');
+        (bet?.values||[]).forEach(v=>{
+          const val=_best4Norm(v?.value);
+          const odd=parseFloat(v?.odd);
+          if(!Number.isFinite(odd)) return;
+
+          // 1X2 / Match Winner — full time only
+          if(!isHalf && (n==='match winner' || n==='winner' || n.includes('match winner'))){
+            if(val==='home' || val==='1') _best4PushQuote(buckets,'1',odd,bkName);
+            else if(val==='draw' || val==='x') _best4PushQuote(buckets,'X',odd,bkName);
+            else if(val==='away' || val==='2') _best4PushQuote(buckets,'2',odd,bkName);
+          }
+
+          // Match goals totals
+          const isGoalsTotal = !isHalf && !n.includes('corner') && !n.includes('offside') &&
+            ((n.includes('goals') && (n.includes('over/under')||n.includes('over under')||n.includes('total'))) || n==='goals over/under');
+          if(isGoalsTotal){
+            if(val==='over 2.5' || val==='o 2.5') _best4PushQuote(buckets,'O2.5',odd,bkName);
+            if(val==='over 3.5' || val==='o 3.5') _best4PushQuote(buckets,'O3.5',odd,bkName);
+          }
+
+          // Total corners — accept common provider naming variants
+          if(!isHalf && n.includes('corner')){
+            if((val==='over 8.5'||val==='o 8.5') && !n.includes('home') && !n.includes('away'))
+              _best4PushQuote(buckets,'COR O8.5',odd,bkName);
+          }
+
+          // Offsides — availability varies by fixture/bookmaker.
+          if(!isHalf && n.includes('offside')){
+            const isHome=n.includes('home') || n.includes('team 1');
+            const isAway=n.includes('away') || n.includes('team 2');
+            if(!isHome && !isAway){
+              if(val==='over 2.5'||val==='o 2.5') _best4PushQuote(buckets,'OFF TOT O2.5',odd,bkName);
+              if(val==='over 3.5'||val==='o 3.5') _best4PushQuote(buckets,'OFF TOT O3.5',odd,bkName);
+            }
+            if(isHome && (val==='over 1.5'||val==='o 1.5')) _best4PushQuote(buckets,'OFF HOME O1.5',odd,bkName);
+            if(isAway && (val==='over 1.5'||val==='o 1.5')) _best4PushQuote(buckets,'OFF AWAY O1.5',odd,bkName);
+          }
+        });
+      });
+    });
+  });
+  const out={};
+  Object.keys(buckets).forEach(k=>{ const best=_best4ChooseQuote(buckets[k]); if(best) out[k]=best; });
+  return out;
+}
+
+async function fetchBestOddsForFixture(fixtureId){
+  const k=String(fixtureId);
+  if(best4OddsCache.has(k)) return best4OddsCache.get(k);
+  // No bookmaker filter: API returns all available bookmakers for the fixture.
+  const d=await apiReq(`odds?fixture=${fixtureId}`,{priority:'low',cacheMs:CACHE_TTL.ODDS});
+  const parsed=parseBestOddsAcrossBookmakers(d?.response||[]);
+  best4OddsCache.set(k,parsed);
+  return parsed;
+}
+
+function _best4MarketKey(signal){
+  if(!signal) return null;
+  if(signal.category==='1X2') return signal.market; // 1 / X / 2
+  if(signal.category==='GOALS') return signal.market; // O2.5 / O3.5
+  if(signal.category==='CORNERS') return 'COR O8.5';
+  if(signal.category==='OFFSIDES'){
+    const l=String(signal.label||'').toUpperCase();
+    if(l.includes('ΣΥΝΟΛΟ') && l.includes('2.5')) return 'OFF TOT O2.5';
+    if(l.includes('ΣΥΝΟΛΟ') && l.includes('3.5')) return 'OFF TOT O3.5';
+    if(l.includes('HOME') && l.includes('1.5')) return 'OFF HOME O1.5';
+    if(l.includes('AWAY') && l.includes('1.5')) return 'OFF AWAY O1.5';
+  }
+  return null;
+}
+
+function _best4EligibleSignal(s){
+  const p=Number(s?.probability||0), r=Number(s?.radarScore||0);
+  if(r<80) return false;
+  if(s.category==='1X2'){
+    if(s.market==='1'||s.market==='2') return p>=62 && Number(s.dominanceGap||0)>=10;
+    if(s.market==='X') return p>=38 && Number(s.dominanceGap||0)>=4;
+    return false;
+  }
+  if(s.category==='GOALS' && s.market==='O2.5') return p>=68;
+  if(s.category==='GOALS' && s.market==='O3.5') return p>=58;
+  if(s.category==='CORNERS') return p>=72;
+  if(s.category==='OFFSIDES') return p>=72;
+  return false;
+}
+
+function _best4ProbQuality(signal){
+  const p=Number(signal.probability||0);
+  if(signal.category==='1X2' && signal.market==='X') return clamp((p-30)/20*100,0,100);
+  if(signal.category==='1X2') return clamp((p-50)/25*100,0,100);
+  if(signal.category==='GOALS' && signal.market==='O3.5') return clamp((p-45)/25*100,0,100);
+  return clamp((p-55)/25*100,0,100);
+}
+
+function _best4DataQuality(rec){
+  if(!rec) return 50;
+  let q=68;
+  if(rec.lineupData?.available) q+=10;
+  const hsd=Number(rec.hS?.r6?.sdGoals), asd=Number(rec.aS?.r6?.sdGoals);
+  if(Number.isFinite(hsd) && hsd<=1.10) q+=5;
+  if(Number.isFinite(asd) && asd<=1.10) q+=5;
+  if(rec.hInjAdj && rec.aInjAdj) q+=4;
+  const fallback = Math.abs(Number(rec.hXGfinal||0)-1.10)<0.02 && Math.abs(Number(rec.aXGfinal||0)-1.10)<0.02;
+  if(fallback) q-=35;
+  return clamp(q,0,100);
+}
+
+function renderBest4Tab(items){
+  if(best4Loading && (!items||!items.length)){
+    return `<div style="text-align:center;padding:34px 20px;color:var(--text-muted);"><div style="font-size:2.2rem;margin-bottom:10px;">🏆</div><div style="font-weight:900;color:var(--text-main);">BEST 4 — φόρτωση αποδόσεων αγοράς…</div><div style="font-size:.8rem;margin-top:7px;">Συγκρίνω όλους τους διαθέσιμους bookmakers για τα ισχυρότερα RADAR signals.</div></div>`;
+  }
+  if(!items?.length){
+    return `<div style="text-align:center;padding:34px 20px;color:var(--text-muted);">
+      <div style="font-size:2.2rem;margin-bottom:10px;">🏆</div>
+      <div style="font-weight:900;color:var(--text-main);margin-bottom:6px;">BEST 4</div>
+      <div style="font-size:.82rem;line-height:1.6;max-width:680px;margin:0 auto;">Δεν υπάρχουν ακόμη επιλογές που να περνούν ταυτόχρονα τα αυστηρά φίλτρα του RADAR και πραγματική καλύτερη διαθέσιμη απόδοση ≥ ${BEST4_MIN_ODDS.toFixed(2)}. Το σύστημα δεν συμπληρώνει τεχνητά τέσσερις επιλογές.</div>
+      <button class="btn btn-primary" style="margin-top:14px;" onclick="window.refreshBest4()">↻ Έλεγχος αποδόσεων</button>
+    </div>`;
+  }
+  const catColor=c=>c==='1X2'?'var(--accent-blue)':c==='GOALS'?'var(--accent-green)':c==='CORNERS'?'var(--accent-gold)':'var(--accent-red)';
+  return `<div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding:11px 13px;background:rgba(217,119,6,.06);border:1px solid rgba(217,119,6,.16);border-radius:9px;">
+      <div><strong style="color:var(--accent-gold);">🏆 APEX BEST 4</strong><div style="font-size:.72rem;color:var(--text-muted);margin-top:3px;">Ισχυρό RADAR + καλύτερη έγκυρη απόδοση αγοράς ≥ ${BEST4_MIN_ODDS.toFixed(2)} · έως 1 επιλογή ανά αγώνα.</div></div>
+      <button class="btn btn-outline" style="height:32px;font-size:.72rem;" onclick="window.refreshBest4()">↻ Refresh Odds</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:10px;">
+    ${items.map((x,i)=>{
+      const col=catColor(x.category); const p=Number(x.probability||0); const o=Number(x.bestOdds||0); const fair=Number(x.fairOdds||0);
+      return `<div onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="padding:14px;background:var(--bg-base);border:1px solid var(--border-light);border-top:4px solid ${col};border-radius:9px;cursor:pointer;box-shadow:var(--shadow-sm);">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <div style="font-family:var(--font-mono);font-size:1.25rem;font-weight:900;color:var(--accent-gold);">#${i+1}</div>
+          <div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.25rem;font-weight:900;color:${col};">${Number(x.best4Score||0).toFixed(1)}</div><div style="font-size:.56rem;color:var(--text-dim);font-weight:800;">ROBUST SCORE · ${esc(x.grade||'')}</div></div>
+        </div>
+        <div style="font-size:.94rem;font-weight:900;margin-top:5px;">${esc(x.ht)} <span style="color:var(--text-muted);font-weight:500;">vs</span> ${esc(x.at)}</div>
+        <div style="font-size:.70rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg||'')} · ${esc(x.date||'')} ${esc(x.time||'')}</div>
+        <div style="font-size:.90rem;font-weight:900;color:${col};margin-top:9px;">${x.icon||'🎯'} ${esc(x.label)}</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">
+          <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.56rem;color:var(--text-dim);">MODEL P</div><b style="font-family:var(--font-mono);">${p.toFixed(1)}%</b></div>
+          <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.56rem;color:var(--text-dim);">FAIR ODDS</div><b style="font-family:var(--font-mono);">${fair.toFixed(2)}</b></div>
+          <div style="background:rgba(22,163,74,.08);padding:7px;border-radius:6px;text-align:center;border:1px solid rgba(22,163,74,.14);"><div style="font-size:.56rem;color:var(--text-dim);">BEST ODDS</div><b style="font-family:var(--font-mono);color:var(--accent-green);">${o.toFixed(2)}</b></div>
+        </div>
+        <div style="font-size:.71rem;color:var(--text-muted);margin-top:9px;line-height:1.45;">${esc(x.reason||'')}</div>
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:9px;padding-top:8px;border-top:1px solid var(--border);font-size:.68rem;">
+          <span style="color:var(--text-muted);">${esc(x.bookmaker||'Bookmaker')} · ${x.books||1} books</span>
+          <span style="font-family:var(--font-mono);font-weight:800;color:${Number(x.marketEdge||0)>0?'var(--accent-green)':'var(--text-muted)'};">Edge ${Number(x.marketEdge||0)>=0?'+':''}${Number(x.marketEdge||0).toFixed(1)}pp</span>
+        </div>
+      </div>`;
+    }).join('')}
+    </div>
+    ${items.length<4?`<div style="margin-top:10px;font-size:.72rem;color:var(--text-muted);">Μόνο ${items.length} επιλογ${items.length===1?'ή':'ές'} πέρασ${items.length===1?'ε':'αν'} όλα τα φίλτρα σήμερα — δεν συμπληρώνω τεχνητά τη λίστα.</div>`:''}
+  </div>`;
+}
+
+window.refreshBest4 = async function(opts={}){
+  if(best4Loading) return latestTopLists.best4||[];
+  const radar=(latestTopLists.radar||[]).filter(_best4EligibleSignal);
+  if(!radar.length){ latestTopLists.best4=[]; renderTopSections(); return []; }
+  best4Loading=true;
+  latestTopLists.best4=[];
+  renderTopSections();
+  try{
+    // Price strongest distinct fixtures first; maximum keeps quota predictable.
+    const fixtureIds=[];
+    for(const s of radar){ if(!fixtureIds.includes(s.fixId)) fixtureIds.push(s.fixId); if(fixtureIds.length>=BEST4_MAX_FIXTURES_TO_PRICE) break; }
+    const priceMap=new Map();
+    const batchSize=Math.max(2,Math.min(5,Math.ceil((API_RATE?.maxConcurrent||4)/2)));
+    let done=0;
+    for(let i=0;i<fixtureIds.length;i+=batchSize){
+      const batch=fixtureIds.slice(i,i+batchSize);
+      await Promise.all(batch.map(async id=>{ try{ priceMap.set(id,await fetchBestOddsForFixture(id)); }catch{ priceMap.set(id,{}); } finally{done++; if(!opts.silent)setProgress(done/fixtureIds.length*100,`BEST 4 odds ${done}/${fixtureIds.length}`);} }));
+    }
+
+    const recMap=new Map((window.scannedMatchesData||[]).map(r=>[r.fixId,r]));
+    const priced=[];
+    radar.forEach(s=>{
+      const key=_best4MarketKey(s); if(!key) return;
+      const q=priceMap.get(s.fixId)?.[key]; if(!q || Number(q.odd)<BEST4_MIN_ODDS) return;
+      const p=Number(s.probability||0)/100; if(!(p>0)) return;
+      const fair=1/p;
+      const implied=1/Number(q.odd);
+      const edge=(p-implied)*100;
+      if(edge<=0) return;
+      const rec=recMap.get(s.fixId);
+      const dq=_best4DataQuality(rec);
+      const pq=_best4ProbQuality(s);
+      const robust=clamp(Number(s.radarScore||0)*0.65 + pq*0.25 + dq*0.10,0,99);
+      const grade=robust>=90?'A+':robust>=85?'A':robust>=80?'B+':'B';
+      priced.push({...s,bestOdds:Number(q.odd),bookmaker:q.bookmaker,books:q.books||1,medianOdds:q.median||null,fairOdds:fair,impliedProb:implied*100,marketEdge:edge,best4Score:robust,grade,dataQuality:dq});
+    });
+
+    priced.sort((a,b)=>b.best4Score-a.best4Score || b.probability-a.probability || b.marketEdge-a.marketEdge);
+    const chosen=[], seenFix=new Set();
+    for(const x of priced){
+      if(seenFix.has(x.fixId)) continue;
+      chosen.push(x); seenFix.add(x.fixId);
+      if(chosen.length===4) break;
+    }
+    latestTopLists.best4=chosen;
+    return chosen;
+  } finally{
+    best4Loading=false;
+    renderTopSections();
+  }
+};
+
 function buildValueBetsList() {
   const sd = window.scannedMatchesData || [];
   const allBets = [];
@@ -3365,6 +3618,8 @@ function renderBombsTab(bombs) {
   </div>`;
 }
 function rebuildTopLists(){
+  // New scan/re-simulation invalidates the previous BEST 4 until odds are repriced.
+  latestTopLists.best4 = [];
   const MIN_CONF = 70;
   const sd = (window.scannedMatchesData||[]).filter(x =>
     !isFinished(x.m?.fixture?.status?.short) &&
@@ -3419,9 +3674,12 @@ function rebuildTopLists(){
 }
 
 function renderTopSections(){
+  if(!latestTopLists.best4) latestTopLists.best4 = [];
   if(!latestTopLists.radar) latestTopLists.radar = [];
+  const best4Count = latestTopLists.best4.length;
   const radarCount = latestTopLists.radar.length;
   const tabs=[
+    {id:'best4',    lbl:`🏆 BEST 4`,                                      d:latestTopLists.best4,      sk:'best4Score', sl:'SCORE', special:'best4'},
     {id:'radar',    lbl:`📡 RADAR`,                                      d:latestTopLists.radar,      sk:'radarScore', sl:'SCORE', special:'radar'},
     {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
@@ -3436,24 +3694,29 @@ function renderTopSections(){
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
   tabs.forEach((tab,i)=>{
+    const isBest4= tab.id==='best4';
     const isRadar= tab.id==='radar';
     const isTop  = tab.id==='top3';
     const isBomb = tab.id==='bombs';
     const bombCount = latestTopLists.bombs?.length || 0;
-    const badge = isRadar && radarCount > 0
-      ? `<span style="background:var(--accent-blue);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${radarCount}</span>`
-      : isTop
+    const badge = isBest4
+      ? `<span style="background:var(--accent-gold);color:#111827;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${best4Loading?'…':best4Count}</span>`
+      : isRadar && radarCount > 0
+        ? `<span style="background:var(--accent-blue);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${radarCount}</span>`
+        : isTop
         ? `<span style="background:var(--accent-gold);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">3</span>`
         : isBomb && bombCount > 0
           ? `<span style="background:var(--accent-red);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${bombCount}</span>`
           : `<span class="tab-count">${tab.d.length}</span>`;
-    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isRadar?'color:var(--accent-blue);font-weight:900;':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
+    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isBest4?'color:var(--accent-gold);font-weight:900;':isRadar?'color:var(--accent-blue);font-weight:900;':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
   });
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
     if(tab.id==='players'){
       html += renderPlayersTab(tab.d);
+    } else if(tab.id==='best4'){
+      html += renderBest4Tab(tab.d);
     } else if(tab.id==='radar'){
       html += renderRadarTab(tab.d);
     } else if(tab.id==='top3'){
@@ -6606,6 +6869,7 @@ window.resimulateMatches=function(){
     if(d.aPlayers?.length) adjustPlayerCardProbs(d.aPlayers, d.hS, cardCtx);
   });
   rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');
+  window.refreshBest4({silent:true}).catch(()=>{});
 };
 
 window.addEventListener('DOMContentLoaded',()=>{
