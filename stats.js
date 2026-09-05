@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.6 — MASTER ENGINE · SMART SCAN TURBO + BEST 4 + RADAR
+// APEX OMEGA v5.7 — MASTER ENGINE · PROGRESSIVE SMART SCAN + BEST 4 + RADAR
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -144,9 +144,14 @@ let teamStatsCache = new BoundedCache(180, CACHE_TTL.TEAM_STATS),
     injuryCache    = new BoundedCache(240, CACHE_TTL.INJURIES),
     liveStatsCache = new BoundedCache(80,  CACHE_TTL.LIVE_STATS),
     lineupsCache   = new BoundedCache(140, CACHE_TTL.LINEUPS);  // starting XI per fixture
+const _standInflight   = new Map();
+const _scorersInflight = new Map();
+const _assistsInflight = new Map();
+const _cardsInflight   = new Map();
 let isRunning = false, currentCredits = null;
 let latestTopLists = { best4:[], radar:[], exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
+let _progressiveScanState = { active:false, total:0, completed:0, failed:0, startedAt:0 };
 let bankrollData = { current: 0, history: [] };
 
 // ── Live Tracker State ──────────────────────────────────────────────────────
@@ -295,9 +300,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.6';
+const APP_VERSION   = 'v5.7';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = 'SMART SCAN TURBO';
+const BUILD_TIME    = 'PROGRESSIVE SMART SCAN';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -496,6 +501,112 @@ function setProgress(p,text=''){
   const b=document.getElementById('bar'),s=document.getElementById('status');
   if(b)b.style.width=Math.round(clamp(p,0,100))+'%';
   if(s)s.textContent=text+(_apiActive>0?` [${_apiActive} req]`:'');
+}
+
+function _progressiveElapsed(){
+  if(!_progressiveScanState.startedAt) return '0s';
+  const sec=Math.max(0,Math.round((Date.now()-_progressiveScanState.startedAt)/1000));
+  return sec<60?`${sec}s`:`${Math.floor(sec/60)}m ${sec%60}s`;
+}
+
+function initProgressiveScan(total){
+  _progressiveScanState={active:true,total:Number(total)||0,completed:0,failed:0,startedAt:Date.now()};
+  const sec=document.getElementById('progressiveSection'); if(!sec)return;
+  sec.innerHTML=`<div class="quant-panel" id="progressiveScanPanel" style="padding:0;overflow:hidden;border-color:rgba(37,99,235,0.25);">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div style="min-width:0;">
+        <div style="font-size:0.95rem;font-weight:900;color:var(--accent-blue);letter-spacing:.04em;">⚡ PROGRESSIVE SMART SCAN</div>
+        <div id="progressiveScanStatus" style="font-size:0.72rem;color:var(--text-muted);margin-top:3px;">Προετοιμασία · 0/${Number(total)||0} αναλύσεις ολοκληρωμένες</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span id="progressiveScanCounter" style="font-family:var(--font-mono);font-size:0.8rem;font-weight:900;color:var(--accent-blue);background:rgba(37,99,235,.08);border:1px solid rgba(37,99,235,.18);padding:6px 10px;border-radius:8px;">0/${Number(total)||0}</span>
+        <button type="button" class="btn btn-outline" style="font-size:.72rem;padding:6px 10px;" onclick="window.toggleProgressiveStream()">Ροή ▲</button>
+      </div>
+    </div>
+    <div id="progressiveStreamBody" style="display:block;">
+      <div style="padding:10px 18px;font-size:.7rem;color:var(--text-muted);border-bottom:1px solid var(--border-light);">Κάθε αγώνας εμφανίζεται μόλις ολοκληρωθεί. Πάτησε <b>Στατιστικά</b> χωρίς να περιμένεις να τελειώσει το scan.</div>
+      <div id="progressiveStreamList" style="display:flex;flex-direction:column;gap:8px;padding:12px;"></div>
+    </div>
+  </div>`;
+}
+
+window.toggleProgressiveStream=function(){
+  const body=document.getElementById('progressiveStreamBody'); if(!body)return;
+  body.style.display=body.style.display==='none'?'block':'none';
+  const btn=body.parentElement?.querySelector('button'); if(btn)btn.textContent=body.style.display==='none'?'Ροή ▼':'Ροή ▲';
+};
+
+function _progressiveProbChip(label,val){
+  const n=Number(val); if(!Number.isFinite(n)) return '';
+  return `<span style="font-family:var(--font-mono);font-size:.67rem;padding:3px 6px;border-radius:6px;background:var(--bg-surface);border:1px solid var(--border-light);color:var(--text-sub);">${label} ${(n*100).toFixed(0)}%</span>`;
+}
+
+function appendProgressiveMatch(rec,failed=false){
+  if(!_progressiveScanState.active||!rec)return;
+  _progressiveScanState.completed++;
+  if(failed)_progressiveScanState.failed++;
+  const done=_progressiveScanState.completed,total=_progressiveScanState.total||done;
+  const ctr=document.getElementById('progressiveScanCounter'); if(ctr)ctr.textContent=`${done}/${total}`;
+  const stat=document.getElementById('progressiveScanStatus');
+  if(stat)stat.textContent=`${done}/${total} αναλύσεις ολοκληρωμένες · ${_progressiveElapsed()}${_progressiveScanState.failed?` · ${_progressiveScanState.failed} σφάλματα`:''}`;
+  setProgress(10+(done/Math.max(total,1))*88,`Αναλύθηκαν ${done}/${total}`);
+
+  const list=document.getElementById('progressiveStreamList'); if(!list)return;
+  const x=rec, conf=clamp(safeNum(x.strength),0,100);
+  const confCol=conf>=75?'var(--accent-green)':conf>=60?'var(--accent-gold)':'var(--text-muted)';
+  const pp=x.pp||{};
+  const signal=failed?'Analysis error':(x.omegaPick||'NO SIGNAL');
+  const card=document.createElement('div');
+  card.id=`progressive-card-${x.fixId}`;
+  card.style.cssText='border:1px solid var(--border-light);border-radius:10px;background:var(--bg-panel);overflow:hidden;';
+  card.innerHTML=`<div style="padding:11px 12px;display:grid;grid-template-columns:minmax(170px,1.35fr) minmax(120px,.9fr) auto;gap:10px;align-items:center;">
+      <div style="min-width:0;">
+        <div style="font-size:.88rem;font-weight:800;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht||'')} <span style="color:var(--text-dim);">–</span> ${esc(x.at||'')}</div>
+        <div style="font-size:.64rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.lg||'')} · #${done} ολοκληρώθηκε</div>
+      </div>
+      <div style="min-width:0;">
+        <div style="font-size:.76rem;font-weight:800;color:${failed?'var(--accent-red)':confCol};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(signal)}</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
+          ${_progressiveProbChip('1',pp.pHome)}${_progressiveProbChip('X',pp.pDraw)}${_progressiveProbChip('2',pp.pAway)}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end;flex-wrap:wrap;">
+        <div style="text-align:right;min-width:54px;">
+          <div style="font-family:var(--font-mono);font-size:1.05rem;font-weight:900;color:${confCol};">${conf.toFixed(0)}%</div>
+          <div style="font-size:.55rem;color:var(--text-muted);">CONF</div>
+        </div>
+        <button type="button" class="btn btn-outline" style="font-size:.72rem;padding:7px 10px;" onclick="event.stopPropagation();window.toggleProgressiveMatch('${x.fixId}')">📊 Στατιστικά</button>
+      </div>
+    </div>
+    <div style="padding:0 12px 10px;display:flex;gap:6px;flex-wrap:wrap;font-size:.67rem;color:var(--text-muted);">
+      <span>${acr('xG')}: <b style="color:var(--text-main);">${Number(x.hXGfinal||0).toFixed(2)}–${Number(x.aXGfinal||0).toFixed(2)}</b></span>
+      <span>·</span><span>${acr('O2.5')}: <b style="color:var(--text-main);">${Number(pp.pO25||0)*100?((Number(pp.pO25||0)*100).toFixed(0)+'%'):'—'}</b></span>
+      <span>·</span><span>Κόρνερ: <b style="color:var(--text-main);">${Number(x.expCor||0).toFixed(1)}</b></span>
+      <span>·</span><span>Οφσάιντ λ: <b style="color:var(--text-main);">${Number(x.offside?.totLambda||((x.offside?.hLambda||0)+(x.offside?.aLambda||0))||0).toFixed(1)}</b></span>
+    </div>
+    <div id="progressive-details-${x.fixId}" style="display:none;border-top:1px solid var(--border-light);"></div>`;
+  list.appendChild(card);
+}
+
+window.toggleProgressiveMatch=function(fixId){
+  const box=document.getElementById('progressive-details-'+fixId); if(!box)return;
+  if(box.style.display==='none'||box.style.display===''){
+    const rec=(window.scannedMatchesData||[]).find(r=>String(r.fixId)===String(fixId));
+    if(!rec)return;
+    if(!box.dataset.loaded){
+      box.innerHTML=`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><tbody><tr>${buildAccordionHTML(rec)}</tr></tbody></table></div>`;
+      box.dataset.loaded='1';
+    }
+    box.style.display='block';
+  }else box.style.display='none';
+};
+
+function finalizeProgressiveScan(){
+  _progressiveScanState.active=false;
+  const stat=document.getElementById('progressiveScanStatus');
+  if(stat)stat.textContent=`Ολοκληρώθηκε · ${_progressiveScanState.completed}/${_progressiveScanState.total} αγώνες · ${_progressiveElapsed()}${_progressiveScanState.failed?` · ${_progressiveScanState.failed} σφάλματα`:''}`;
+  const panel=document.getElementById('progressiveScanPanel');
+  if(panel)panel.style.borderColor='rgba(22,163,74,.28)';
 }
 function setBtnsDisabled(d){['btnPre','leagueFilter','btnSyncLive'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;});}
 function showErr(msg){clearTimeout(_errTimer);const box=document.getElementById('errorBox');if(!box)return;box.innerHTML=`<div>⚠️ ${esc(msg)}</div>`;_errTimer=setTimeout(()=>box.innerHTML='',6000);}
@@ -911,10 +1022,12 @@ async function getLFix(t,lg,s){
 async function getStand(lg,s){
   const k=`${lg}_${s}`;
   if(standCache.has(k))return standCache.get(k);
-  const d=await apiReq(`standings?league=${lg}&season=${s}`);
-  const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
-  standCache.set(k,f);
-  return f;
+  if(_standInflight.has(k))return _standInflight.get(k);
+  const p=apiReq(`standings?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.STANDINGS}).then(d=>{
+    const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
+    standCache.set(k,f); return f;
+  }).finally(()=>_standInflight.delete(k));
+  _standInflight.set(k,p); return p;
 }
 async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
 
@@ -980,28 +1093,33 @@ function parseLineup(response) {
 async function getLeagueTopScorers(lg, s) {
   const k = `${lg}_${s}`;
   if(scorersCache.has(k)) return scorersCache.get(k);
-  const d = await apiReq(`players/topscorers?league=${lg}&season=${s}`);
-  const scorers = d?.response || [];
-  scorersCache.set(k, scorers);
-  return scorers;
+  if(_scorersInflight.has(k)) return _scorersInflight.get(k);
+  const p=apiReq(`players/topscorers?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
+    const out=d?.response||[]; scorersCache.set(k,out); return out;
+  }).finally(()=>_scorersInflight.delete(k));
+  _scorersInflight.set(k,p); return p;
 }
 
 // 🅰️ TOP ASSISTS (cached per league — 1 credit per league)
 async function getLeagueTopAssists(lg, s) {
   const k = `${lg}_${s}`;
   if(assistsCache.has(k)) return assistsCache.get(k);
-  const d = await apiReq(`players/topassists?league=${lg}&season=${s}`);
-  assistsCache.set(k, d?.response || []);
-  return d?.response || [];
+  if(_assistsInflight.has(k)) return _assistsInflight.get(k);
+  const p=apiReq(`players/topassists?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
+    const out=d?.response||[]; assistsCache.set(k,out); return out;
+  }).finally(()=>_assistsInflight.delete(k));
+  _assistsInflight.set(k,p); return p;
 }
 
 // 🟨 TOP YELLOW CARDS (cached per league — 1 credit per league)
 async function getLeagueTopCards(lg, s) {
   const k = `${lg}_${s}`;
   if(cardsCache.has(k)) return cardsCache.get(k);
-  const d = await apiReq(`players/topyellowcards?league=${lg}&season=${s}`);
-  cardsCache.set(k, d?.response || []);
-  return d?.response || [];
+  if(_cardsInflight.has(k)) return _cardsInflight.get(k);
+  const p=apiReq(`players/topyellowcards?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
+    const out=d?.response||[]; cardsCache.set(k,out); return out;
+  }).finally(()=>_cardsInflight.delete(k));
+  _cardsInflight.set(k,p); return p;
 }
 
 // 🏥 INJURIES per team (cached per team+league+season — 2 credits per match, shared via cache)
@@ -1921,8 +2039,6 @@ function computeHTAnalysis(hExp, aExp, lp) {
 // ================================================================
 async function analyzeMatchSafe(m,index,total){
   try{
-    setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
-    
     const[hS, aS, stand, h2hFix, leagueScorers, leagueAssists, leagueCards, hInjuries, aInjuries, lineupData] = await Promise.all([
       buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
       buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
@@ -2007,7 +2123,7 @@ async function analyzeMatchSafe(m,index,total){
       }
     }
 
-    window.scannedMatchesData.push({
+    const rec = {
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
       tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
       hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,
@@ -2024,10 +2140,16 @@ async function analyzeMatchSafe(m,index,total){
       sitCtx,    // Situational context (motivation flags, derby)
       dcResult,  // Dixon-Coles attack/defense strengths
       offside: result.offside,   // Offside projection (Poisson model)
-    });
+    };
+    window.scannedMatchesData.push(rec);
+    appendProgressiveMatch(rec,false);
+    return rec;
   }catch(err){
     console.error('[APEX] Analysis failed:', m?.teams?.home?.name, 'vs', m?.teams?.away?.name, err);
-    window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
+    const rec={m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0};
+    window.scannedMatchesData.push(rec);
+    appendProgressiveMatch(rec,true);
+    return rec;
   }
 }
 
@@ -2035,11 +2157,11 @@ window.runScan=async function(){
   if(isRunning)return;
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
-  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ Smart Scan Turbo — initializing…');
-  console.log('[APEX] Scan started · adaptive API', window.APEX_API_RATE);
+  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ Progressive Smart Scan — initializing…');
+  console.log('[APEX] Progressive Scan started · adaptive API', window.APEX_API_RATE);
   // Clear team intel cache — fresh data για κάθε scan
-  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); _fixStatsInflight.clear(); } catch {}
-  ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
+  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); } catch {}
+  ['progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
     const selLg=document.getElementById('leagueFilter').value;let all=[];
@@ -2051,29 +2173,26 @@ window.runScan=async function(){
     }
     if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
     if(all.length>350) all=all.slice(0,350);
+    initProgressiveScan(all.length);
 
-    // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
-    // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
-    const leagueSeasonPairs=[...new Map(all.map(m=>[`${m.league.id}_${m.league.season}`,{lid:m.league.id,season:m.league.season}])).values()];
-    setProgress(8, `Turbo warm-up: ${leagueSeasonPairs.length} league/season sets…`);
-    await Promise.all(leagueSeasonPairs.map(({lid,season}) => Promise.all([
-      getStand(lid, season),
-      getLeagueTopScorers(lid, season),
-      getLeagueTopAssists(lid, season),
-      getLeagueTopCards(lid, season),
-    ])));
+    // PROGRESSIVE v5.7: shared league data φορτώνουν on-demand.
+    // Τα in-flight maps παραπάνω εξασφαλίζουν ότι ακόμη κι αν πολλά matches
+    // του ίδιου league ξεκινήσουν μαζί, γίνεται μία μόνο κοινή API κλήση.
+    // Έτσι δεν υπάρχει blocking warm-up πριν εμφανιστεί το πρώτο αποτέλεσμα.
+    setProgress(8, `Progressive scan · ${all.length} αγώνες · έναρξη ανάλυσης…`);
 
     // Match concurrency follows detected API capacity. The global queue still
     // enforces the exact request-launch rate, so bigger plans scale automatically.
     // TURBO: περισσότερα matches μπορούν να είναι in-flight, ενώ ο global API
     // limiter εξακολουθεί να ελέγχει με ακρίβεια πόσα HTTP requests ξεκινούν.
     const SCAN_BATCH = apiClamp(Math.max(SMART_SCAN.MIN_BATCH,API_RATE.maxConcurrent),SMART_SCAN.MIN_BATCH,SMART_SCAN.MAX_BATCH);
-    console.log(`[APEX] Smart Scan Turbo: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · match batch ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
+    console.log(`[APEX] Progressive Smart Scan: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · match batch ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
     }
     
+    finalizeProgressiveScan();
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
     renderBetJournal();
@@ -2089,11 +2208,11 @@ window.runScan=async function(){
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
       showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`⚡ Smart Scan Turbo ολοκληρώθηκε — ${all.length} αγώνες · ${SMART_SCAN.DETAIL_FIXTURES} detailed matches/team.`);
+      showOk(`⚡ Progressive Smart Scan ολοκληρώθηκε — ${all.length} αγώνες · ${SMART_SCAN.DETAIL_FIXTURES} detailed matches/team.`);
     }
     // BEST 4 v5.5: price only the strongest RADAR fixtures across all available bookmakers.
     window.refreshBest4({silent:true}).catch(err=>console.warn('[APEX] BEST 4 odds refresh failed:',err?.message||err));
-  }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
+  }catch(e){showErr(e.message);}finally{if(_progressiveScanState.active)finalizeProgressiveScan();isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
 // ================================================================
