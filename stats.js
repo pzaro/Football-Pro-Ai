@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.9 — MASTER ENGINE · LIVE LEARNING ENGINE + MARKET MISPRICING BOMBS + PROGRESSIVE SMART SCAN
+// APEX OMEGA v6.0 — MASTER ENGINE · DATA QUALITY GUARD + LIVE LEARNING + MARKET MISPRICING + PROGRESSIVE SMART SCAN
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -310,7 +310,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.9';
+const APP_VERSION   = 'v6.0';
 const BUILD_DATE    = '05/09/2026';
 const BUILD_TIME    = 'LIVE LEARNING ENGINE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
@@ -488,6 +488,35 @@ const statVal  = (arr,type) => {
   if(v===null||v===undefined) return 0;
   return parseFloat(String(v).replace('%',''))||0;
 };
+
+// ── v6.0 DATA QUALITY GUARD ────────────────────────────────────────────────
+// statVal() παραμένει για operational/live calculations. Στο post-match
+// validation, missing/null δεν επιτρέπεται να γίνει ψεύτικο πραγματικό 0.
+const statValNullable = (arr,type,{nullAsZero=false}={}) => {
+  if(!Array.isArray(arr)) return null;
+  const item = arr.find(x=>x?.type===type);
+  if(!item) return null;
+  const v = item.value;
+  if(v===null||v===undefined||v==='') return nullAsZero ? 0 : null;
+  const n = parseFloat(String(v).replace('%',''));
+  return Number.isFinite(n) ? n : null;
+};
+const sumStatsNullable = (arr,types) => {
+  if(!Array.isArray(arr)) return null;
+  let found=false,total=0;
+  for(const type of types){
+    const item=arr.find(x=>x?.type===type);
+    if(!item) continue;
+    found=true;
+    const v=item.value;
+    if(v===null||v===undefined||v==='') continue;
+    const n=parseFloat(String(v).replace('%',''));
+    if(Number.isFinite(n)) total+=n;
+  }
+  return found ? total : null;
+};
+const isFiniteMetric = v => v!==null && v!==undefined && v!=='' && Number.isFinite(Number(v));
+const sumFinitePair = (a,b) => (isFiniteMetric(a)&&isFiniteMetric(b)) ? Number(a)+Number(b) : null;
 const getTeamGoals = (f,t) => f?.teams?.home?.id===t?(f?.goals?.home??0):(f?.goals?.away??0);
 const getOppGoals  = (f,t) => f?.teams?.home?.id===t?(f?.goals?.away??0):(f?.goals?.home??0);
 const isLive     = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
@@ -2124,11 +2153,16 @@ async function analyzeMatchSafe(m,index,total){
       if(sr.response && sr.response.length === 2) {
         const hs = sr.response[0].statistics; const as = sr.response[1].statistics;
         actStats = {
-          hPoss: statVal(hs, 'Ball Possession'), aPoss: statVal(as, 'Ball Possession'),
-          hCor: statVal(hs, 'Corner Kicks'), aCor: statVal(as, 'Corner Kicks'),
-          hCrd: statVal(hs, 'Yellow Cards') + statVal(hs, 'Red Cards'), aCrd: statVal(as, 'Yellow Cards') + statVal(as, 'Red Cards'),
-          hOff: statVal(hs, 'Offsides'), aOff: statVal(as, 'Offsides'),
-          hXg: statVal(hs, 'expected_goals'), aXg: statVal(as, 'expected_goals')
+          hPoss: statValNullable(hs, 'Ball Possession'),
+          aPoss: statValNullable(as, 'Ball Possession'),
+          hCor:  statValNullable(hs, 'Corner Kicks', {nullAsZero:true}),
+          aCor:  statValNullable(as, 'Corner Kicks', {nullAsZero:true}),
+          hCrd:  sumStatsNullable(hs, ['Yellow Cards','Red Cards']),
+          aCrd:  sumStatsNullable(as, ['Yellow Cards','Red Cards']),
+          hOff:  statValNullable(hs, 'Offsides', {nullAsZero:true}),
+          aOff:  statValNullable(as, 'Offsides', {nullAsZero:true}),
+          hXg:   statValNullable(hs, 'expected_goals'),
+          aXg:   statValNullable(as, 'expected_goals')
         };
       }
     }
@@ -5560,64 +5594,48 @@ function renderSummaryTable() {
       const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0;
       const aTot = ah+aa, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
 
-      // ── Πραγματικά στατιστικά (από actStats API)
-      const hXGAct  = Number(x.actStats?.hXg||0).toFixed(2);
-      const aXGAct  = Number(x.actStats?.aXg||0).toFixed(2);
-      const hPoss   = x.actStats?.hPoss||'—';
-      const aPoss   = x.actStats?.aPoss||'—';
-      const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
-      const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
-      const hOffAct = x.actStats?.hOff||0, aOffAct = x.actStats?.aOff||0;
+      // ── Πραγματικά στατιστικά (από actStats API) — DATA QUALITY GUARD
+      const hXGActN  = isFiniteMetric(x.actStats?.hXg)  ? Number(x.actStats.hXg)  : null;
+      const aXGActN  = isFiniteMetric(x.actStats?.aXg)  ? Number(x.actStats.aXg)  : null;
+      const hPossN   = isFiniteMetric(x.actStats?.hPoss) ? Number(x.actStats.hPoss) : null;
+      const aPossN   = isFiniteMetric(x.actStats?.aPoss) ? Number(x.actStats.aPoss) : null;
+      const hCorActN = isFiniteMetric(x.actStats?.hCor) ? Number(x.actStats.hCor) : null;
+      const aCorActN = isFiniteMetric(x.actStats?.aCor) ? Number(x.actStats.aCor) : null;
+      const hCrdActN = isFiniteMetric(x.actStats?.hCrd) ? Number(x.actStats.hCrd) : null;
+      const aCrdActN = isFiniteMetric(x.actStats?.aCrd) ? Number(x.actStats.aCrd) : null;
+      const hOffActN = isFiniteMetric(x.actStats?.hOff) ? Number(x.actStats.hOff) : null;
+      const aOffActN = isFiniteMetric(x.actStats?.aOff) ? Number(x.actStats.aOff) : null;
+      const fmtActual = (v,d=1) => isFiniteMetric(v) ? Number(v).toFixed(d) : 'N/A';
+      const hXGAct = fmtActual(hXGActN,2), aXGAct = fmtActual(aXGActN,2);
+      const hPoss = isFiniteMetric(hPossN) ? `${Number(hPossN).toFixed(0)}%` : 'N/A';
+      const aPoss = isFiniteMetric(aPossN) ? `${Number(aPossN).toFixed(0)}%` : 'N/A';
+      const corActTot=sumFinitePair(hCorActN,aCorActN), crdActTot=sumFinitePair(hCrdActN,aCrdActN), offActTot=sumFinitePair(hOffActN,aOffActN), xgActTot=sumFinitePair(hXGActN,aXGActN);
+      const hXGPredN=Number(x.hXGfinal||0), aXGPredN=Number(x.aXGfinal||0), hXGPred=hXGPredN.toFixed(2), aXGPred=aXGPredN.toFixed(2), tXGPredN=hXGPredN+aXGPredN, tXGPred=tXGPredN.toFixed(2);
+      const hCorPredN=Number(x.hProjCor||x.expCor/2||0), aCorPredN=Number(x.aProjCor||x.expCor/2||0), hCorPred=hCorPredN.toFixed(1), aCorPred=aCorPredN.toFixed(1), expCorPredN=Number(x.expCor||0), expCorPred=expCorPredN.toFixed(1);
+      const hCrdPredN=Number(x.hS?.crd||0), aCrdPredN=Number(x.aS?.crd||0), hCrdPred=hCrdPredN.toFixed(1), aCrdPred=aCrdPredN.toFixed(1), totCrdPredN=hCrdPredN+aCrdPredN, totCrdPred=totCrdPredN.toFixed(1);
+      const hOffPred=Number(x.offside?.hLambda||0), aOffPred=Number(x.offside?.aLambda||0), totOffPred=hOffPred+aOffPred;
+      const crdDev=isFiniteMetric(crdActTot)?Math.abs(crdActTot-totCrdPredN):null, crdCol=crdDev===null?'var(--text-muted)':crdDev<1.5?'var(--accent-green)':crdDev<3?'var(--accent-gold)':'var(--accent-red)';
+      const offDev=isFiniteMetric(offActTot)?Math.abs(offActTot-totOffPred):null, offCol=offDev===null?'var(--text-muted)':offDev<1?'var(--accent-green)':offDev<2?'var(--accent-gold)':'var(--accent-red)';
+      const xgDev=isFiniteMetric(xgActTot)?Math.abs(xgActTot-tXGPredN):null, xgCol=xgDev===null?'var(--text-muted)':xgDev<.5?'var(--accent-green)':xgDev<1?'var(--accent-gold)':'var(--accent-red)';
+      const corDev=isFiniteMetric(corActTot)?Math.abs(corActTot-expCorPredN):null, corCol=corDev===null?'var(--text-muted)':corDev<2?'var(--accent-green)':corDev<4?'var(--accent-gold)':'var(--accent-red)';
 
-      // ── Προβλέψεις μοντέλου
-      const hXGPred  = Number(x.hXGfinal||0).toFixed(2);
-      const aXGPred  = Number(x.aXGfinal||0).toFixed(2);
-      const tXGPred  = (Number(x.hXGfinal||0)+Number(x.aXGfinal||0)).toFixed(2);
-      const hCorPred = Number(x.hProjCor||x.expCor/2||0).toFixed(1);
-      const aCorPred = Number(x.aProjCor||x.expCor/2||0).toFixed(1);
-      const expCorPred = Number(x.expCor||0).toFixed(1);
-      // Προβλεπόμενες κάρτες από το μοντέλο
-      const hCrdPred = Number(x.hS?.crd||0).toFixed(1);
-      const aCrdPred = Number(x.aS?.crd||0).toFixed(1);
-      const totCrdPred = (Number(x.hS?.crd||0)+Number(x.aS?.crd||0)).toFixed(1);
-      const totCrdAct  = hCrdAct + aCrdAct;
-      const crdDev = Math.abs(totCrdAct - Number(totCrdPred));
-      const crdCol = crdDev < 1.5 ? 'var(--accent-green)' : crdDev < 3 ? 'var(--accent-gold)' : 'var(--accent-red)';
-      const hOffPred = Number(x.offside?.hLambda||0);
-      const aOffPred = Number(x.offside?.aLambda||0);
-      const totOffPred = hOffPred + aOffPred;
-      const totOffAct = hOffAct + aOffAct;
-      const offDev = Math.abs(totOffAct - totOffPred);
-      const offCol = offDev < 1.0 ? 'var(--accent-green)' : offDev < 2.0 ? 'var(--accent-gold)' : 'var(--accent-red)';
-
-      // ── Σύγκριση: πράσινο αν η πρόβλεψη ήταν εντός ±20%, κόκκινο αν πολύ έξω
-      const xgDev = Math.abs((Number(hXGAct)+Number(aXGAct)) - Number(tXGPred));
-      const xgCol = xgDev < 0.5 ? 'var(--accent-green)' : xgDev < 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)';
-      const corDev = Math.abs((hCorAct+aCorAct) - Number(expCorPred));
-      const corCol = corDev < 2 ? 'var(--accent-green)' : corDev < 4 ? 'var(--accent-gold)' : 'var(--accent-red)';
-
-      // ── Result badge
+      // ── Result badge — missing required actual metric => N/A, όχι LOST
       let hitHtml = `<span style="color:var(--text-muted)">—</span>`;
       const pick = x.omegaPick||'';
       if(pick && !pick.includes('ΧΩΡΙΣ') && !pick.includes('NO BET')) {
-        let hit = false;
-        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5'))                          hit = aTot > 3.5;
-        else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')||pick.includes('OVER 2')) hit = aTot > 2.5;
-        else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')||pick.includes('UNDER')) hit = aTot < 2.5;
-        else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG'))   hit = aBtts;
-        else if(pick.includes('ΑΣΟΣ')&&!pick.includes('AH'))        hit = aOut==='1';
-        else if(pick.includes('ΔΙΠΛΟ')&&!pick.includes('AH'))       hit = aOut==='2';
-        else if(pick.includes('ΝΙΚΗ ΓΗΠΕΔ'))                        hit = aOut==='1';
-        else if(pick.includes('ΝΙΚΗ ΦΙΛΟΞ'))                        hit = aOut==='2';
-        else if(pick.includes('ΚΟΡΝΕΡ'))                            hit = (hCorAct+aCorAct)>8.5;
-        else if(pick.includes('ΚΑΡΤΕΣ'))                            hit = (hCrdAct+aCrdAct)>5.5;
-        else if(pick.includes('AH')){
-          if(pick.includes('ΑΣΟΣ'))  hit = (ah-aa)>=2;
-          if(pick.includes('ΔΙΠΛΟ')) hit = (aa-ah)>=2;
-        }
-        hitHtml = hit
-          ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">✅ WON</span>`
-          : `<span style="background:rgba(251,113,133,0.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">❌ LOST</span>`;
+        let hit=false,evaluable=true;
+        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) hit=aTot>3.5;
+        else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')||pick.includes('OVER 2')) hit=aTot>2.5;
+        else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')||pick.includes('UNDER')) hit=aTot<2.5;
+        else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) hit=aBtts;
+        else if(pick.includes('ΑΣΟΣ')&&!pick.includes('AH')) hit=aOut==='1';
+        else if(pick.includes('ΔΙΠΛΟ')&&!pick.includes('AH')) hit=aOut==='2';
+        else if(pick.includes('ΝΙΚΗ ΓΗΠΕΔ')) hit=aOut==='1';
+        else if(pick.includes('ΝΙΚΗ ΦΙΛΟΞ')) hit=aOut==='2';
+        else if(pick.includes('ΚΟΡΝΕΡ')) { if(!isFiniteMetric(corActTot)) evaluable=false; else hit=corActTot>8.5; }
+        else if(pick.includes('ΚΑΡΤΕΣ')) { if(!isFiniteMetric(crdActTot)) evaluable=false; else hit=crdActTot>5.5; }
+        else if(pick.includes('AH')) { if(pick.includes('ΑΣΟΣ')) hit=(ah-aa)>=2; if(pick.includes('ΔΙΠΛΟ')) hit=(aa-ah)>=2; }
+        hitHtml=!evaluable?`<span style="background:rgba(148,163,184,.12);color:var(--text-muted);padding:3px 8px;border-radius:5px;font-weight:800;font-size:.72rem;">N/A DATA</span>`:hit?`<span style="background:rgba(74,222,128,.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:.72rem;">✅ WON</span>`:`<span style="background:rgba(251,113,133,.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:.72rem;">❌ LOST</span>`;
       }
 
       // ── Pred vs Actual cell helper
@@ -5640,11 +5658,11 @@ function renderSummaryTable() {
           <td>${pvA(`${hXGPred}–${aXGPred} (${tXGPred})`, `${hXGAct}–${aXGAct}`, xgCol)}</td>
           <td style="text-align:center;font-family:var(--font-mono);">
             <div style="font-size:0.72rem;color:var(--text-muted);">—</div>
-            <div style="font-size:0.9rem;font-weight:700;">${hPoss}%–${aPoss}%</div>
+            <div style="font-size:0.9rem;font-weight:700;">${hPoss}–${aPoss}</div>
           </td>
-          <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${hCorAct}–${aCorAct} (${hCorAct+aCorAct})`, corCol)}</td>
-          <td>${pvA(`${hCrdPred}–${aCrdPred} (${totCrdPred})`, `${hCrdAct}–${aCrdAct} (${totCrdAct})`, crdCol)}</td>
-          <td>${pvA(`${hOffPred.toFixed(1)}–${aOffPred.toFixed(1)} (${totOffPred.toFixed(1)})`, `${hOffAct}–${aOffAct} (${totOffAct})`, offCol)}</td>
+          <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${fmtActual(hCorActN,0)}–${fmtActual(aCorActN,0)} (${fmtActual(corActTot,0)})`, corCol)}</td>
+          <td>${pvA(`${hCrdPred}–${aCrdPred} (${totCrdPred})`, `${fmtActual(hCrdActN,0)}–${fmtActual(aCrdActN,0)} (${fmtActual(crdActTot,0)})`, crdCol)}</td>
+          <td>${pvA(`${hOffPred.toFixed(1)}–${aOffPred.toFixed(1)} (${totOffPred.toFixed(1)})`, `${fmtActual(hOffActN,0)}–${fmtActual(aOffActN,0)} (${fmtActual(offActTot,0)})`, offCol)}</td>
           <td style="font-size:0.78rem;font-weight:700;color:${x.strength>=70?'var(--accent-green)':'var(--text-muted)'};max-width:140px;">
             ${esc(pick.split(' ').slice(0,4).join(' ')||'—')}
             ${x.strength>=70?`<div style="font-size:0.6rem;color:var(--text-muted);">${x.strength?.toFixed(0)}% conf</div>`:''}
@@ -5656,177 +5674,16 @@ function renderSummaryTable() {
         </tr>`;
     });
 
-    // ── Model Accuracy Analysis ────────────────────────────────────
-    // Μόνο αν έχουμε ≥3 ολοκληρωμένους αγώνες με actStats
-    const validForAnalysis = finishedMatches.filter(x =>
-      x.actStats && x.hXGfinal && x.aXGfinal
-    );
-
+    // ── Model Accuracy Analysis — v6.0 DATA QUALITY GUARD ───────────────
+    const validForAnalysis = finishedMatches.filter(x => isFiniteMetric(x.hXGfinal) && isFiniteMetric(x.aXGfinal));
     let accuracyHtml = '';
     if(validForAnalysis.length >= 2) {
-      // Συλλογή δεδομένων ανά metric
-      const metrics = {
-        xGH:   { label:'xG HOME',        pred:[], actual:[], errors:[] },
-        xGA:   { label:'xG AWAY',         pred:[], actual:[], errors:[] },
-        tXG:   { label:'Total xG',        pred:[], actual:[], errors:[] },
-        corners:{ label:'Κόρνερ (Σύν.)', pred:[], actual:[], errors:[] },
-        cards:  { label:'Κάρτες (Σύν.)', pred:[], actual:[], errors:[] },
-        offsides:{ label:'Οφσάιντ (Σύν.)', pred:[], actual:[], errors:[] },
-        goals:  { label:'Γκολ (Σύν.)',   pred:[], actual:[], errors:[] },
-      };
-
-      validForAnalysis.forEach(x => {
-        const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0;
-        const hXGAct = Number(x.actStats?.hXg||0);
-        const aXGAct = Number(x.actStats?.aXg||0);
-        const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
-        const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
-        const hOffAct = x.actStats?.hOff||0, aOffAct = x.actStats?.aOff||0;
-        const hXGPred = Number(x.hXGfinal||0);
-        const aXGPred = Number(x.aXGfinal||0);
-        const hCorPred = Number(x.hProjCor || x.expCor/2 || 0);
-        const aCorPred = Number(x.aProjCor || x.expCor/2 || 0);
-        const hCrdPred = Number(x.hS?.crd||0);
-        const aCrdPred = Number(x.aS?.crd||0);
-        const hOffPred = Number(x.offside?.hLambda||0);
-        const aOffPred = Number(x.offside?.aLambda||0);
-
-        metrics.xGH.pred.push(hXGPred);   metrics.xGH.actual.push(hXGAct);
-        metrics.xGA.pred.push(aXGPred);   metrics.xGA.actual.push(aXGAct);
-        metrics.tXG.pred.push(hXGPred+aXGPred); metrics.tXG.actual.push(hXGAct+aXGAct);
-        metrics.corners.pred.push(hCorPred+aCorPred); metrics.corners.actual.push(hCorAct+aCorAct);
-        metrics.cards.pred.push(hCrdPred+aCrdPred);   metrics.cards.actual.push(hCrdAct+aCrdAct);
-        metrics.offsides.pred.push(hOffPred+aOffPred); metrics.offsides.actual.push(hOffAct+aOffAct);
-        metrics.goals.pred.push(hXGPred+aXGPred);     metrics.goals.actual.push(ah+aa);
-      });
-
-      // Υπολογισμός MAE (Mean Absolute Error) και Pearson correlation
-      const calcMAE = (pred, actual) => {
-        const n = pred.length;
-        return pred.reduce((s,p,i) => s + Math.abs(p - actual[i]), 0) / n;
-      };
-      const calcCorr = (pred, actual) => {
-        const n = pred.length;
-        if(n < 2) return 0;
-        const mP = pred.reduce((a,b)=>a+b,0)/n;
-        const mA = actual.reduce((a,b)=>a+b,0)/n;
-        const cov = pred.reduce((s,p,i)=>s+(p-mP)*(actual[i]-mA),0)/n;
-        const sdP = Math.sqrt(pred.reduce((s,p)=>s+(p-mP)**2,0)/n);
-        const sdA = Math.sqrt(actual.reduce((s,a)=>s+(a-mA)**2,0)/n);
-        return (sdP*sdA) > 0 ? cov/(sdP*sdA) : 0;
-      };
-      const calcBias = (pred, actual) => {
-        // Θετικό = υπερεκτίμηση, Αρνητικό = υποεκτίμηση
-        const n = pred.length;
-        return pred.reduce((s,p,i)=>s+(p-actual[i]),0)/n;
-      };
-
-      // Χτίζουμε metric cards
-      const mCards = Object.entries(metrics).map(([key, m]) => {
-        const mae  = calcMAE(m.pred, m.actual);
-        const corr = calcCorr(m.pred, m.actual);
-        const bias = calcBias(m.pred, m.actual);
-        const corrPct = (corr*100).toFixed(0);
-        const corrCol = corr >= 0.7 ? 'var(--accent-green)' : corr >= 0.4 ? 'var(--accent-gold)' : 'var(--accent-red)';
-        const biasCol = Math.abs(bias) < 0.3 ? 'var(--accent-green)' : Math.abs(bias) < 0.7 ? 'var(--accent-gold)' : 'var(--accent-red)';
-        const biasStr = bias > 0 ? `+${bias.toFixed(2)} ↑` : `${bias.toFixed(2)} ↓`;
-        const barW = Math.min(Math.abs(corr)*100, 100).toFixed(0);
-
-        // Mini scatter: κάθε ζεύγος pred/actual ως dot
-        const maxV = Math.max(...m.pred, ...m.actual, 1);
-        const dots = m.pred.map((p,i) => {
-          const x = (p/maxV*60).toFixed(1);
-          const y = (60 - (m.actual[i]/maxV*60)).toFixed(1);
-          const dev = Math.abs(p - m.actual[i]);
-          const dc = dev < 0.5 ? 'var(--accent-green)' : dev < 1.2 ? 'var(--accent-gold)' : 'var(--accent-red)';
-          return `<circle cx="${x}" cy="${y}" r="3.5" fill="${dc}" fill-opacity="0.8"/>`;
-        }).join('');
-        // Diagonal perfect line
-        const diag = `<line x1="0" y1="60" x2="60" y2="0" stroke="rgba(255,255,255,0.15)" stroke-width="0.8" stroke-dasharray="3,2"/>`;
-
-        return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
-            <span style="font-size:0.72rem;font-weight:800;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${m.label}</span>
-            <svg width="66" height="66" style="flex-shrink:0;border:1px solid var(--border-light);border-radius:5px;background:var(--bg-surface);" viewBox="-3 -3 66 66">
-              ${diag}${dots}
-            </svg>
-          </div>
-          <div style="margin-bottom:8px;">
-            <div style="display:flex;justify-content:space-between;font-size:0.6rem;color:var(--text-muted);margin-bottom:3px;">
-              <span>Συσχέτιση Π→Α</span>
-              <span style="color:${corrCol};font-weight:700;">${corrPct}%</span>
-            </div>
-            <div style="height:4px;background:var(--border-light);border-radius:2px;">
-              <div style="height:4px;width:${barW}%;background:${corrCol};border-radius:2px;"></div>
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.68rem;">
-            <div style="background:var(--bg-surface);border-radius:4px;padding:4px 6px;">
-              <div style="color:var(--text-dim);font-size:0.58rem;margin-bottom:1px;">MAE (Μ. Σφάλμα)</div>
-              <div style="font-family:var(--font-mono);font-weight:700;color:var(--text-main);">${mae.toFixed(2)}</div>
-            </div>
-            <div style="background:var(--bg-surface);border-radius:4px;padding:4px 6px;">
-              <div style="color:var(--text-dim);font-size:0.58rem;margin-bottom:1px;">Bias</div>
-              <div style="font-family:var(--font-mono);font-weight:700;color:${biasCol};">${biasStr}</div>
-            </div>
-          </div>
-        </div>`;
-      }).join('');
-
-      // Correlations ranking — ποιο metric έχει τη μεγαλύτερη συσχέτιση
-      const ranked = Object.entries(metrics).map(([key, m]) => ({
-        label: m.label, corr: calcCorr(m.pred, m.actual)
-      })).sort((a,b)=>b.corr-a.corr);
-
-      const rankHtml = ranked.map((r,i) => {
-        const col = r.corr>=0.7?'var(--accent-green)':r.corr>=0.4?'var(--accent-gold)':'var(--accent-red)';
-        const medal = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣'][i]||`${i+1}.`;
-        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
-          <span style="font-size:0.9rem;flex-shrink:0;">${medal}</span>
-          <span style="font-size:0.72rem;color:var(--text-sub);flex:1;">${r.label}</span>
-          <div style="width:80px;height:5px;background:var(--border-light);border-radius:2px;">
-            <div style="height:5px;width:${Math.min(Math.abs(r.corr)*100,100).toFixed(0)}%;background:${col};border-radius:2px;"></div>
-          </div>
-          <span style="font-family:var(--font-mono);font-size:0.72rem;font-weight:700;color:${col};min-width:36px;text-align:right;">${(r.corr*100).toFixed(0)}%</span>
-        </div>`;
-      }).join('');
-
-      accuracyHtml = `
-      <div class="quant-panel" style="margin-top:16px;border-color:rgba(168,85,247,0.3);">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
-          <div>
-            <div style="font-size:0.85rem;font-weight:800;color:var(--accent-purple);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:1px;">🔬 Model Accuracy Analysis</div>
-            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">Βασίζεται σε ${validForAnalysis.length} αγώνες · Scatter: κόκκινο=μεγάλη απόκλιση · πράσινο=καλή πρόβλεψη</div>
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-
-          <!-- Metric Cards Grid -->
-          <div>
-            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Ακρίβεια ανά Μέγεθος</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">${mCards}</div>
-          </div>
-
-          <!-- Correlation Ranking -->
-          <div>
-            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Κατάταξη Συσχέτισης Π→Α</div>
-            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
-              ${rankHtml}
-            </div>
-            <div style="background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:10px 14px;font-size:0.72rem;">
-              <div style="font-weight:700;color:var(--accent-purple);margin-bottom:6px;">Ερμηνεία</div>
-              <div style="color:var(--text-muted);line-height:1.6;">
-                <span style="color:var(--accent-green);">●</span> ≥70%: Ισχυρή συσχέτιση — αξιόπιστη πρόβλεψη<br>
-                <span style="color:var(--accent-gold);">●</span> 40-70%: Μέτρια — βοηθητική ένδειξη<br>
-                <span style="color:var(--accent-red);">●</span> &lt;40%: Αδύναμη — χρειάζεται βαθμονόμηση<br>
-                <span style="color:var(--text-dim);">Bias ↑</span>: Υπερεκτίμηση · <span style="color:var(--text-dim);">Bias ↓</span>: Υποεκτίμηση
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div>`;
+      const metrics={xGH:{label:'xG HOME',pred:[],actual:[]},xGA:{label:'xG AWAY',pred:[],actual:[]},tXG:{label:'Total xG',pred:[],actual:[]},corners:{label:'Κόρνερ (Σύν.)',pred:[],actual:[]},cards:{label:'Κάρτες (Σύν.)',pred:[],actual:[]},offsides:{label:'Οφσάιντ (Σύν.)',pred:[],actual:[]},goals:{label:'Γκολ (Σύν.)',pred:[],actual:[]}};
+      validForAnalysis.forEach(x=>{const ah=Number(x.m?.goals?.home??0),aa=Number(x.m?.goals?.away??0),hp=Number(x.hXGfinal),ap=Number(x.aXGfinal),hc=Number(x.hProjCor??x.expCor/2??0),ac=Number(x.aProjCor??x.expCor/2??0),hcp=Number(x.hS?.crd??0),acp=Number(x.aS?.crd??0),hop=Number(x.offside?.hLambda??0),aop=Number(x.offside?.aLambda??0),ha=x.actStats?.hXg,aaX=x.actStats?.aXg,hca=x.actStats?.hCor,aca=x.actStats?.aCor,hcra=x.actStats?.hCrd,acra=x.actStats?.aCrd,hoa=x.actStats?.hOff,aoa=x.actStats?.aOff;if(isFiniteMetric(ha)){metrics.xGH.pred.push(hp);metrics.xGH.actual.push(Number(ha));}if(isFiniteMetric(aaX)){metrics.xGA.pred.push(ap);metrics.xGA.actual.push(Number(aaX));}if(isFiniteMetric(ha)&&isFiniteMetric(aaX)){metrics.tXG.pred.push(hp+ap);metrics.tXG.actual.push(Number(ha)+Number(aaX));}if(isFiniteMetric(hca)&&isFiniteMetric(aca)){metrics.corners.pred.push(hc+ac);metrics.corners.actual.push(Number(hca)+Number(aca));}if(isFiniteMetric(hcra)&&isFiniteMetric(acra)){metrics.cards.pred.push(hcp+acp);metrics.cards.actual.push(Number(hcra)+Number(acra));}if(isFiniteMetric(hoa)&&isFiniteMetric(aoa)){metrics.offsides.pred.push(hop+aop);metrics.offsides.actual.push(Number(hoa)+Number(aoa));}metrics.goals.pred.push(hp+ap);metrics.goals.actual.push(ah+aa);});
+      const calcMAE=(p,a)=>p.length?p.reduce((s,v,i)=>s+Math.abs(v-a[i]),0)/p.length:null,calcBias=(p,a)=>p.length?p.reduce((s,v,i)=>s+(v-a[i]),0)/p.length:null,calcCorr=(p,a)=>{const n=p.length;if(n<2)return null;const mp=p.reduce((s,v)=>s+v,0)/n,ma=a.reduce((s,v)=>s+v,0)/n,cov=p.reduce((s,v,i)=>s+(v-mp)*(a[i]-ma),0)/n,sp=Math.sqrt(p.reduce((s,v)=>s+(v-mp)**2,0)/n),sa=Math.sqrt(a.reduce((s,v)=>s+(v-ma)**2,0)/n);return sp>0&&sa>0?cov/(sp*sa):null;};
+      const mCards=Object.values(metrics).map(m=>{const n=m.pred.length,mae=calcMAE(m.pred,m.actual),corr=calcCorr(m.pred,m.actual),bias=calcBias(m.pred,m.actual),has=Number.isFinite(corr),cc=!has?'var(--text-muted)':corr>=.7?'var(--accent-green)':corr>=.4?'var(--accent-gold)':'var(--accent-red)',bc=!Number.isFinite(bias)?'var(--text-muted)':Math.abs(bias)<.3?'var(--accent-green)':Math.abs(bias)<.7?'var(--accent-gold)':'var(--accent-red)',bs=!Number.isFinite(bias)?'N/A':bias>0?`+${bias.toFixed(2)} ↑`:`${bias.toFixed(2)} ↓`,mx=n?Math.max(...m.pred,...m.actual,1):1,dots=n?m.pred.map((p,i)=>{const sx=(p/mx*60).toFixed(1),sy=(60-m.actual[i]/mx*60).toFixed(1),d=Math.abs(p-m.actual[i]),dc=d<.5?'var(--accent-green)':d<1.2?'var(--accent-gold)':'var(--accent-red)';return `<circle cx="${sx}" cy="${sy}" r="3.5" fill="${dc}" fill-opacity=".8"/>`;}).join(''):'';return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><div><b style="font-size:.72rem;">${m.label}</b><div style="font-family:var(--font-mono);font-size:.58rem;color:${n?'var(--accent-blue)':'var(--text-muted)'};">n=${n}</div></div><svg width="66" height="66" viewBox="-3 -3 66 66" style="border:1px solid var(--border-light);border-radius:5px;background:var(--bg-surface);"><line x1="0" y1="60" x2="60" y2="0" stroke="rgba(148,163,184,.25)" stroke-width=".8" stroke-dasharray="3,2"/>${dots}</svg></div><div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--text-muted);"><span>Συσχέτιση Π→Α</span><b style="color:${cc};">${has?(corr*100).toFixed(0)+'%':'N/A'}</b></div><div style="height:4px;background:var(--border-light);border-radius:2px;margin:3px 0 8px;"><div style="height:4px;width:${has?Math.min(Math.abs(corr)*100,100).toFixed(0):0}%;background:${cc};border-radius:2px;"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.68rem;"><div style="background:var(--bg-surface);padding:4px 6px;border-radius:4px;">MAE<br><b>${Number.isFinite(mae)?mae.toFixed(2):'N/A'}</b></div><div style="background:var(--bg-surface);padding:4px 6px;border-radius:4px;">Bias<br><b style="color:${bc};">${bs}</b></div></div>${n===0?'<div style="font-size:.6rem;color:var(--text-muted);margin-top:7px;">N/A — δεν δόθηκε actual δεδομένο.</div>':''}</div>`;}).join('');
+      const ranked=Object.values(metrics).map(m=>({label:m.label,corr:calcCorr(m.pred,m.actual),n:m.pred.length})).filter(r=>Number.isFinite(r.corr)).sort((a,b)=>b.corr-a.corr),rankHtml=ranked.length?ranked.map((r,i)=>{const c=r.corr>=.7?'var(--accent-green)':r.corr>=.4?'var(--accent-gold)':'var(--accent-red)',med=['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣'][i]||`${i+1}.`;return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-light);"><span>${med}</span><span style="flex:1;font-size:.72rem;">${r.label} <small style="color:var(--text-muted);">n=${r.n}</small></span><b style="color:${c};">${(r.corr*100).toFixed(0)}%</b></div>`;}).join(''):'<div style="font-size:.72rem;color:var(--text-muted);">Δεν υπάρχουν ακόμη ≥2 έγκυρες παρατηρήσεις με διακύμανση.</div>',chips=Object.values(metrics).map(m=>`<span style="font-family:var(--font-mono);font-size:.58rem;padding:3px 6px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-surface);">${m.label}: n=${m.pred.length}</span>`).join('');
+      accuracyHtml=`<div class="quant-panel" style="margin-top:16px;border-color:rgba(168,85,247,.3);"><div style="font-size:.85rem;font-weight:800;color:var(--accent-purple);text-transform:uppercase;letter-spacing:1px;">🔬 Model Accuracy Analysis · Data Quality Guard</div><div style="font-size:.65rem;color:var(--text-muted);margin:2px 0 10px;">Ολοκληρωμένοι αγώνες: ${validForAnalysis.length} · Missing actual ≠ 0 · ξεχωριστό n ανά metric.</div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:14px;">${chips}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;"><div><div style="font-size:.65rem;font-weight:700;color:var(--text-muted);margin-bottom:8px;">ΑΚΡΙΒΕΙΑ ΑΝΑ ΜΕΓΕΘΟΣ</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">${mCards}</div></div><div><div style="font-size:.65rem;font-weight:700;color:var(--text-muted);margin-bottom:8px;">ΚΑΤΑΤΑΞΗ ΣΥΣΧΕΤΙΣΗΣ Π→Α</div><div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:12px;">${rankHtml}</div><div style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.2);border-radius:8px;padding:10px 14px;font-size:.72rem;color:var(--text-muted);"><b style="color:var(--accent-purple);">Data Quality Guard:</b> N/A = το API δεν παρείχε έγκυρο actual statistic. Δεν συμμετέχει σε MAE, Bias, correlation ή calibration.</div></div></div></div>`;
     }
 
     finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(74,222,128,0.35);">
