@@ -182,7 +182,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = '08:12 EET';
+const BUILD_TIME    = '08:18 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -409,6 +409,122 @@ function renderBankrollHistory(){
 }
 
 window.exportData=function(){if(!window.scannedMatchesData?.length){showErr("Δεν υπάρχουν δεδομένα.");return;}const blob=new Blob([JSON.stringify(window.scannedMatchesData)],{type:'application/json'});const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:`apex_export_${todayISO()}.json`});a.click();URL.revokeObjectURL(a.href);showOk("Export OK!");};
+
+// ── Excel Export ─────────────────────────────────────────────────
+window.exportExcel = function() {
+  const data = window.scannedMatchesData;
+  if(!data?.length) { showErr('Δεν υπάρχουν δεδομένα. Εκτέλεσε Scan πρώτα.'); return; }
+  if(typeof XLSX === 'undefined') { showErr('Η βιβλιοθήκη Excel δεν έχει φορτωθεί ακόμα.'); return; }
+
+  // Φίλτρο: μόνο ματς με σήμα (όχι ΧΩΡΙΣ ΣΥΣΤΑΣΗ)
+  const withSignal = data.filter(d =>
+    d.omegaPick && !d.omegaPick.includes('ΧΩΡΙΣ') && !d.omegaPick.includes('NO BET')
+  );
+  const allRows   = data; // για το δεύτερο sheet (όλα)
+
+  // ── Helper: μορφοποίηση ──────────────────────────────────────
+  const pct = v => v != null ? `${Number(v).toFixed(1)}%` : '—';
+  const num = (v, d=1) => v != null ? Number(v).toFixed(d) : '—';
+  const off = d => d.offside ? {
+    hLambda: num(d.offside.hLambda),
+    aLambda: num(d.offside.aLambda),
+    totLambda: num(d.offside.totLambda),
+    hPOff2: pct(d.offside.hPOff2),
+    aPOff2: pct(d.offside.aPOff2),
+    pBothOff2: pct(d.offside.pBothOff2),
+  } : { hLambda:'—', aLambda:'—', totLambda:'—', hPOff2:'—', aPOff2:'—', pBothOff2:'—' };
+
+  // ── Μετατροπή σε rows ────────────────────────────────────────
+  const toRow = d => {
+    const o = off(d);
+    const hCorN = Number(d.hS?.cor || 5).toFixed(1);
+    const aCorN = Number(d.aS?.cor || 5).toFixed(1);
+    const totCorN = num(d.expCor);
+    return {
+      'Ημερομηνία':         d.m?.fixture?.date ? d.m.fixture.date.split('T')[0] : '—',
+      'Πρωτάθλημα':         d.lg || '—',
+      'Γηπεδούχος':         d.ht || '—',
+      'Φιλοξενούμενος':     d.at || '—',
+      'Σήμα (Pick)':        d.omegaPick || '—',
+      'Σκορ Πρόβλεψη':      d.exact || '—',
+      'Alt Σκορ':           d.exact2 || '—',
+      'Conf%':              num(d.strength, 0) + '%',
+      'tXG':                num(d.tXG, 2),
+      'xG HOME':            num(d.hXGfinal, 2),
+      'xG AWAY':            num(d.aXGfinal, 2),
+      'xG Diff':            num(d.xgDiff, 2),
+      'P(O2.5)':            d.pp ? pct(d.pp.pO25 * 100) : '—',
+      'P(O3.5)':            d.pp ? pct(d.pp.pO35 * 100) : '—',
+      'P(U2.5)':            d.pp ? pct(d.pp.pU25 * 100) : '—',
+      'P(GG)':              d.pp ? pct(d.pp.pBTTS * 100) : '—',
+      'Κόρνερ HOME (avg)':  hCorN,
+      'Κόρνερ AWAY (avg)':  aCorN,
+      'Κόρνερ Σύνολο':      totCorN,
+      'P(Over 8.5 Cor)':    pct(d.cornerConf),
+      'Οφσάιντ HOME (avg)': o.hLambda,
+      'Οφσάιντ AWAY (avg)': o.aLambda,
+      'Οφσάιντ Σύνολο':     o.totLambda,
+      'P(HOME ≥2 Off)':     o.hPOff2,
+      'P(AWAY ≥2 Off)':     o.aPOff2,
+      'P(Αμφότερες ≥2 Off)':o.pBothOff2,
+      'Κάρτες HOME (avg)':  num(d.hS?.crd, 1),
+      'Κάρτες AWAY (avg)':  num(d.aS?.crd, 1),
+      'H2H Ν-Ι-Η':         d.h2h ? `${d.h2h.homeWins}Ν-${d.h2h.draws}Ι-${d.h2h.awayWins}Η` : '—',
+      'Θέση HOME (#)':      d.hr && d.hr<99 ? d.hr : '—',
+      'Θέση AWAY (#)':      d.ar && d.ar<99 ? d.ar : '—',
+    };
+  };
+
+  // ── Δημιουργία workbook ──────────────────────────────────────
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: Ματς με σήμα
+  if(withSignal.length) {
+    const ws1 = XLSX.utils.json_to_sheet(withSignal.map(toRow));
+    // Χρωματισμός header — column widths
+    ws1['!cols'] = [
+      {wch:12},{wch:20},{wch:22},{wch:22},{wch:26},{wch:12},{wch:10},
+      {wch:8},{wch:7},{wch:9},{wch:9},{wch:8},
+      {wch:9},{wch:9},{wch:9},{wch:9},
+      {wch:14},{wch:14},{wch:14},{wch:14},
+      {wch:16},{wch:16},{wch:14},{wch:13},{wch:13},{wch:18},
+      {wch:14},{wch:14},{wch:12},{wch:12},{wch:12},
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, `Σήματα (${withSignal.length})`);
+  }
+
+  // Sheet 2: Όλα τα ματς
+  const ws2 = XLSX.utils.json_to_sheet(allRows.map(toRow));
+  ws2['!cols'] = [{wch:12},{wch:20},{wch:22},{wch:22},{wch:26},{wch:12},{wch:10},
+    {wch:8},{wch:7},{wch:9},{wch:9},{wch:8},{wch:9},{wch:9},{wch:9},{wch:9},
+    {wch:14},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:14},{wch:13},{wch:13},{wch:18},
+    {wch:14},{wch:14},{wch:12},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, ws2, `Όλα (${allRows.length})`);
+
+  // Sheet 3: Οδηγός κατηγοριών
+  const guide = [
+    {Κατηγορία:'⭐ GOLD',  'xG Mult':'×1.12', Χαρακτηριστικό:'Επιθετικό, πολλά γκολ, καλό Poisson fit',   'Καλύτερο για':'Over 2.5 · Over 3.5 · GG'},
+    {Κατηγορία:'🔒 TIGHT', 'xG Mult':'×0.95', Χαρακτηριστικό:'Αμυντικό, λίγα γκολ, τακτικό ποδόσφαιρο',  'Καλύτερο για':'Under 2.5 · 1X2 · Σκορ'},
+    {Κατηγορία:'⚠️ TRAP',  'xG Mult':'×0.90', Χαρακτηριστικό:'Υψηλή αστάθεια, μεγάλες ανατροπές',        'Καλύτερο για':'Αποφυγή — μόνο υψηλής conf.'},
+    {Κατηγορία:'⚪ STD',   'xG Mult':'×1.00', Χαρακτηριστικό:'Ισορροπημένο, global ρυθμίσεις',            'Καλύτερο για':'Balanced — όλα τα σήματα'},
+    {},
+    {Κατηγορία:'Στήλη',   'xG Mult':'Περιγραφή', Χαρακτηριστικό:'', 'Καλύτερο για':''},
+    {Κατηγορία:'Conf%',     'xG Mult':'Βεβαιότητα μοντέλου (≥70% = αξιόπιστο σήμα)', Χαρακτηριστικό:'',  'Καλύτερο για':''},
+    {Κατηγορία:'tXG',       'xG Mult':'Συνολικά αναμενόμενα γκολ (HOME+AWAY)',         Χαρακτηριστικό:'',  'Καλύτερο για':''},
+    {Κατηγορία:'P(O2.5)',   'xG Mult':'Poisson πιθανότητα Over 2.5 γκολ',             Χαρακτηριστικό:'',  'Καλύτερο για':''},
+    {Κατηγορία:'P(GG)',     'xG Mult':'Poisson πιθανότητα Γκολ/Γκολ (BTTS)',          Χαρακτηριστικό:'',  'Καλύτερο για':''},
+    {Κατηγορία:'P(HOME≥2)', 'xG Mult':'Πιθανότητα HOME να κάνει ≥2 οφσάιντ',          Χαρακτηριστικό:'',  'Καλύτερο για':''},
+    {Κατηγορία:'P(Αμφ≥2)',  'xG Mult':'Πιθανότητα ΚΑΙ οι δύο ≥2 οφσάιντ (bet builder)', Χαρακτηριστικό:'','Καλύτερο για':''},
+  ];
+  const ws3 = XLSX.utils.json_to_sheet(guide);
+  ws3['!cols'] = [{wch:16},{wch:42},{wch:42},{wch:32}];
+  XLSX.utils.book_append_sheet(wb, ws3, 'Οδηγός');
+
+  // ── Download ─────────────────────────────────────────────────
+  const fname = `APEX_OMEGA_${todayISO()}.xlsx`;
+  XLSX.writeFile(wb, fname);
+  showOk(`📊 Excel exported: ${fname} (${withSignal.length} σήματα + ${allRows.length} συνολικά)`);
+};
 window.importData=function(ev){
   const file=ev.target.files[0];
   if(!file)return;
