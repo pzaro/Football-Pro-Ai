@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.5 — BEST 4 + RADAR Quant Terminal</title>
+  <title>APEX OMEGA v5.6 — SMART SCAN TURBO + BEST 4 + RADAR</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -63,7 +63,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.5 · BEST 4 + RADAR + ADAPTIVE API</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.6 · SMART SCAN TURBO + BEST 4 + RADAR</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -163,7 +163,7 @@
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
         <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">↑ Import</button>
         <button class="btn btn-outline" id="btnFetchLineups" onclick="window.fetchAllLineups()" style="color:var(--teal);border-color:rgba(45,212,191,0.3);">📋 Fetch Lineups</button>
-        <button class="btn btn-primary" id="btnPre" onclick="runScan()">▶ Run Scan</button>
+        <button class="btn btn-primary" id="btnPre" onclick="runScan()">⚡ Smart Scan</button>
       </div>
     </div>
 

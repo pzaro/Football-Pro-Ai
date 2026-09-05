@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.5 — MASTER ENGINE · BEST 4 + RADAR EDITION
+// APEX OMEGA v5.6 — MASTER ENGINE · SMART SCAN TURBO + BEST 4 + RADAR
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -120,6 +120,18 @@ const CACHE_TTL = Object.freeze({
   FIXTURE_STATS:   12*60*60*1000,  // χρησιμοποιείται κυρίως σε finished recent matches
   ODDS:            30*1000,
   FIXTURE_DAY:     45*1000
+});
+
+// ── SMART SCAN TURBO profile ────────────────────────────────────────
+// Κρατά 8 scorelines για form/variance, αλλά κατεβάζει detailed fixture
+// statistics μόνο για τα 5 πιο πρόσφατα παιχνίδια κάθε ομάδας. Αυτό
+// διατηρεί το μεγαλύτερο μέρος του recent signal με πολύ λιγότερα API calls.
+const SMART_SCAN = Object.freeze({
+  DETAIL_FIXTURES: 5,
+  LINEUP_WINDOW_MIN: 90,   // αυτόματο lineup fetch μόνο κοντά στο kickoff
+  MIN_BATCH: 4,
+  MAX_BATCH: 8,
+  RATE_UTILIZATION: 0.95   // 5% safety margin αφού ανιχνευθεί το plan
 });
 
 let teamStatsCache = new BoundedCache(180, CACHE_TTL.TEAM_STATS),
@@ -253,7 +265,7 @@ function _updateApiRateFromHeaders(headers){
   const dRemain=_headerNum(headers,'x-ratelimit-requests-remaining');
   if(mLimit && mLimit>0){
     API_RATE.minuteLimit=mLimit;
-    API_RATE.baseRps=apiClamp((mLimit/60)*0.90,0.12,18); // 10% safety margin
+    API_RATE.baseRps=apiClamp((mLimit/60)*SMART_SCAN.RATE_UTILIZATION,0.12,18); // adaptive safety margin
     API_RATE.maxConcurrent=API_RATE.baseRps<1 ? 1 : apiClamp(Math.ceil(API_RATE.baseRps*0.75),2,10);
     API_RATE.detected=true;
   }
@@ -283,9 +295,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.3';
+const APP_VERSION   = 'v5.6';
 const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = 'ADAPTIVE API';
+const BUILD_TIME    = 'SMART SCAN TURBO';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -884,15 +896,15 @@ async function getTStats(t,lg,s){
 async function getLFix(t,lg,s){
   const k=`${t}_${lg}_${s}`;
   if(lastFixCache.has(k))return lastFixCache.get(k);
-  // Πρώτα: ζητά season=2026
-  const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);
-  let res=d?.response||[];
-  // Αν λίγα ματς στη σεζόν 2026 (αρχές σεζόν), παίρνουμε τα τελευταία 20 cross-season
-  if(res.length<6){
-    const d2=await apiReq(`fixtures?team=${t}&league=${lg}&last=20&status=FT`);
-    const cross=d2?.response||[];
-    if(cross.length>res.length) res=cross;
-  }
+
+  // SMART SCAN TURBO: ένα cross-season request αντί για current-season + fallback.
+  // Κρατάμε κατά προτεραιότητα τα fixtures του ίδιου league. Αν είναι <6
+  // (π.χ. πολύ νωρίς στη σεζόν), χρησιμοποιούμε το cross-competition history,
+  // όπως έκανε ήδη το προηγούμενο fallback — αλλά χωρίς δεύτερο API round-trip.
+  const d=await apiReq(`fixtures?team=${t}&last=20&status=FT`,{priority:'high',cacheMs:CACHE_TTL.LAST_FIXTURES});
+  const all=d?.response||[];
+  const sameLeague=all.filter(f=>String(f?.league?.id)===String(lg));
+  const res=sameLeague.length>=6?sameLeague:all;
   lastFixCache.set(k,res);
   return res;
 }
@@ -914,6 +926,26 @@ async function getFixtureLineups(fixtureId) {
   const result = parseLineup(d?.response || []);
   if(result.available) lineupsCache.set(k, result);
   return result;
+}
+
+
+function shouldSmartFetchLineup(m){
+  const st=String(m?.fixture?.status?.short||'').toUpperCase();
+  // Live fixtures: lineup is highly relevant and normally available.
+  if(['1H','HT','2H','ET','P','BT','LIVE'].includes(st)) return true;
+  // Finished/postponed/cancelled: avoid look-ahead and wasted pre-match scan calls.
+  if(['FT','AET','PEN','PST','CANC','ABD','AWD','WO'].includes(st)) return false;
+  const kick=Date.parse(m?.fixture?.date||'');
+  if(!Number.isFinite(kick)) return false;
+  const mins=(kick-Date.now())/60000;
+  return mins>=-10 && mins<=SMART_SCAN.LINEUP_WINDOW_MIN;
+}
+
+async function getSmartScanLineup(m){
+  if(!shouldSmartFetchLineup(m)){
+    return {available:false,deferred:true,reason:`Turbo: lineup fetch only within ${SMART_SCAN.LINEUP_WINDOW_MIN}m of kickoff`};
+  }
+  return getFixtureLineups(m.fixture.id);
 }
 
 /**
@@ -990,15 +1022,23 @@ function variance(arr){if(!arr||arr.length<2)return null;const mean=arr.reduce((
 function stdDev(arr){const v=variance(arr);return v!==null?Math.sqrt(v):null;}
 
 // Cache for fixture statistics (corners/cards/shots per game)
-let fixStatsCache = new BoundedCache(260, CACHE_TTL.FIXTURE_STATS);
+let fixStatsCache = new BoundedCache(320, CACHE_TTL.FIXTURE_STATS);
+const _fixStatsInflight = new Map();
 
 async function getFixStats(fixtureId){
   const k=String(fixtureId);
   if(fixStatsCache.has(k))return fixStatsCache.get(k);
-  const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`);
-  const r=d?.response||[];
-  fixStatsCache.set(k,r);
-  return r;
+  if(_fixStatsInflight.has(k))return _fixStatsInflight.get(k);
+
+  const promise=(async()=>{
+    const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`,{priority:'normal',cacheMs:CACHE_TTL.FIXTURE_STATS});
+    const r=d?.response||[];
+    fixStatsCache.set(k,r);
+    return r;
+  })().finally(()=>_fixStatsInflight.delete(k));
+
+  _fixStatsInflight.set(k,promise);
+  return promise;
 }
 
 function extractFixStatFor(statsArr,teamId,statType){
@@ -1010,7 +1050,7 @@ function extractFixStatFor(statsArr,teamId,statType){
   return parseFloat(String(v).replace('%',''))||0;
 }
 
-async function batchCalc(fixtures,tId){
+async function batchCalc(fixtures,tId,preloadedStats=null){
   if(!fixtures?.length)return{
     xg:'1.10',xga:'1.10',cor:5.0,corAgainst:4.5,corRatio:0.40,
     shotsCor:0.22,crd:2.0,shotsOn:4.5,shotsOff:3.5,oppShotsOn:4.0,
@@ -1022,7 +1062,9 @@ async function batchCalc(fixtures,tId){
   // Recency decay: most recent match has weight 1.0
   const DECAY=[1.00,0.82,0.67,0.54,0.43,0.35,0.27,0.20];
   const recent=fixtures.slice(0,8);
-  const statsPerFix=await Promise.all(recent.map(f=>getFixStats(f.fixture.id)));
+  const statsPerFix=preloadedStats
+    ? recent.map(f=>preloadedStats.get(String(f.fixture.id))||[])
+    : await Promise.all(recent.map(f=>getFixStats(f.fixture.id)));
 
   let tXG=0,tXGA=0,tCor=0,tCorAgainst=0,tCrd=0,tShotsOn=0,tShotsOff=0,tOppShotsOn=0,tOff=0,tw=0;
   let nCor=0,nCrd=0,nShots=0,nOff=0;
@@ -1109,7 +1151,7 @@ const _buildIntelCache = new BoundedCache(80);
 const _buildIntelPromises = new Map(); // dedup in-flight requests
 
 async function buildIntel(tId,lg,s,isHome){
-  const cacheKey = `${tId}_${lg}_${s}`;
+  const cacheKey = `${tId}_${lg}_${s}_${isHome?'H':'A'}`;
 
   // Hit: έχουμε ήδη το result
   if(_buildIntelCache.has(cacheKey)) return _buildIntelCache.get(cacheKey);
@@ -1138,7 +1180,19 @@ async function _buildIntelImpl(tId,lg,s,isHome){
     const gen=allFix.slice(0,8);
     const split=allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
     const recent6=allFix.slice(0,6);
-    const[fData,sData,r6Data]=await Promise.all([batchCalc(gen,tId),batchCalc(split,tId),batchCalc(recent6,tId)]);
+
+    // TURBO: detailed fixture statistics are fetched ONCE per fixture and shared
+    // across general/home-away/recent windows. Score/form still use up to 8 games.
+    const detailFixtures=gen.slice(0,SMART_SCAN.DETAIL_FIXTURES);
+    const detailEntries=await Promise.all(detailFixtures.map(async f=>[
+      String(f.fixture.id), await getFixStats(f.fixture.id)
+    ]));
+    const detailMap=new Map(detailEntries);
+    const[fData,sData,r6Data]=await Promise.all([
+      batchCalc(gen,tId,detailMap),
+      batchCalc(split,tId,detailMap),
+      batchCalc(recent6,tId,detailMap)
+    ]);
     const sXG=parseFloat(ss?.goals?.for?.average?.total)||1.35,sXGA=parseFloat(ss?.goals?.against?.average?.total)||1.35;
     const totalTeamGoalsSeason=parseInt(ss?.goals?.for?.total?.total)||0;
     const seaPlayed=safeNum(ss?.fixtures?.played?.total,0);
@@ -1879,7 +1933,7 @@ async function analyzeMatchSafe(m,index,total){
       getLeagueTopCards(m.league.id, m.league.season),
       getTeamInjuries(m.teams.home.id, m.league.id, m.league.season),
       getTeamInjuries(m.teams.away.id, m.league.id, m.league.season),
-      getFixtureLineups(m.fixture.id)        // 📋 Starting XI — primary source of truth
+      getSmartScanLineup(m)                 // 📋 Turbo: fetch XI only when it can actually be available
     ]);
     
     const lp=getLeagueParams(m.league.id);
@@ -1981,10 +2035,10 @@ window.runScan=async function(){
   if(isRunning)return;
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
-  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
+  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ Smart Scan Turbo — initializing…');
   console.log('[APEX] Scan started · adaptive API', window.APEX_API_RATE);
   // Clear team intel cache — fresh data για κάθε scan
-  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); } catch {}
+  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); _fixStatsInflight.clear(); } catch {}
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
@@ -2001,7 +2055,7 @@ window.runScan=async function(){
     // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
     // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
     const leagueSeasonPairs=[...new Map(all.map(m=>[`${m.league.id}_${m.league.season}`,{lid:m.league.id,season:m.league.season}])).values()];
-    setProgress(8, `Pre-fetching ${leagueSeasonPairs.length} league/season sets…`);
+    setProgress(8, `Turbo warm-up: ${leagueSeasonPairs.length} league/season sets…`);
     await Promise.all(leagueSeasonPairs.map(({lid,season}) => Promise.all([
       getStand(lid, season),
       getLeagueTopScorers(lid, season),
@@ -2011,8 +2065,10 @@ window.runScan=async function(){
 
     // Match concurrency follows detected API capacity. The global queue still
     // enforces the exact request-launch rate, so bigger plans scale automatically.
-    const SCAN_BATCH = apiClamp(Math.max(2,Math.ceil(API_RATE.maxConcurrent/2)),2,6);
-    console.log(`[APEX] Adaptive profile: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · batch ${SCAN_BATCH}`);
+    // TURBO: περισσότερα matches μπορούν να είναι in-flight, ενώ ο global API
+    // limiter εξακολουθεί να ελέγχει με ακρίβεια πόσα HTTP requests ξεκινούν.
+    const SCAN_BATCH = apiClamp(Math.max(SMART_SCAN.MIN_BATCH,API_RATE.maxConcurrent),SMART_SCAN.MIN_BATCH,SMART_SCAN.MAX_BATCH);
+    console.log(`[APEX] Smart Scan Turbo: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · match batch ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
     for(let i=0; i<all.length; i+=SCAN_BATCH){
       const batch = all.slice(i, i+SCAN_BATCH);
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
@@ -2033,7 +2089,7 @@ window.runScan=async function(){
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
       showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
+      showOk(`⚡ Smart Scan Turbo ολοκληρώθηκε — ${all.length} αγώνες · ${SMART_SCAN.DETAIL_FIXTURES} detailed matches/team.`);
     }
     // BEST 4 v5.5: price only the strongest RADAR fixtures across all available bookmakers.
     window.refreshBest4({silent:true}).catch(err=>console.warn('[APEX] BEST 4 odds refresh failed:',err?.message||err));
