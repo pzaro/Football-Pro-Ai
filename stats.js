@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.3.3 — MASTER ENGINE · 60s LIFECYCLE REFRESH + AUTO-CLEAR IMPORTS + CYPRUS + KICKOFF GROUPS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
+// APEX OMEGA v6.4 — MASTER ENGINE · UNIFIED 1X2 VERIFICATION + 60s LIFECYCLE REFRESH + AUTO-CLEAR + CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -54,6 +54,7 @@ const ACRONYM_DICT = {
   'EV%':      'Expected Value % (Αναμενόμενη Αξία) — (Πιθανότητα μοντέλου × Απόδοση book) − 1.\nΠ.χ. μοντέλο δίνει 60%, book δίνει 1.90 → EV% = (0.60×1.90)−1 = +14%.\nΠαίζουμε ΜΟΝΟ θετικό EV (πράσινο). Μακροπρόθεσμα κερδοφόρο.',
   'Kelly':    'Kelly Criterion (Κριτήριο Kelly) — Μαθηματικός τύπος: ποντάρεις ακριβώς το σωστό ποσό βάσει bankroll & EV%.\nΤο APEX χρησιμοποιεί Fractional Kelly 25% — χρυσή τομή: μεγιστοποιείς κέρδη χωρίς χρεοκοπία σε κακό σερί.',
   'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit & Auto-Calibration',
+  'V-Score':  '1X2 Verification Score — Ενιαίος δείκτης επαλήθευσης 0–100. Συνδυάζει calibrated πιθανότητα, gap από το 2ο outcome, xG κατεύθυνση, ανεξάρτητη συνέπεια Form/Split/Defense, ποιότητα δεδομένων, league reliability και penalties για volatility / model-market conflict.',
 
   // ── Engine παράμετροι ─────────────────────────────────────────
   'xG Mult':  'xG Multiplier (Πολλαπλασιαστής) — Συντελεστής ανά πρωτάθλημα που βαθμονομεί τα "ωμά" xG.\n• Mult >1.0 (π.χ. Bundesliga 1.12): επιθετικό πρωτάθλημα, τα xG υποεκτιμούν\n• Mult <1.0 (π.χ. Serie A 0.95): αμυντικό, τα xG υπερεκτιμούν\nΡυθμίζεται αυτόματα από το Grid Search Auto-Calibration.',
@@ -416,9 +417,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.3.3';
+const APP_VERSION   = 'v6.4';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = '60s REFRESH · AUTO-CLEAR IMPORTS · CYPRUS';
+const BUILD_TIME    = 'UNIFIED 1X2 VERIFICATION';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -431,7 +432,7 @@ const GLOSSARY_GROUPS = [
   { label:'Αγορές & Αποτελέσματα', badge:null,   keys:['1X2','AH','BTTS','O2.5','O3.5','U2.5','HT','FT'] },
   { label:'Στατιστικοί Δείκτες', badge:null,     keys:['Conf%','D-C','GAP','H2H','INJ','Card%','Adj🟨%'] },
   { label:'Live Δείκτες', badge:'live',           keys:['SQD','MSI','Edge','Volatility'] },
-  { label:'Engine & Calibration', badge:'engine', keys:['xG Mult','Vault','LRU'] },
+  { label:'Engine & Calibration', badge:'engine', keys:['xG Mult','Vault','V-Score','LRU'] },
   { label:'Value & Χρήματα', badge:'money',       keys:['RADAR','EV%','Kelly'] },
 ];
 
@@ -442,7 +443,8 @@ const CONCEPT_TABLE = [
   ['xG','Ποιότητα επίθεσης (Αναμ. Γκολ)','> 1.50','Πάνω ≥1.50: ισχυρή επίθεση → Over / 1X2'],
   ['xGA','Ποιότητα άμυνας (Αναμ. Γκολ κατά)','< 1.20','Κάτω <1.20: ισχυρή άμυνα → Under / Νίκη'],
   ['tXG','Συνολικά Αναμ. Γκολ (HOME+AWAY)','2.5–3.5','<2.20 → Under 2.5 | >2.80 → Over 2.5 | >3.40 → Over 3.5'],
-  ['xG Diff','Διαφορά επιθετικής ισχύος','>0.60 ή <-0.60','|Diff|>0.60 → 1X2 σήμα | ~0 → Ισοπαλία / BTTS'],
+  ['xG Diff','Διαφορά επιθετικής ισχύος','confirmation filter','Δεν αποφασίζει μόνο του το 1X2. Επιβεβαιώνει την κατεύθυνση του Unified Verification.'],
+  ['V-Score','Ενιαία επαλήθευση 1/X/2','≥80 VERIFIED','≥80 VERIFIED · 70–79 STRONG · 60–69 LEAN · <60 NO SIGNAL · CONFLICT όταν οι πηγές διαφωνούν έντονα'],
   ['xG Mult','Πολλαπλασιαστής ανά πρωτάθλημα','1.00 (standard)','GOLD×1.12 | Standard×1.00 | TIGHT×0.95 | TRAP×0.90'],
   // ── Αγορές ──────────────────────────────────────────────────
   ['Conf%','Βεβαιότητα μοντέλου (0-99%)','≥70%','<70%: ΧΩΡΙΣ ΣΥΣΤΑΣΗ | 70-79%: Καλό | ≥80%: Ισχυρό'],
@@ -514,7 +516,7 @@ window.openGlossary = function() {
   const renderConceptTable = () => {
     // Group rows by category
     const cats = [
-      { label:'📐 xG & Μοντέλο', rows: CONCEPT_TABLE.filter(r=>['xG','xGA','tXG','xG Diff','xG Mult'].includes(r[0])) },
+      { label:'📐 xG & Μοντέλο', rows: CONCEPT_TABLE.filter(r=>['xG','xGA','tXG','xG Diff','V-Score','xG Mult'].includes(r[0])) },
       { label:'🎯 Αγορές & Σήματα', rows: CONCEPT_TABLE.filter(r=>['Conf%','O2.5','O3.5','U2.5','BTTS','AH','HT'].includes(r[0])) },
       { label:'🚩 Κόρνερ & Κάρτες', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Κόρνερ')||r[0].includes('Κάρτες')||r[0].includes('Card%')||r[0].includes('P(>8')) },
       { label:'🚫 Οφσάιντ', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Offside')||r[0].includes('off')||r[0].includes('αμφ')) },
@@ -730,7 +732,7 @@ function appendProgressiveMatch(rec,failed=false){
       <div style="min-width:0;">
         <div style="font-size:.76rem;font-weight:800;color:${failed?'var(--accent-red)':confCol};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(signal)}</div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-          ${_progressiveProbChip('1',pp.pHome)}${_progressiveProbChip('X',pp.pDraw)}${_progressiveProbChip('2',pp.pAway)}
+          ${_progressiveProbChip('1',pp.pHome)}${_progressiveProbChip('X',pp.pDraw)}${_progressiveProbChip('2',pp.pAway)}${rec.verification?`<span style="font-family:var(--font-mono);font-size:.67rem;padding:3px 6px;border-radius:6px;background:var(--bg-surface);border:1px solid var(--border-light);color:${rec.verification.status==='VERIFIED'?'var(--accent-green)':rec.verification.status==='STRONG'?'var(--accent-blue)':rec.verification.status==='LEAN'?'var(--accent-gold)':'var(--text-muted)'};">V ${rec.verification.score} ${rec.verification.signal||'—'}</span>`:''}
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end;flex-wrap:wrap;">
@@ -934,6 +936,8 @@ window.importData=function(ev){
       const imported=JSON.parse(e.target.result);
       if(!Array.isArray(imported))throw new Error("Invalid format");
       window.scannedMatchesData=imported;
+      // v6.4: legacy JSON χωρίς verification αναβαθμίζεται τοπικά από τα frozen inputs.
+      imported.forEach(r=>{try{_ensure1X2Verification(r);}catch{}});
 
       // Αποθήκευση στο vault + ενημέρωση UI
       saveToVault(imported);
@@ -2162,17 +2166,340 @@ function renderAdaptive1X2Calibration(summary){
 window.getAdaptive1X2State=()=>_loadAdaptive1X2State();
 
 // ================================================================
+//  UNIFIED 1X2 VERIFICATION ENGINE v6.4
+//
+//  ΕΝΑΣ μηχανισμός αποφασίζει το σημείο που εμφανίζεται σε:
+//  Dashboard → RADAR → BEST 4 → Bombs → Audit.
+//
+//  Το argmax P(1/X/2) παραμένει diagnostic leader, αλλά ΔΕΝ γίνεται
+//  πλέον αυτόματα «σημείο». Για να εμφανιστεί 1 / X / 2 πρέπει να
+//  περάσει probability, dominance-gap, xG-direction, consistency,
+//  data-quality και uncertainty gates. Όταν υπάρχουν no-vig odds,
+//  προστίθεται market sanity check χωρίς να αντιγράφεται η αγορά.
+// ================================================================
+const VERIFY_1X2 = Object.freeze({
+  MIN_SIGNAL_SCORE: 60,
+  STRONG_SCORE: 70,
+  VERIFIED_SCORE: 80,
+  MIN_DQ: 55,
+  // Minimum gates για 1 / 2
+  WIN_MIN_P: 0.53,
+  WIN_MIN_GAP: 0.06,
+  WIN_MIN_XG_DIR: 0.25,
+  // Minimum gates για Χ
+  DRAW_MIN_P: 0.34,
+  DRAW_MIN_GAP: 0.03,
+  DRAW_MAX_ABS_XG: 0.35,
+  // Market conflict
+  MARKET_WARN_PP: 12,
+  MARKET_HIGH_PP: 22,
+  MARKET_CONFLICT_PP: 30,
+});
+
+function _verificationLeader(pp){
+  return [
+    {key:'1',prob:safeNum(pp?.pHome,0)},
+    {key:'X',prob:safeNum(pp?.pDraw,0)},
+    {key:'2',prob:safeNum(pp?.pAway,0)},
+  ].sort((a,b)=>b.prob-a.prob);
+}
+
+function _verificationDataQuality(hXG,aXG,hS,aS,ctx=null){
+  let q=64;
+  const hn=safeNum(hS?.r6?.n,0), an=safeNum(aS?.r6?.n,0);
+  if(hn>=5)q+=5; else if(hn<3)q-=6;
+  if(an>=5)q+=5; else if(an<3)q-=6;
+  if(Number.isFinite(Number(hS?.r6?.sdGoals)))q+=3;
+  if(Number.isFinite(Number(aS?.r6?.sdGoals)))q+=3;
+  if(Number.isFinite(Number(hS?.fXGA))&&Number.isFinite(Number(aS?.fXGA)))q+=3;
+  if(Number.isFinite(Number(hS?.sXG))&&Number.isFinite(Number(aS?.sXG)))q+=3;
+  if(ctx?.lineupData?.available)q+=8;
+  if(ctx?.hInjAdj&&ctx?.aInjAdj)q+=4;
+  const fallback=Math.abs(safeNum(hXG,0)-1.10)<0.02&&Math.abs(safeNum(aXG,0)-1.10)<0.02;
+  if(fallback)q-=32;
+  return clamp(Math.round(q),0,100);
+}
+
+function _verificationVolatilityPenalty(hS,aS){
+  const vals=[hS?.r6?.sdGoals,hS?.r6?.sdGoalsAgainst,aS?.r6?.sdGoals,aS?.r6?.sdGoalsAgainst]
+    .map(Number).filter(Number.isFinite);
+  if(vals.length<2)return 5;
+  const avg=vals.reduce((a,b)=>a+b,0)/vals.length;
+  if(avg<=0.85)return 0;
+  if(avg<=1.05)return 2;
+  if(avg<=1.20)return 5;
+  if(avg<=1.40)return 9;
+  if(avg<=1.60)return 13;
+  return 17;
+}
+
+function _verificationLeagueReliability(leagueId){
+  const st=_loadAdaptive1X2State();
+  const l=st.leagues?.[String(leagueId)];
+  const ln=safeNum(l?.n,0), gn=safeNum(st.global?.n,0);
+  let score=50;
+  if(ln>0)score+=Math.min(ln,100)*0.32;
+  else score+=Math.min(gn,100)*0.18;
+  const m=l?.metrics||st.global?.metrics;
+  if(Number.isFinite(Number(m?.brier))){
+    const b=Number(m.brier);
+    score+=clamp((0.26-b)/0.12*12,-8,12);
+  }
+  return clamp(Math.round(score),35,90);
+}
+
+function _verificationConsistency(leader,hS,aS,h2hSummary=null){
+  const vals={
+    formXG:safeNum(hS?.fXG,1.2)-safeNum(aS?.fXG,1.2),
+    defense:safeNum(aS?.fXGA,1.2)-safeNum(hS?.fXGA,1.2), // + = HOME καλύτερη άμυνα
+    split:safeNum(hS?.sXG,1.2)-safeNum(aS?.sXG,1.2),
+    form:(safeNum(hS?.formRating,50)-safeNum(aS?.formRating,50))/50,
+  };
+  const h2n=safeNum(h2hSummary?.homeWins,0)+safeNum(h2hSummary?.awayWins,0)+safeNum(h2hSummary?.draws,0);
+  const h2=h2n?((safeNum(h2hSummary?.homeWins,0)-safeNum(h2hSummary?.awayWins,0))/h2n):0;
+  let parts;
+  if(leader==='X'){
+    const close=(v,scale)=>clamp(100-Math.abs(v)/scale*100,0,100);
+    parts=[close(vals.formXG,0.65),close(vals.defense,0.65),close(vals.split,0.55),close(vals.form,0.65)];
+    if(h2n>=4)parts.push(close(h2,0.65));
+  }else{
+    const dir=leader==='1'?1:-1;
+    const side=(v,scale)=>clamp(50+(dir*v/scale)*50,0,100);
+    parts=[side(vals.formXG,0.60),side(vals.defense,0.60),side(vals.split,0.50),side(vals.form,0.55)];
+    if(h2n>=4)parts.push(side(h2,0.65));
+  }
+  return {score:parts.reduce((a,b)=>a+b,0)/Math.max(parts.length,1),raw:{...vals,h2h:h2},parts};
+}
+
+function _verificationMarketObject(marketNoVig){
+  if(!marketNoVig)return null;
+  const p1=safeNum(marketNoVig['1']??marketNoVig.pHome,NaN);
+  const px=safeNum(marketNoVig['X']??marketNoVig.pDraw,NaN);
+  const p2=safeNum(marketNoVig['2']??marketNoVig.pAway,NaN);
+  if(![p1,px,p2].every(Number.isFinite))return null;
+  const z=p1+px+p2;if(!(z>0))return null;
+  const probs={'1':p1/z,'X':px/z,'2':p2/z};
+  const ordered=Object.entries(probs).map(([key,prob])=>({key,prob})).sort((a,b)=>b.prob-a.prob);
+  return {probs,leader:ordered[0].key,gapPP:(ordered[0].prob-ordered[1].prob)*100,books:safeNum(marketNoVig.books,0)};
+}
+
+function compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary=null,ctx=null,marketNoVig=null){
+  const ordered=_verificationLeader(pp),lead=ordered[0],second=ordered[1];
+  const leader=lead.key,prob=lead.prob,gap=Math.max(0,lead.prob-second.prob),xgDiff=safeNum(hXG,0)-safeNum(aXG,0);
+  const xgDir=leader==='1'?xgDiff:leader==='2'?-xgDiff:-Math.abs(xgDiff);
+
+  const probQ=leader==='X'
+    ?clamp((prob-0.28)/(0.45-0.28)*100,0,100)
+    :clamp((prob-0.40)/(0.68-0.40)*100,0,100);
+  const gapQ=leader==='X'
+    ?clamp(gap/0.10*100,0,100)
+    :clamp(gap/0.18*100,0,100);
+  const xgQ=leader==='X'
+    ?clamp((0.45-Math.abs(xgDiff))/0.45*100,0,100)
+    :clamp(xgDir/0.80*100,0,100);
+  const consistency=_verificationConsistency(leader,hS,aS,h2hSummary);
+  const dq=_verificationDataQuality(hXG,aXG,hS,aS,ctx);
+  const leagueRel=_verificationLeagueReliability(leagueId);
+  const volatilityPenalty=_verificationVolatilityPenalty(hS,aS);
+
+  let score=probQ*0.30+gapQ*0.20+xgQ*0.20+consistency.score*0.15+dq*0.10+leagueRel*0.05-volatilityPenalty;
+  let hardConflict=false, conflictReason='';
+  if((leader==='1'||leader==='2')&&xgDir<=-0.10){hardConflict=true;conflictReason='Probability leader αντίθετο από την κατεύθυνση xG';}
+  if(leader==='X'&&Math.abs(xgDiff)>0.55){hardConflict=true;conflictReason='Draw leader με υπερβολικά μεγάλη xG ανισορροπία';}
+  if(consistency.score<25){hardConflict=true;conflictReason=conflictReason||'Οι ανεξάρτητοι δείκτες Form/Split/Defense διαφωνούν έντονα';}
+
+  const market=_verificationMarketObject(marketNoVig);
+  let marketPenalty=0,marketGapPP=null,marketConflict=false;
+  if(market){
+    const mp=safeNum(market.probs[leader],0),modelGapPP=(prob-mp)*100;marketGapPP=modelGapPP;
+    if(modelGapPP>VERIFY_1X2.MARKET_WARN_PP){
+      marketPenalty=clamp((modelGapPP-VERIFY_1X2.MARKET_WARN_PP)/(VERIFY_1X2.MARKET_CONFLICT_PP-VERIFY_1X2.MARKET_WARN_PP)*22,0,22);
+    }
+    if(modelGapPP>=VERIFY_1X2.MARKET_CONFLICT_PP || (market.leader!==leader&&market.gapPP>=10)){
+      marketConflict=true;hardConflict=true;
+      conflictReason=`Model–Market Conflict: APEX ${leader} ${(prob*100).toFixed(1)}% vs no-vig ${(mp*100).toFixed(1)}%`;
+    }
+    score-=marketPenalty;
+  }
+  const learningComponents={probability:probQ,gap:gapQ,xg:xgQ,consistency:consistency.score,dataQuality:dq,leagueReliability:leagueRel,volatilityPenalty};
+  const learned=_applyVerificationLearning(learningComponents,score);
+  score=clamp(Math.round(learned.score),0,99);
+
+  const winGate=(leader==='1'||leader==='2')&&prob>=VERIFY_1X2.WIN_MIN_P&&gap>=VERIFY_1X2.WIN_MIN_GAP&&xgDir>=VERIFY_1X2.WIN_MIN_XG_DIR&&consistency.score>=45&&dq>=VERIFY_1X2.MIN_DQ;
+  const drawGate=leader==='X'&&prob>=VERIFY_1X2.DRAW_MIN_P&&gap>=VERIFY_1X2.DRAW_MIN_GAP&&Math.abs(xgDiff)<=VERIFY_1X2.DRAW_MAX_ABS_XG&&consistency.score>=50&&dq>=VERIFY_1X2.MIN_DQ;
+  const hardGate=winGate||drawGate;
+
+  let status='NO_SIGNAL',label='NO 1X2 SIGNAL',signal=null;
+  if(hardConflict){status='CONFLICT';label='CONFLICT';}
+  else if(hardGate&&score>=VERIFY_1X2.VERIFIED_SCORE){status='VERIFIED';label='VERIFIED';signal=leader;}
+  else if(hardGate&&score>=VERIFY_1X2.STRONG_SCORE){status='STRONG';label='STRONG';signal=leader;}
+  else if(hardGate&&score>=VERIFY_1X2.MIN_SIGNAL_SCORE){status='LEAN';label='LEAN';signal=leader;}
+
+  const reasons=[];
+  reasons.push(`P${leader} ${(prob*100).toFixed(1)}% · gap ${(gap*100).toFixed(1)}pp`);
+  reasons.push(`xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · consistency ${consistency.score.toFixed(0)}/100`);
+  reasons.push(`DQ ${dq}/100 · volatility −${volatilityPenalty}`);
+  if(market)reasons.push(`no-vig P${leader} ${(market.probs[leader]*100).toFixed(1)}% · Δ ${marketGapPP>=0?'+':''}${marketGapPP.toFixed(1)}pp${marketPenalty?` · penalty −${marketPenalty.toFixed(0)}`:''}`);
+  if(conflictReason)reasons.push(conflictReason);
+
+  return {
+    leader,leaderProb:prob,second:second.key,secondProb:second.prob,gapPP:gap*100,
+    signal,status,label,score,hardGate,conflict:hardConflict,conflictReason,
+    xgDiff,xgDirection:xgDir,marketConflict,marketGapPP,marketPenalty,
+    components:learningComponents,
+    learning:{active:learned.active,prob:learned.prob,n:learned.n},
+    consistencyRaw:consistency.raw,market,reasons,
+  };
+}
+
+function _ensure1X2Verification(rec){
+  if(!rec?.pp||!rec?.hS||!rec?.aS)return rec?.verification||null;
+  if(rec.verification&&Number.isFinite(Number(rec.verification.score)))return rec.verification;
+  const v=compute1X2Verification(rec.pp,rec.hXGfinal??rec.hExp,rec.aXGfinal??rec.aExp,rec.hS,rec.aS,rec.leagueId,rec.h2h||null,{lineupData:rec.lineupData,hInjAdj:rec.hInjAdj,aInjAdj:rec.aInjAdj},rec.marketNoVig1X2||null);
+  rec.verification=v;rec.rawOutPick=v.leader;rec.outPick=v.signal||'-';return v;
+}
+
+function _marketNoVig1X2FromPack(markets){
+  if(!markets)return null;
+  const a={};let books=Infinity;
+  for(const k of ['1','X','2']){
+    const nv=markets?.[k]?.noVig;if(!nv||!Number.isFinite(Number(nv.prob)))return null;
+    a[k]=Number(nv.prob);books=Math.min(books,Number(nv.books||0));
+  }
+  a.books=Number.isFinite(books)?books:0;return a;
+}
+
+function _isStraight1X2Recommendation(pick){
+  const t=String(pick||'');
+  return (t.includes('ΝΙΚΗ ΓΗΠΕΔ')||t.includes('ΝΙΚΗ ΦΙΛΟΞ')||t.includes('ΙΣΟΠΑΛΙΑ'))&&!t.includes('ΗΜΙΧΡΟΝΟ')&&!t.includes('AH');
+}
+
+function _patchVaultVerification(rec){
+  try{
+    const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');
+    const row=store.find(x=>String(x.fixtureId)===String(rec.fixId));if(!row)return;
+    const v=rec.verification||{};
+    row.verificationSignal=v.signal||null;row.verificationLeader=v.leader||null;row.verificationScore=safeNum(v.score,0);row.verificationStatus=v.status||'NO_SIGNAL';
+    row.verification={signal:v.signal||null,leader:v.leader||null,score:safeNum(v.score,0),status:v.status||'NO_SIGNAL',gapPP:safeNum(v.gapPP,0),xgDiff:safeNum(v.xgDiff,0),components:v.components||null,marketGapPP:Number.isFinite(Number(v.marketGapPP))?Number(v.marketGapPP):null};
+    localStorage.setItem(LS_PREDS,JSON.stringify(store));
+  }catch{}
+}
+
+function _updateRec1X2VerificationFromMarket(rec,markets){
+  if(!rec?.pp||!rec?.hS||!rec?.aS)return null;
+  const nv=_marketNoVig1X2FromPack(markets);if(!nv)return rec.verification||null;
+  rec.marketNoVig1X2=nv;
+  const v=compute1X2Verification(rec.pp,rec.hXGfinal??rec.hExp,rec.aXGfinal??rec.aExp,rec.hS,rec.aS,rec.leagueId,rec.h2h||null,{lineupData:rec.lineupData,hInjAdj:rec.hInjAdj,aInjAdj:rec.aInjAdj},nv);
+  rec.verification=v;rec.rawOutPick=v.leader;rec.outPick=v.signal||'-';
+  if(_isStraight1X2Recommendation(rec.omegaPick)&&(v.status==='CONFLICT'||!v.signal)){
+    rec.omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ';rec.strength=0;rec.reason=`1X2 απορρίφθηκε από Verification Layer: ${v.conflictReason||v.status}.`;
+  }
+  _patchVaultVerification(rec);
+  return v;
+}
+
+// ── Verification Learning — μαθαίνει ποια gates έχουν πραγματική αξία ──
+const LS_VERIFY_1X2_LEARNING='omega_verify_1x2_learning_v6.4';
+const VERIFY_LEARN_MIN_N=40;
+let _verifyLearningState=null;
+function _defaultVerifyLearningState(){return {version:1,model:null,n:0,fingerprint:'',metrics:null,updatedAt:null,log:[]};}
+function _loadVerifyLearningState(){
+  if(_verifyLearningState)return _verifyLearningState;
+  try{const x=JSON.parse(localStorage.getItem(LS_VERIFY_1X2_LEARNING)||'null');_verifyLearningState=x&&typeof x==='object'?{..._defaultVerifyLearningState(),...x}:_defaultVerifyLearningState();}catch{_verifyLearningState=_defaultVerifyLearningState();}
+  return _verifyLearningState;
+}
+function _saveVerifyLearningState(){try{localStorage.setItem(LS_VERIFY_1X2_LEARNING,JSON.stringify(_loadVerifyLearningState()));}catch{}}
+function _verifySigmoid(z){return z>=0?1/(1+Math.exp(-z)):Math.exp(z)/(1+Math.exp(z));}
+function _verificationLearningVector(c){
+  return [
+    clamp(safeNum(c?.probability,0)/100,0,1),
+    clamp(safeNum(c?.gap,0)/100,0,1),
+    clamp(safeNum(c?.xg,0)/100,0,1),
+    clamp(safeNum(c?.consistency,0)/100,0,1),
+    clamp(safeNum(c?.dataQuality,0)/100,0,1),
+    clamp(safeNum(c?.leagueReliability,50)/100,0,1),
+    clamp(1-safeNum(c?.volatilityPenalty,8)/20,0,1),
+  ];
+}
+function _applyVerificationLearning(components,heuristicScore){
+  const st=_loadVerifyLearningState(),m=st.model;
+  if(!m||safeNum(st.n,0)<VERIFY_LEARN_MIN_N||!Array.isArray(m.weights))return {score:heuristicScore,active:false,prob:null,n:safeNum(st.n,0)};
+  const x=_verificationLearningVector(components);
+  let z=safeNum(m.intercept,0);m.weights.forEach((w,i)=>z+=safeNum(w,0)*safeNum(x[i],0));
+  const learnedP=_verifySigmoid(z);
+  // Conservative blend: το learned layer διορθώνει, δεν αντικαθιστά, το heuristic verification.
+  const blend=clamp(safeNum(m.blend,0.25),0.10,0.35);
+  const score=clamp(heuristicScore*(1-blend)+learnedP*100*blend,0,99);
+  return {score,active:true,prob:learnedP,n:safeNum(st.n,0),metrics:st.metrics||null};
+}
+function _verifyLearnFingerprint(rows){
+  const str=(rows||[]).map(r=>`${r.fixtureId||''}:${r.actualOutcome||r.outcome||''}`).sort().join('|');
+  let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return String(h>>>0);
+}
+function _verifyLearnBrier(rows,model=null,useHeuristic=false){
+  if(!rows.length)return null;let s=0,n=0;
+  rows.forEach(r=>{const y=r.hit?1:0;let p;if(useHeuristic)p=clamp(safeNum(r.score,50)/100,0.05,0.95);else{const x=_verificationLearningVector(r.components);let z=safeNum(model?.intercept,0);(model?.weights||[]).forEach((w,i)=>z+=safeNum(w,0)*safeNum(x[i],0));p=clamp(_verifySigmoid(z),0.03,0.97);}s+=(p-y)**2;n++;});
+  return n?s/n:null;
+}
+function runVerificationLearning(auditRecords){
+  const rows=(auditRecords||[]).map(r=>{
+    const v=r.verification||null,leader=r.verificationLeader||v?.leader||null,actual=r.outcome||_oneXTwoOutcome(r.actual);
+    if(!v?.components||!['1','X','2'].includes(leader)||!['1','X','2'].includes(actual))return null;
+    return {fixtureId:r.fixtureId,date:r.date,components:v.components,score:safeNum(r.verificationScore??v.score,0),leader,actualOutcome:actual,hit:leader===actual};
+  }).filter(Boolean);
+  const st=_loadVerifyLearningState(),summary={ready:false,n:rows.length,accepted:false,skipped:false,oldMetrics:st.metrics||null,newMetrics:null};
+  if(rows.length<VERIFY_LEARN_MIN_N)return summary;
+  const fp=_verifyLearnFingerprint(rows);if(st.fingerprint===fp&&st.model){summary.ready=true;summary.skipped=true;summary.newMetrics=st.metrics;return summary;}
+  const sorted=[...rows].sort((a,b)=>String(a.date||a.fixtureId).localeCompare(String(b.date||b.fixtureId)));
+  let val=sorted.filter(r=>Number(r.fixtureId||0)%5===0),train=sorted.filter(r=>Number(r.fixtureId||0)%5!==0);
+  if(val.length<8){const vn=Math.max(8,Math.ceil(sorted.length*.20));val=sorted.slice(-vn);train=sorted.slice(0,-vn);}
+  if(train.length<25){train=sorted;val=sorted;}
+  const hitRate=train.reduce((z,r)=>z+(r.hit?1:0),0)/Math.max(train.length,1);
+  let intercept=Math.log(clamp(hitRate,0.08,0.92)/(1-clamp(hitRate,0.08,0.92)));
+  let weights=[0,0,0,0,0,0,0];
+  const lr=0.12,l2=0.025,epochs=220;
+  for(let ep=0;ep<epochs;ep++){
+    let gi=0,g=new Array(weights.length).fill(0);
+    train.forEach(r=>{const x=_verificationLearningVector(r.components),pred=_verifySigmoid(intercept+x.reduce((z,v,i)=>z+v*weights[i],0)),e=pred-(r.hit?1:0);gi+=e;x.forEach((v,i)=>g[i]+=e*v);});
+    const n=Math.max(train.length,1);intercept-=lr*gi/n;weights=weights.map((w,i)=>clamp(w-lr*(g[i]/n+l2*w),-5,5));
+  }
+  const candidate={intercept,weights,blend:0.25};
+  const baselineBrier=_verifyLearnBrier(val,null,true),candidateBrier=_verifyLearnBrier(val,candidate,false);
+  const valHit=val.reduce((z,r)=>z+(r.hit?1:0),0)/Math.max(val.length,1);
+  const improves=Number.isFinite(candidateBrier)&&Number.isFinite(baselineBrier)&&candidateBrier<=baselineBrier-0.002;
+  summary.ready=true;summary.newMetrics={n:rows.length,trainN:train.length,valN:val.length,baselineBrier,candidateBrier,valLeaderAccuracy:valHit};
+  if(improves){
+    st.model=candidate;st.n=rows.length;st.fingerprint=fp;st.metrics=summary.newMetrics;st.updatedAt=Date.now();st.log=(st.log||[]);st.log.unshift({ts:Date.now(),n:rows.length,baselineBrier,candidateBrier});st.log=st.log.slice(0,30);_saveVerifyLearningState();summary.accepted=true;
+  }else{
+    // Fingerprint ενημερώνεται μόνο όταν υπάρχει ήδη accepted model, για να μη γίνεται άσκοπο retrain στο ίδιο dataset.
+    if(st.model){st.fingerprint=fp;st.n=Math.max(safeNum(st.n,0),rows.length);_saveVerifyLearningState();}
+  }
+  return summary;
+}
+function renderVerificationLearning(summary){
+  if(!summary)return '';
+  const m=summary.newMetrics||summary.oldMetrics||{};
+  const num=v=>Number.isFinite(Number(v))?Number(v).toFixed(4):'N/A';
+  const pct2=v=>Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'N/A';
+  const state=summary.n<VERIFY_LEARN_MIN_N?'WAITING':summary.skipped?'UNCHANGED':summary.accepted?'VALIDATED & APPLIED':'NO HOLD-OUT IMPROVEMENT';
+  const col=summary.accepted?'var(--accent-green)':summary.n<VERIFY_LEARN_MIN_N?'var(--text-muted)':'var(--accent-gold)';
+  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.4</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
+}
+
+// ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
-function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null){
+function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null,verificationCtx=null){
   // hXG/aXG έχουν ήδη βαθμονομηθεί με lp.mult πριν φτάσουν εδώ.
   // Raw Poisson/Dixon-Coles = prior. Adaptive 1X2 = probability calibration layer.
   const hL=clamp(hXG,0.15,4.0),aL=clamp(aXG,0.15,4.0);
   const ppRaw=getPoissonProbabilities(hL,aL);
   const oneXTwo=applyAdaptive1X2(ppRaw,hXG,aXG,hS,aS,leagueId,h2hSummary);
   const pp=oneXTwo.pp;const xgDiff=hXG-aXG;
-  // Full 1/X/2 argmax — το Χ είναι πλέον πραγματικό outcome του calibration και όχι fallback.
-  const outPick=[['1',pp.pHome],['X',pp.pDraw],['2',pp.pAway]].sort((x,y)=>y[1]-x[1])[0][0];
+  // v6.4: argmax = diagnostic leader. Το εμφανιζόμενο 1/X/2 περνά Unified Verification.
+  const verification=compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary,verificationCtx,verificationCtx?.marketNoVig1X2||null);
+  const rawOutPick=verification.leader;
+  const outPick=verification.signal||'-';
   
   // --- ASIAN HANDICAP (-1.5) CALCULATION ---
   let pAH_Home = 0, pAH_Away = 0;
@@ -2292,17 +2619,20 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null){
     omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;
     reason=`Ποντάρισμα: Και οι δύο ομάδες να σκοράρουν. Αμφότερες έχουν επιθετική απειλή (🏠 ${hXG.toFixed(2)} / ✈️ ${aXG.toFixed(2)} xG) — ${pct(pp.pBTTS)} πιθανότητα.`;}
 
-  // 7. STRAIGHT WIN
-  else if(outPick !== 'X' && Math.abs(xgDiff) >= lp.xgDiff){
-    const isHome   = outPick==='1';
-    const outcome  = isHome ? '🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ' : '✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
-    const outProb  = isHome ? pp.pHome : pp.pAway;
-    const formOk   = isHome ? hS.formRating >= 40 : aS.formRating >= 40;
-    if(outProb >= 0.58 && formOk){
-      omegaPick = outProb >= 0.65 ? `⚡ ${outcome}` : outcome;
-      pickScore = outProb*100;
-      reason = `Ποντάρισμα: Νίκη ${isHome?'γηπεδούχων':'φιλοξενούμενων'}. ${confLabel(outProb*100)} — υπεροχή σε xG (${isHome?'+':''}${xgDiff.toFixed(2)}) και φόρμα. Πιθανότητα νίκης: ${pct(outProb)}.`;
+  // 7. UNIFIED 1X2 — ίδιο Verification Layer με Dashboard / RADAR / BEST4 / Audit
+  else if(verification.signal==='1'||verification.signal==='2'){
+    const isHome=verification.signal==='1';
+    const outcome=isHome?'🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ':'✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
+    const outProb=isHome?pp.pHome:pp.pAway;
+    if(verification.score>=VERIFY_1X2.STRONG_SCORE){
+      omegaPick=verification.status==='VERIFIED'?`⚡ ${outcome}`:outcome;
+      pickScore=verification.score;
+      reason=`1X2 ${verification.status}: ${verification.score}/100 · P ${pct(outProb)} · gap ${verification.gapPP.toFixed(1)}pp · xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · consistency ${verification.components.consistency.toFixed(0)}/100.`;
     }
+  }
+  else if(verification.signal==='X'&&verification.score>=75){
+    omegaPick='🤝 ΙΣΟΠΑΛΙΑ (X)';pickScore=verification.score;
+    reason=`1X2 ${verification.status}: ${verification.score}/100 · PX ${pct(pp.pDraw)} · gap ${verification.gapPP.toFixed(1)}pp · |xGΔ| ${Math.abs(xgDiff).toFixed(2)} · consistency ${verification.components.consistency.toFixed(0)}/100.`;
   }
 
   // 8. PROPS
@@ -2325,7 +2655,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null){
   // exactConf: αθροίζει πιθανότητες Top-1 + Top-2 (Dixon-Coles adjusted) — πιο ρεαλιστικό
   const top1P=pp.bestScore.prob, top2P=pp.secondScore.prob;
   const exactConf=Math.round(clamp((top1P+top2P)*100*4.2,0,99));
-  return{omegaPick,reason,pickScore,outPick,
+  return{omegaPick,reason,pickScore,outPick,rawOutPick,verification,
     hG:pp.bestScore.h,aG:pp.bestScore.a,
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
     hExp:hL,aExp:aL,exactConf,xgDiff,pp,ppRaw,oneXTwo,
@@ -2439,7 +2769,7 @@ async function analyzeMatchSafe(m,index,total){
     const aXGfinal = aInjAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
 
-    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,h2hSummary);
+    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,h2hSummary,{lineupData,hInjAdj,aInjAdj});
 
     // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
@@ -2481,7 +2811,7 @@ async function analyzeMatchSafe(m,index,total){
       htAnalysis,
       lineupData,
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
-      omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,ppRaw:result.ppRaw,oneXTwo:result.oneXTwo,
+      omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,ppRaw:result.ppRaw,oneXTwo:result.oneXTwo,verification:result.verification,rawOutPick:result.rawOutPick,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,
       hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,
       hS,aS,h2h:h2hSummary,
@@ -2495,7 +2825,7 @@ async function analyzeMatchSafe(m,index,total){
     return rec;
   }catch(err){
     console.error('[APEX] Analysis failed:', m?.teams?.home?.name, 'vs', m?.teams?.away?.name, err);
-    const rec={m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0};
+    const rec={m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'-',rawOutPick:'X',exact:'0-0',cornerConf:0};
     window.scannedMatchesData.push(rec);
     appendProgressiveMatch(rec,true);
     return rec;
@@ -2772,7 +3102,7 @@ function applySubstitution(d, newLineupData) {
   const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
   const tXGfinal = hXGfinal + aXGfinal;
   const btts = Math.min(hXGfinal, aXGfinal);
-  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null);
+  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null,{lineupData:newLineupData,hInjAdj:newHAdj,aInjAdj:newAAdj,marketNoVig1X2:d.marketNoVig1X2});
   const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
 
   // Παρακολούθηση changed fields (για flash)
@@ -2790,7 +3120,7 @@ function applySubstitution(d, newLineupData) {
     exact: `${result.hG}-${result.aG}`, exact2: `${result.hG2}-${result.aG2}`,
     exactConf: result.exactConf, omegaPick: result.omegaPick,
     strength: result.pickScore, reason: result.reason,
-    hExp: result.hExp, aExp: result.aExp, pp: result.pp, ppRaw:result.ppRaw, oneXTwo:result.oneXTwo, offside: result.offside,
+    hExp: result.hExp, aExp: result.aExp, pp: result.pp, ppRaw:result.ppRaw, oneXTwo:result.oneXTwo, verification:result.verification,rawOutPick:result.rawOutPick, offside: result.offside,
     lambdaTotal: result.lambdaTotal, cornerConf: result.cornerConf, expCor: result.expCor,
     lastSubEvents: subEvents,   // για accordion display
     subChanged: changed,        // για flash animation
@@ -3255,7 +3585,7 @@ async function _liveTrackerTick(){
           baseRec={
             fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,
             hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS,
-            pp:res2.pp,ppRaw:res2.ppRaw,oneXTwo:res2.oneXTwo,m:{fixture:{status:{short:lf.fixture.status.short}}}
+            pp:res2.pp,ppRaw:res2.ppRaw,oneXTwo:res2.oneXTwo,verification:res2.verification,rawOutPick:res2.rawOutPick,m:{fixture:{status:{short:lf.fixture.status.short}}}
           };
           baselineSource='LIVE-START SYNTHETIC';
         }catch{return null;}
@@ -3577,11 +3907,11 @@ window.fetchAllLineups = async function() {
         const lp = getLeagueParams(d.leagueId);
         const hA = applyLineupAdjustment(d.hXGbase||d.hXGfinal, d.hPlayers, nl.home, []);
         const aA = applyLineupAdjustment(d.aXGbase||d.aXGfinal, d.aPlayers, nl.away, []);
-        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId, d.h2h||null);
+        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId, d.h2h||null,{lineupData:nl,hInjAdj:hA,aInjAdj:aA,marketNoVig1X2:d.marketNoVig1X2});
         Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
           outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
           exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
-          hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,offside:res.offside});
+          hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,verification:res.verification,rawOutPick:res.rawOutPick,offside:res.offside});
         confirmed++;
       } else { unavailable++; }
     }catch(_){ unavailable++; }
@@ -3610,7 +3940,7 @@ window.fetchLineupForMatch = async function(fixId) {
     const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
     const btts = Math.min(hXGfinal, aXGfinal);
-    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null);
+    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null,{lineupData:newLineup,hInjAdj:newHAdj,aInjAdj:newAAdj,marketNoVig1X2:d.marketNoVig1X2});
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
     const cardCtx = {xgDiff: result.xgDiff, leagueId: d.leagueId};
     adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
@@ -3622,7 +3952,7 @@ window.fetchLineupForMatch = async function(fixId) {
       exact:`${result.hG}-${result.aG}`, exact2:`${result.hG2}-${result.aG2}`,
       exactConf:result.exactConf, omegaPick:result.omegaPick,
       strength:result.pickScore, reason:result.reason,
-      hExp:result.hExp, aExp:result.aExp, pp:result.pp, offside:result.offside,
+      hExp:result.hExp, aExp:result.aExp, pp:result.pp, ppRaw:result.ppRaw, oneXTwo:result.oneXTwo, verification:result.verification,rawOutPick:result.rawOutPick, offside:result.offside,
       lambdaTotal:result.lambdaTotal, cornerConf:result.cornerConf, expCor:result.expCor,
     });
     // Refresh the open accordion row
@@ -3935,42 +4265,19 @@ function buildRadarList() {
     const xgDiff = Number(rec.xgDiff || ((rec.hXGfinal||0) - (rec.aXGfinal||0)) || 0);
     const tXG = Number(rec.tXG || ((rec.hXGfinal||0) + (rec.aXGfinal||0)) || 0);
 
-    // ── 1 / X / 2: μόνο ο πρώτος outcome και μόνο με gap από τον δεύτερο ──
-    const outcomes = [
-      { key:'1', prob:Number(pp.pHome||0), label:'1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ', icon:'🏠' },
-      { key:'X', prob:Number(pp.pDraw||0), label:'X — ΙΣΟΠΑΛΙΑ', icon:'🤝' },
-      { key:'2', prob:Number(pp.pAway||0), label:'2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ', icon:'✈️' },
-    ].sort((a,b)=>b.prob-a.prob);
-    const lead = outcomes[0], second = outcomes[1];
-    const gap = Math.max(0, lead.prob - second.prob);
-
-    if(lead.key === '1' && lead.prob >= 0.50 && gap >= 0.10 && xgDiff >= 0.50) {
-      const score = lead.prob*100 + gap*65 + Math.min(xgDiff,1.5)*7;
-      add(rec, {
-        category:'1X2', market:'1', label:lead.label, icon:lead.icon,
-        probability:lead.prob*100, dominanceGap:gap*100,
-        radarScore:score,
-        reason:`Πρώτη πιθανότητα ${pct(lead.prob)} · υπεροχή από 2ο outcome +${(gap*100).toFixed(1)} π.μ. · xG Diff +${xgDiff.toFixed(2)}`,
-        metric:`P1 ${(lead.prob*100).toFixed(1)}% · Δ2ου +${(gap*100).toFixed(1)}pp · xG +${xgDiff.toFixed(2)}`
-      });
-    } else if(lead.key === '2' && lead.prob >= 0.50 && gap >= 0.10 && xgDiff <= -0.50) {
-      const score = lead.prob*100 + gap*65 + Math.min(Math.abs(xgDiff),1.5)*7;
-      add(rec, {
-        category:'1X2', market:'2', label:lead.label, icon:lead.icon,
-        probability:lead.prob*100, dominanceGap:gap*100,
-        radarScore:score,
-        reason:`Πρώτη πιθανότητα ${pct(lead.prob)} · υπεροχή από 2ο outcome +${(gap*100).toFixed(1)} π.μ. · xG Diff ${xgDiff.toFixed(2)}`,
-        metric:`P2 ${(lead.prob*100).toFixed(1)}% · Δ2ου +${(gap*100).toFixed(1)}pp · xG ${xgDiff.toFixed(2)}`
-      });
-    } else if(lead.key === 'X' && lead.prob >= 0.34 && gap >= 0.04 && Math.abs(xgDiff) <= 0.30) {
-      // Η ισοπαλία έχει χαμηλότερο φυσιολογικό base-rate, άρα βαθμολογείται σε draw-specific scale.
-      const score = 66 + (lead.prob-0.34)*160 + (gap-0.04)*180 + Math.max(0,0.30-Math.abs(xgDiff))*20;
-      add(rec, {
-        category:'1X2', market:'X', label:lead.label, icon:lead.icon,
-        probability:lead.prob*100, dominanceGap:gap*100,
-        radarScore:score,
-        reason:`Η ισοπαλία είναι το #1 outcome · +${(gap*100).toFixed(1)} π.μ. από το 2ο · ισορροπία xG (${xgDiff>=0?'+':''}${xgDiff.toFixed(2)})`,
-        metric:`PX ${(lead.prob*100).toFixed(1)}% · Δ2ου +${(gap*100).toFixed(1)}pp · |xGΔ| ${Math.abs(xgDiff).toFixed(2)}`
+    // ── 1 / X / 2: v6.4 ΕΝΙΑΙΟ Verification Layer ──
+    const v=_ensure1X2Verification(rec);
+    if(v?.signal && v.score>=VERIFY_1X2.STRONG_SCORE && v.status!=='CONFLICT'){
+      const key=v.signal;
+      const prob=key==='1'?Number(pp.pHome||0):key==='X'?Number(pp.pDraw||0):Number(pp.pAway||0);
+      const label=key==='1'?'1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ':key==='2'?'2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ':'X — ΙΣΟΠΑΛΙΑ';
+      const icon=key==='1'?'🏠':key==='2'?'✈️':'🤝';
+      add(rec,{
+        category:'1X2',market:key,label,icon,
+        probability:prob*100,dominanceGap:v.gapPP,
+        radarScore:v.score,verificationScore:v.score,verificationStatus:v.status,
+        reason:`${v.status} ${v.score}/100 · P${key} ${(prob*100).toFixed(1)}% · gap ${v.gapPP.toFixed(1)}pp · xGΔ ${v.xgDiff>=0?'+':''}${v.xgDiff.toFixed(2)} · Cons ${v.components.consistency.toFixed(0)} · DQ ${v.components.dataQuality}`,
+        metric:`V ${v.score}/100 · P ${(prob*100).toFixed(1)}% · Δ ${v.gapPP.toFixed(1)}pp`
       });
     }
 
@@ -4279,9 +4586,7 @@ function _best4EligibleSignal(s){
   const p=Number(s?.probability||0), r=Number(s?.radarScore||0);
   if(r<80) return false;
   if(s.category==='1X2'){
-    if(s.market==='1'||s.market==='2') return p>=62 && Number(s.dominanceGap||0)>=10;
-    if(s.market==='X') return p>=38 && Number(s.dominanceGap||0)>=4;
-    return false;
+    return Number(s.verificationScore||0)>=VERIFY_1X2.VERIFIED_SCORE && String(s.verificationStatus||'')==='VERIFIED';
   }
   if(s.category==='GOALS' && s.market==='O2.5') return p>=68;
   if(s.category==='GOALS' && s.market==='O3.5') return p>=58;
@@ -4359,7 +4664,7 @@ function renderBest4Tab(items){
 
 window.refreshBest4 = async function(opts={}){
   if(best4Loading) return latestTopLists.best4||[];
-  const radar=(latestTopLists.radar||[]).filter(_best4EligibleSignal);
+  let radar=(latestTopLists.radar||[]).filter(_best4EligibleSignal);
   if(!radar.length){ latestTopLists.best4=[]; renderTopSections(); return []; }
   best4Loading=true;
   latestTopLists.best4=[];
@@ -4377,6 +4682,10 @@ window.refreshBest4 = async function(opts={}){
     }
 
     const recMap=new Map((window.scannedMatchesData||[]).map(r=>[r.fixId,r]));
+    // v6.4: no-vig market sanity becomes the final verification gate when prices exist.
+    fixtureIds.forEach(id=>{const rec=recMap.get(id);if(rec)_updateRec1X2VerificationFromMarket(rec,priceMap.get(id)||{});});
+    buildRadarList();_refreshVerifiedOutcomeTopList();
+    radar=(latestTopLists.radar||[]).filter(_best4EligibleSignal);
     const priced=[];
     radar.forEach(s=>{
       const key=_best4MarketKey(s); if(!key) return;
@@ -4556,9 +4865,13 @@ function _bombCandidates(rec){
     if(!Number.isFinite(fair)||fair<1.02||fair>BOMB_MAX_MARKET_ODDS) return;
     out.push({marketKey,label,icon,category,modelProb:p,modelFairOdds:fair});
   };
-  push('1','1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ','🏠',pp.pHome,'1X2');
-  push('X','X — ΙΣΟΠΑΛΙΑ','🤝',pp.pDraw,'1X2');
-  push('2','2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ','✈️',pp.pAway,'1X2');
+  const v=_ensure1X2Verification(rec);
+  const vKey=v?.signal || (v?.status==='CONFLICT'?v?.leader:null);
+  if(vKey && (v?.score>=VERIFY_1X2.STRONG_SCORE || v?.status==='CONFLICT')){
+    if(vKey==='1')push('1','1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ','🏠',pp.pHome,'1X2');
+    if(vKey==='X')push('X','X — ΙΣΟΠΑΛΙΑ','🤝',pp.pDraw,'1X2');
+    if(vKey==='2')push('2','2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ','✈️',pp.pAway,'1X2');
+  }
   push('O2.5','OVER 2.5 ΓΚΟΛ','🔥',pp.pO25,'GOALS');
   push('O3.5','OVER 3.5 ΓΚΟΛ','🚀',pp.pO35,'GOALS');
   if(Number(rec.cornerConf||0)>0) push('COR O8.5','OVER 8.5 ΚΟΡΝΕΡ','🚩',Number(rec.cornerConf)/100,'CORNERS');
@@ -4727,7 +5040,9 @@ window.refreshBombs=async function(opts={}){
 
     const diagnostics=[];
     ids.forEach(id=>{
-      const rec=byId.get(id),markets=priceMap.get(id)||{};let bestForMatch=null;
+      const rec=byId.get(id),markets=priceMap.get(id)||{};
+      _updateRec1X2VerificationFromMarket(rec,markets);
+      let bestForMatch=null;
       _bombCandidates(rec).forEach(c=>{
         const d=_evaluateBombCandidate(rec,c,markets[c.marketKey]);
         if(!d)return;
@@ -4743,6 +5058,7 @@ window.refreshBombs=async function(opts={}){
       const pa={CONFLICT:2,HIGH_DIVERGENCE:1}[a.status]||0,pb={CONFLICT:2,HIGH_DIVERGENCE:1}[b.status]||0;
       return pb-pa||b.probabilityGapPP-a.probabilityGapPP;
     }).slice(0,8);
+    buildRadarList();_refreshVerifiedOutcomeTopList();
     latestTopLists.bombs=verified;
     latestTopLists.bombDiagnostics=warnings;
     _persistBombSignals(verified,warnings);
@@ -4825,6 +5141,10 @@ async function settleBombSignal(bombSignal,fix){
   return null;
 }
 
+function _refreshVerifiedOutcomeTopList(){
+  latestTopLists.outcomes=(window.scannedMatchesData||[]).filter(x=>!isFinished(x.m?.fixture?.status?.short)&&_ensure1X2Verification(x)?.signal&&safeNum(x.verification?.score,0)>=VERIFY_1X2.STRONG_SCORE).sort((a,b)=>safeNum(b.verification?.score,0)-safeNum(a.verification?.score,0)).slice(0,6);
+}
+
 function rebuildTopLists(){
   // New scan/re-simulation invalidates the previous BEST 4 until odds are repriced.
   latestTopLists.best4 = [];
@@ -4835,7 +5155,7 @@ function rebuildTopLists(){
     (x.strength||0) >= MIN_CONF
   );
   latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
-  latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΝΙΚΗ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
+  _refreshVerifiedOutcomeTopList();
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
   latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('ΠΑΝΩ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
@@ -4892,7 +5212,7 @@ function renderTopSections(){
     {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
-    {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
+    {id:'outcomes', lbl:'🛡️ 1X2 Verified',                                  d:latestTopLists.outcomes,   sk:null,         sl:null, special:'outcomes'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
     {id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'},
     {id:'offsides', lbl:'🚫 Οφσάιντ',                                      d:latestTopLists.offsides||[], sk:null,         sl:null, special:'offsides'},
@@ -4933,6 +5253,8 @@ function renderTopSections(){
       html += renderBombsTab(tab.d);
     } else if(tab.id==='offsides'){
       html += renderOffsidesTab(tab.d);
+    } else if(tab.id==='outcomes'){
+      html += renderVerifiedOutcomesTab(tab.d);
     } else if(!tab.d.length){
       html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
     } else {
@@ -4966,6 +5288,11 @@ function renderTopSections(){
     html+=`</div>`;
   });
   html+=`</div>`;t.innerHTML=html;
+}
+
+function renderVerifiedOutcomesTab(matches){
+  if(!matches?.length)return `<div style="text-align:center;color:var(--text-muted);padding:30px;font-weight:700;">Δεν υπάρχουν STRONG / VERIFIED 1X2 σημεία.</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:9px;">${matches.map((x,i)=>{const v=_ensure1X2Verification(x);if(!v)return '';const col=v.status==='VERIFIED'?'var(--accent-green)':'var(--accent-blue)';const p=v.signal==='1'?safeNum(x.pp?.pHome,0):v.signal==='X'?safeNum(x.pp?.pDraw,0):safeNum(x.pp?.pAway,0);return `<div onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px 14px;background:var(--bg-base);border:1px solid var(--border-light);border-left:4px solid ${col};border-radius:8px;cursor:pointer;"><div style="font-family:var(--font-mono);font-weight:900;color:var(--text-dim);">#${i+1}</div><div><div style="font-weight:800;">${esc(x.ht)} <span style="color:var(--text-muted);font-weight:500;">vs</span> ${esc(x.at)}</div><div style="font-size:.68rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg||'')} · ${esc(kickoffGroupLabel(x))}</div><div style="font-size:.76rem;color:${col};font-weight:900;margin-top:4px;">${v.signal==='1'?'🏠':v.signal==='2'?'✈️':'🤝'} ${v.signal} · ${v.status}</div><div style="font-size:.66rem;color:var(--text-muted);margin-top:3px;">P ${(p*100).toFixed(1)}% · gap ${v.gapPP.toFixed(1)}pp · xGΔ ${v.xgDiff>=0?'+':''}${v.xgDiff.toFixed(2)} · Cons ${v.components.consistency.toFixed(0)}/100</div></div><div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${col};">${v.score}</div><div style="font-size:.54rem;color:var(--text-dim);font-weight:800;">V-SCORE</div></div></div>`;}).join('')}</div>`;
 }
 
 function renderOffsidesTab(matches) {
@@ -5486,6 +5813,25 @@ function buildAccordionHTML(x) {
     </div>
   `;
 
+  // v6.4 — Unified 1X2 Verification panel
+  const verificationHTML = (()=>{
+    const v=_ensure1X2Verification(x);if(!v)return '';
+    const col=v.status==='VERIFIED'?'var(--accent-green)':v.status==='STRONG'?'var(--accent-blue)':v.status==='LEAN'?'var(--accent-gold)':v.status==='CONFLICT'?'var(--accent-red)':'var(--text-muted)';
+    const comp=v.components||{};
+    const box=(lbl,val)=>`<div style="background:var(--bg-surface);padding:7px 8px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);text-transform:uppercase;">${lbl}</div><b style="font-family:var(--font-mono);font-size:.78rem;">${Number(val||0).toFixed(0)}</b></div>`;
+    return `<div class="accordion-card" style="margin:0 0 14px;border-color:${col}55;background:${col}08;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><h4 style="color:${col};margin:0;">🛡️ Unified 1X2 Verification</h4><div style="font-family:var(--font-mono);font-size:1.1rem;font-weight:900;color:${col};">${v.signal||'—'} · ${v.score}/100 · ${v.status}</div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">
+        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;text-align:center;"><div style="font-size:.54rem;color:var(--text-dim);">P1</div><b>${(safeNum(x.pp?.pHome,0)*100).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;text-align:center;"><div style="font-size:.54rem;color:var(--text-dim);">PX</div><b>${(safeNum(x.pp?.pDraw,0)*100).toFixed(1)}%</b></div>
+        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;text-align:center;"><div style="font-size:.54rem;color:var(--text-dim);">P2</div><b>${(safeNum(x.pp?.pAway,0)*100).toFixed(1)}%</b></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(6,minmax(70px,1fr));gap:5px;margin-top:7px;">${box('Probability',comp.probability)}${box('Gap',comp.gap)}${box('xG confirm',comp.xg)}${box('Consistency',comp.consistency)}${box('Data Quality',comp.dataQuality)}${box('League',comp.leagueReliability)}</div>
+      <div style="font-size:.68rem;color:var(--text-muted);margin-top:8px;line-height:1.5;">Leader ${v.leader} · gap ${v.gapPP.toFixed(1)}pp · xGΔ ${v.xgDiff>=0?'+':''}${v.xgDiff.toFixed(2)} · volatility penalty −${Number(comp.volatilityPenalty||0).toFixed(0)}${v.learning?.active&&Number.isFinite(Number(v.learning.prob))?` · learned reliability ${(Number(v.learning.prob)*100).toFixed(1)}% (n=${v.learning.n})`:''}${Number.isFinite(Number(v.marketGapPP))?` · market Δ ${Number(v.marketGapPP)>=0?'+':''}${Number(v.marketGapPP).toFixed(1)}pp`:''}</div>
+      ${v.conflictReason?`<div style="margin-top:7px;padding:7px 9px;border-radius:6px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);font-size:.68rem;color:var(--accent-red);">🚨 ${esc(v.conflictReason)}</div>`:''}
+    </div>`;
+  })();
+
   // 2. Game Projections (Συμμετρικό με το Breakdown)
   const gameProjHTML = `
     <div class="accordion-card" style="margin:0; height:100%;">
@@ -5656,6 +6002,8 @@ function buildAccordionHTML(x) {
 
       <!-- LIVE QUALITY INDEX — εμφανίζεται μόνο σε live αγώνες -->
       ${liveQualityPanel}
+
+      ${verificationHTML}
 
       <!-- ΓΡΑΜΜΗ 1: Breakdown & Projections Δίπλα-δίπλα -->
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px; ${liveQualityPanel ? 'margin-top:14px;' : ''}">
@@ -6107,7 +6455,7 @@ function renderSummaryTable() {
             })()}
           </td>
           <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
-          <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
+          <td class="col-1x2 data-num" style="font-size:1.1rem;">${(()=>{const v=_ensure1X2Verification(x);if(!v)return '—';const col=v.status==='VERIFIED'?'var(--accent-green)':v.status==='STRONG'?'var(--accent-blue)':v.status==='LEAN'?'var(--accent-gold)':v.status==='CONFLICT'?'var(--accent-red)':'var(--text-dim)';return `<div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:${col};">${v.signal||'—'}</div><div style="font-size:.52rem;color:${col};font-weight:800;white-space:nowrap;">V ${v.score} · ${v.status}</div>`;})()}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
           <td class="col-btts data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
@@ -6340,7 +6688,7 @@ window.runCustomAudit = async function(autoMode = false) {
     }
 
     // ── Φέρνουμε αποτελέσματα για κάθε fixture ────────────────
-    const stats = { games:0, outHit:0, validOut:0, o25T:0, o25H:0, o35T:0, o35H:0, u25T:0, u25H:0, bttsT:0, bttsH:0, exHit:0, corT:0, corH:0, bombT:0, bombH:0, bombProfit:0 };
+    const stats = { games:0, outHit:0, validOut:0, verT:0,verH:0,verVerifiedT:0,verVerifiedH:0,verStrongT:0,verStrongH:0,verLeanT:0,verLeanH:0, o25T:0, o25H:0, o35T:0, o35H:0, u25T:0, u25H:0, bttsT:0, bttsH:0, exHit:0, corT:0, corH:0, bombT:0, bombH:0, bombProfit:0 };
     const rows = [], curveData = [], calibRecs = [];
     let settled = 0;
 
@@ -6360,6 +6708,14 @@ window.runCustomAudit = async function(autoMode = false) {
       const ah = safeNum(fix.goals.home), aa = safeNum(fix.goals.away);
       const aTot = ah + aa, aExact = `${ah}-${aa}`, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
       stats.games++;
+
+      // v6.4 Unified 1X2 Verification Audit — frozen pre-match verification snapshot
+      const vSig=p.verificationSignal||p.verification?.signal||null;
+      const vStatus=p.verificationStatus||p.verification?.status||'NO_SIGNAL';
+      const vScore=safeNum(p.verificationScore??p.verification?.score,0);
+      const vEvaluable=['1','X','2'].includes(vSig)&&vScore>=VERIFY_1X2.MIN_SIGNAL_SCORE;
+      const vHit=vEvaluable&&vSig===aOut;
+      if(vEvaluable){stats.verT++;if(vHit)stats.verH++;if(vStatus==='VERIFIED'){stats.verVerifiedT++;if(vHit)stats.verVerifiedH++;}else if(vStatus==='STRONG'){stats.verStrongT++;if(vHit)stats.verStrongH++;}else if(vStatus==='LEAN'){stats.verLeanT++;if(vHit)stats.verLeanH++;}}
 
       // Stats μόνο για records με πραγματικό pick (hasPick)
       const hadPick = p.hasPick || (!!(p.omegaPick && !p.omegaPick.includes('ΧΩΡΙΣ') && (p.strength||0) >= 70));
@@ -6419,6 +6775,10 @@ window.runCustomAudit = async function(autoMode = false) {
         // v6.2 Adaptive 1X2 learns from the RAW prior, never from already-calibrated probabilities.
         rawPP:      p.rawPP || null,
         features:   p.oneXTwoFeatures || null,
+        verification: p.verification || null,
+        verificationLeader: p.verificationLeader || p.verification?.leader || null,
+        verificationSignal: p.verificationSignal || p.verification?.signal || null,
+        verificationScore: safeNum(p.verificationScore ?? p.verification?.score,0),
         isBomb:     !!(p.isBomb),
         correct,
       });
@@ -6436,7 +6796,11 @@ window.runCustomAudit = async function(autoMode = false) {
     const col = v => v >= 75 ? 'var(--accent-green)' : v >= 55 ? 'var(--accent-gold)' : 'var(--accent-red)';
 
     const statsCards = [
-      { lbl:'1X2/ΑΧ',      h:stats.outHit,  t:stats.validOut, target:75 },
+      { lbl:'🛡️ 1X2 Verified Layer', h:stats.verH, t:stats.verT, target:65 },
+      { lbl:'✅ VERIFIED ≥80', h:stats.verVerifiedH, t:stats.verVerifiedT, target:70 },
+      { lbl:'🟢 STRONG 70–79', h:stats.verStrongH, t:stats.verStrongT, target:62 },
+      { lbl:'🟡 LEAN 60–69', h:stats.verLeanH, t:stats.verLeanT, target:55 },
+      { lbl:'1X2/ΑΧ legacy',      h:stats.outHit,  t:stats.validOut, target:75 },
       { lbl:'Πάνω 2.5',    h:stats.o25H,    t:stats.o25T,     target:75 },
       { lbl:'Πάνω 3.5',    h:stats.o35H,    t:stats.o35T,     target:75 },
       { lbl:'Κάτω 2.5',    h:stats.u25H,    t:stats.u25T,     target:65 },
@@ -6483,7 +6847,7 @@ window.runCustomAudit = async function(autoMode = false) {
           <div style="font-size:0.72rem;color:var(--accent-blue);margin-top:2px;">${esc(p.omegaPick||'')}</div>
         </td>
         <td class="data-num" style="font-size:1.1rem;font-weight:900;">${ah}-${aa}</td>
-        <td>${p.outPick&&p.outPick!=='-'?`<span style="color:${isHit1X2?'var(--accent-green)':'var(--accent-red)'};">${isHit1X2?'✅':'❌'}</span>`:'—'}</td>
+        <td>${(()=>{const vs=p.verificationSignal||p.verification?.signal;const sc=safeNum(p.verificationScore??p.verification?.score,0);if(!vs||sc<VERIFY_1X2.MIN_SIGNAL_SCORE)return '—';const hit=vs===aOut;return `<span title="V ${sc} · ${esc(p.verificationStatus||p.verification?.status||'')}" style="color:${hit?'var(--accent-green)':'var(--accent-red)'};font-weight:900;">${hit?'✅':'❌'} ${esc(vs)} <small>V${sc}</small></span>`;})()}</td>
         <td>${cell(p.predOver25, aTot>2.5)}</td>
         <td>${cell(p.predOver35, aTot>3.5)}</td>
         <td>${cell(p.predUnder25, aTot<2.5)}</td>
@@ -6580,6 +6944,11 @@ function saveToVault(data){
         oneXTwoFeatures: d.oneXTwo?.features ? {...d.oneXTwo.features} : null,
         calibratedPP: d.pp ? {pHome:safeNum(d.pp.pHome,0),pDraw:safeNum(d.pp.pDraw,0),pAway:safeNum(d.pp.pAway,0)} : null,
         oneXTwoSource: d.oneXTwo?.source || null,
+        verificationSignal: d.verification?.signal || null,
+        verificationLeader: d.verification?.leader || d.rawOutPick || null,
+        verificationScore:  safeNum(d.verification?.score,0),
+        verificationStatus: d.verification?.status || 'NO_SIGNAL',
+        verification: d.verification ? {signal:d.verification.signal||null,leader:d.verification.leader||null,score:safeNum(d.verification.score,0),status:d.verification.status||'NO_SIGNAL',gapPP:safeNum(d.verification.gapPP,0),xgDiff:safeNum(d.verification.xgDiff,0),components:d.verification.components||null,marketGapPP:Number.isFinite(Number(d.verification.marketGapPP))?Number(d.verification.marketGapPP):null} : null,
         strength:     d.strength || 0,
         isBomb:       !!(d.isBomb),
         hasPick:      !!(d.omegaPick && !d.omegaPick.includes('ΧΩΡΙΣ') && d.strength >= 70),
@@ -6589,7 +6958,7 @@ function saveToVault(data){
     try{_seedLiveBaselinesFromScan(data);}catch{}
   }catch(e){}
 }
-window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);localStorage.removeItem(LS_ADAPTIVE_1X2);_adaptive1X2State=null;showOk("Vault & Adaptive 1X2 calibration purged.");updateAuditLeagueFilter();}};
+window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);localStorage.removeItem(LS_ADAPTIVE_1X2);localStorage.removeItem(LS_VERIFY_1X2_LEARNING);_adaptive1X2State=null;_verifyLearningState=null;showOk("Vault, Adaptive 1X2 & Verification Learning purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter() {
   const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
   const sel = document.getElementById('auditLeague');
@@ -7790,9 +8159,11 @@ window.runAutoCalibration = function(auditRecords) {
   // v6.2: full probabilistic 1/X/2 calibration (Brier + Log Loss + hold-out validation).
   const adaptive1X2Summary = runAdaptive1X2Calibration(auditRecords);
   const adaptive1X2Html = renderAdaptive1X2Calibration(adaptive1X2Summary);
-  // Αν το probabilistic 1X2 βελτιώθηκε, εφαρμόζεται αμέσως στο τρέχον scan χωρίς νέο API call.
-  if(adaptive1X2Summary?.applied>0 && window.scannedMatchesData?.length){
-    try{ window.resimulateMatches(); saveToVault(window.scannedMatchesData); }catch(e){ console.warn('[APEX] Adaptive 1X2 re-simulate',e); }
+  const verificationLearningSummary = runVerificationLearning(auditRecords);
+  const verificationLearningHtml = renderVerificationLearning(verificationLearningSummary);
+  // Probabilistic calibration ή verification reliability εφαρμόζονται μόνο μετά από hold-out βελτίωση.
+  if((adaptive1X2Summary?.applied>0 || verificationLearningSummary?.accepted) && window.scannedMatchesData?.length){
+    try{ window.resimulateMatches(); saveToVault(window.scannedMatchesData); }catch(e){ console.warn('[APEX] 1X2 calibrated re-simulate',e); }
   }
 
   // Group by league
@@ -7877,9 +8248,10 @@ window.runAutoCalibration = function(auditRecords) {
 
   el.innerHTML = `
     ${adaptive1X2Html}
+    ${verificationLearningHtml}
     ${headerHtml}
     ${rows}
-    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Adaptive 1X2: min global ${ADAPTIVE_1X2_MIN_GLOBAL} / league ${ADAPTIVE_1X2_MIN_LEAGUE} · Legacy grid: ${CALIB_GRID_N} τιμές/παράμετρο για totals/BTTS/corners · Pure backtest χωρίς API calls</div>`;
+    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Adaptive 1X2: min global ${ADAPTIVE_1X2_MIN_GLOBAL} / league ${ADAPTIVE_1X2_MIN_LEAGUE} · Verification learning min ${VERIFY_LEARN_MIN_N} · Legacy grid: ${CALIB_GRID_N} τιμές/παράμετρο για totals/BTTS/corners · Pure backtest χωρίς API calls</div>`;
 };
 
 function renderCalibLog() {
@@ -7930,7 +8302,7 @@ window.resimulateMatches=function(){
     const hXGfinal=hXG*hFactor, aXGfinal=aXG*aFactor;
     const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
     const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
-    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId,d.h2h||null);
+    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId,d.h2h||null,{lineupData:d.lineupData,hInjAdj:d.hInjAdj,aInjAdj:d.aInjAdj,marketNoVig1X2:d.marketNoVig1X2});
     const htAnalysis=computeHTAnalysis(res.hExp,res.aExp,lp);
     Object.assign(d,{
       tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
@@ -7940,7 +8312,7 @@ window.resimulateMatches=function(){
       outPick:res.outPick,xgDiff:res.xgDiff,
       exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
       omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
-      hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,offside:res.offside,
+      hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,verification:res.verification,rawOutPick:res.rawOutPick,offside:res.offside,
       lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor
     });
     // Re-adjust card probabilities με νέο xgDiff
