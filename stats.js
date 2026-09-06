@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.4.1 — MASTER ENGINE · UNIFIED 1X2 VERIFICATION + 60s LIFECYCLE REFRESH + AUTO-CLEAR + CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
+// APEX OMEGA v6.5.1 — MASTER ENGINE · PROGRAM MAP · FAST CORE SCAN + PERSISTENT TEAM INTEL + UNIFIED 1X2 VERIFICATION + 60s LIFECYCLE REFRESH + AUTO-CLEAR + CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -143,12 +143,20 @@ let teamStatsCache = new BoundedCache(180, CACHE_TTL.TEAM_STATS),
     assistsCache   = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
     cardsCache     = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
     injuryCache    = new BoundedCache(240, CACHE_TTL.INJURIES),
+    fixtureInjuryCache = new BoundedCache(320, CACHE_TTL.INJURIES),
     liveStatsCache = new BoundedCache(80,  CACHE_TTL.LIVE_STATS),
     lineupsCache   = new BoundedCache(140, CACHE_TTL.LINEUPS);  // starting XI per fixture
-const _standInflight   = new Map();
-const _scorersInflight = new Map();
-const _assistsInflight = new Map();
-const _cardsInflight   = new Map();
+const _standInflight     = new Map();
+const _scorersInflight   = new Map();
+const _assistsInflight   = new Map();
+const _cardsInflight     = new Map();
+// v6.5 FAST CORE: dedup expensive team-level calls too. Multi-day scans can
+// otherwise request the same team/league payload concurrently more than once.
+const _teamStatsInflight = new Map();
+const _lastFixInflight   = new Map();
+const _h2hInflight       = new Map();
+const _injuryInflight    = new Map();
+const _fixtureInjuryInflight = new Map();
 let isRunning = false, currentCredits = null;
 let latestTopLists = { best4:[], radar:[], exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
@@ -280,6 +288,13 @@ function createPersistentTTLCache(lsKey,{maxEntries=300,ttlMs=30*24*60*60*1000}=
 
 const persistentFTCache = createPersistentTTLCache('omega_ft_results_v6.3',{maxEntries:1200,ttlMs:365*24*60*60*1000});
 const persistentFixStatsCache = createPersistentTTLCache('omega_fixstats_v6.3',{maxEntries:260,ttlMs:120*24*60*60*1000});
+// v6.5: compact computed team intelligence survives page reloads / JSON imports.
+// It is deliberately short-lived: form is stable intraday, but we never keep a
+// stale pre-match team profile for hours after the underlying context can move.
+const persistentTeamIntelCache = createPersistentTTLCache('omega_team_intel_v6.5',{maxEntries:320,ttlMs:30*60*1000});
+const persistentStandCache = createPersistentTTLCache('omega_standings_v6.5',{maxEntries:100,ttlMs:30*60*1000});
+const persistentH2HCache = createPersistentTTLCache('omega_h2h_v6.5',{maxEntries:650,ttlMs:30*24*60*60*1000});
+const persistentFixtureInjuryCache = createPersistentTTLCache('omega_fixture_inj_v6.5',{maxEntries:700,ttlMs:4*60*60*1000});
 const AUDIT_FETCH_WORKERS = 8;
 
 function compactFinishedFixture(f){
@@ -417,9 +432,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.4.1';
+const APP_VERSION   = 'v6.5.1';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'UNIFIED 1X2 VERIFICATION';
+const BUILD_TIME    = 'PROGRAM MAP + FAST CORE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1174,38 +1189,56 @@ window.initCredits=async function(){
 async function getTStats(t,lg,s){
   const k=`${t}_${lg}_${s}`;
   if(teamStatsCache.has(k))return teamStatsCache.get(k);
-  const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);
-  const res=d?.response||{};
-  teamStatsCache.set(k,res);
-  return res;
+  if(_teamStatsInflight.has(k))return _teamStatsInflight.get(k);
+  const p=apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`,{priority:'high',cacheMs:CACHE_TTL.TEAM_STATS}).then(d=>{
+    const res=d?.response||{}; teamStatsCache.set(k,res); return res;
+  }).finally(()=>_teamStatsInflight.delete(k));
+  _teamStatsInflight.set(k,p); return p;
 }
 
 async function getLFix(t,lg,s){
   const k=`${t}_${lg}_${s}`;
   if(lastFixCache.has(k))return lastFixCache.get(k);
+  if(_lastFixInflight.has(k))return _lastFixInflight.get(k);
 
   // SMART SCAN TURBO: ένα cross-season request αντί για current-season + fallback.
-  // Κρατάμε κατά προτεραιότητα τα fixtures του ίδιου league. Αν είναι <6
-  // (π.χ. πολύ νωρίς στη σεζόν), χρησιμοποιούμε το cross-competition history,
-  // όπως έκανε ήδη το προηγούμενο fallback — αλλά χωρίς δεύτερο API round-trip.
-  const d=await apiReq(`fixtures?team=${t}&last=20&status=FT`,{priority:'high',cacheMs:CACHE_TTL.LAST_FIXTURES});
-  const all=d?.response||[];
-  const sameLeague=all.filter(f=>String(f?.league?.id)===String(lg));
-  const res=sameLeague.length>=6?sameLeague:all;
-  lastFixCache.set(k,res);
-  return res;
+  const p=apiReq(`fixtures?team=${t}&last=20&status=FT`,{priority:'high',cacheMs:CACHE_TTL.LAST_FIXTURES}).then(d=>{
+    const all=d?.response||[];
+    const sameLeague=all.filter(f=>String(f?.league?.id)===String(lg));
+    const res=sameLeague.length>=6?sameLeague:all;
+    lastFixCache.set(k,res); return res;
+  }).finally(()=>_lastFixInflight.delete(k));
+  _lastFixInflight.set(k,p); return p;
+}
+function slimStandings(rows){
+  return (rows||[]).map(x=>({team:{id:x?.team?.id||0,name:x?.team?.name||''},rank:x?.rank??99,points:x?.points??0,goalsDiff:x?.goalsDiff??0,all:{win:x?.all?.win??0,played:x?.all?.played??0}}));
+}
+function slimH2HFixtures(rows){
+  return (rows||[]).slice(0,8).map(f=>({fixture:{id:f?.fixture?.id||0,date:f?.fixture?.date||''},teams:{home:{id:f?.teams?.home?.id||0},away:{id:f?.teams?.away?.id||0}},goals:{home:safeNum(f?.goals?.home,0),away:safeNum(f?.goals?.away,0)}}));
 }
 async function getStand(lg,s){
   const k=`${lg}_${s}`;
   if(standCache.has(k))return standCache.get(k);
+  const persisted=persistentStandCache.get(k);
+  if(persisted!==undefined){standCache.set(k,persisted);return persisted;}
   if(_standInflight.has(k))return _standInflight.get(k);
-  const p=apiReq(`standings?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.STANDINGS}).then(d=>{
-    const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
-    standCache.set(k,f); return f;
+  const p=apiReq(`standings?league=${lg}&season=${s}`,{priority:'normal',cacheMs:CACHE_TTL.STANDINGS}).then(d=>{
+    const raw=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
+    const f=slimStandings(raw);standCache.set(k,f);persistentStandCache.set(k,f);return f;
   }).finally(()=>_standInflight.delete(k));
   _standInflight.set(k,p); return p;
 }
-async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
+async function getH2H(t1,t2){
+  const k=`${t1}_${t2}`;
+  if(h2hCache.has(k))return h2hCache.get(k);
+  const persisted=persistentH2HCache.get(k);
+  if(persisted!==undefined){h2hCache.set(k,persisted);return persisted;}
+  if(_h2hInflight.has(k))return _h2hInflight.get(k);
+  const p=apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`,{priority:'normal',cacheMs:CACHE_TTL.H2H}).then(d=>{
+    const out=slimH2HFixtures(d?.response||[]);h2hCache.set(k,out);persistentH2HCache.set(k,out);return out;
+  }).finally(()=>_h2hInflight.delete(k));
+  _h2hInflight.set(k,p);return p;
+}
 
 // 📋 LINEUPS per fixture (1 credit, cached until sub detected)
 async function getFixtureLineups(fixtureId) {
@@ -1266,33 +1299,33 @@ function parseLineup(response) {
 }
 
 // 🎯 TOP SCORERS CACHE
-async function getLeagueTopScorers(lg, s) {
+async function getLeagueTopScorers(lg, s, priority='normal') {
   const k = `${lg}_${s}`;
   if(scorersCache.has(k)) return scorersCache.get(k);
   if(_scorersInflight.has(k)) return _scorersInflight.get(k);
-  const p=apiReq(`players/topscorers?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
+  const p=apiReq(`players/topscorers?league=${lg}&season=${s}`,{priority,cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
     const out=d?.response||[]; scorersCache.set(k,out); return out;
   }).finally(()=>_scorersInflight.delete(k));
   _scorersInflight.set(k,p); return p;
 }
 
 // 🅰️ TOP ASSISTS (cached per league — 1 credit per league)
-async function getLeagueTopAssists(lg, s) {
+async function getLeagueTopAssists(lg, s, priority='normal') {
   const k = `${lg}_${s}`;
   if(assistsCache.has(k)) return assistsCache.get(k);
   if(_assistsInflight.has(k)) return _assistsInflight.get(k);
-  const p=apiReq(`players/topassists?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
+  const p=apiReq(`players/topassists?league=${lg}&season=${s}`,{priority,cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
     const out=d?.response||[]; assistsCache.set(k,out); return out;
   }).finally(()=>_assistsInflight.delete(k));
   _assistsInflight.set(k,p); return p;
 }
 
 // 🟨 TOP YELLOW CARDS (cached per league — 1 credit per league)
-async function getLeagueTopCards(lg, s) {
+async function getLeagueTopCards(lg, s, priority='normal') {
   const k = `${lg}_${s}`;
   if(cardsCache.has(k)) return cardsCache.get(k);
   if(_cardsInflight.has(k)) return _cardsInflight.get(k);
-  const p=apiReq(`players/topyellowcards?league=${lg}&season=${s}`,{cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
+  const p=apiReq(`players/topyellowcards?league=${lg}&season=${s}`,{priority,cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
     const out=d?.response||[]; cardsCache.set(k,out); return out;
   }).finally(()=>_cardsInflight.delete(k));
   _cardsInflight.set(k,p); return p;
@@ -1302,9 +1335,28 @@ async function getLeagueTopCards(lg, s) {
 async function getTeamInjuries(teamId, lg, s) {
   const k = `${teamId}_${lg}_${s}`;
   if(injuryCache.has(k)) return injuryCache.get(k);
-  const d = await apiReq(`injuries?league=${lg}&season=${s}&team=${teamId}`);
-  injuryCache.set(k, d?.response || []);
-  return d?.response || [];
+  if(_injuryInflight.has(k)) return _injuryInflight.get(k);
+  const p=apiReq(`injuries?league=${lg}&season=${s}&team=${teamId}`,{priority:'normal',cacheMs:CACHE_TTL.INJURIES}).then(d=>{
+    const out=d?.response||[];injuryCache.set(k,out);return out;
+  }).finally(()=>_injuryInflight.delete(k));
+  _injuryInflight.set(k,p);return p;
+}
+
+// v6.5: API-Football supports injury lookup by fixture. One request replaces
+// two team-specific requests on the critical path, then we split locally.
+async function getFixtureInjuries(m){
+  const fixId=String(m?.fixture?.id||'');
+  if(!fixId)return {home:[],away:[]};
+  if(fixtureInjuryCache.has(fixId))return fixtureInjuryCache.get(fixId);
+  const persisted=persistentFixtureInjuryCache.get(fixId);
+  if(persisted!==undefined){fixtureInjuryCache.set(fixId,persisted);return persisted;}
+  if(_fixtureInjuryInflight.has(fixId))return _fixtureInjuryInflight.get(fixId);
+  const p=apiReq(`injuries?fixture=${fixId}`,{priority:'normal',cacheMs:CACHE_TTL.INJURIES}).then(d=>{
+    const rows=d?.response||[],hid=String(m?.teams?.home?.id||''),aid=String(m?.teams?.away?.id||'');
+    const out={home:rows.filter(x=>String(x?.team?.id||'')===hid),away:rows.filter(x=>String(x?.team?.id||'')===aid)};
+    fixtureInjuryCache.set(fixId,out);persistentFixtureInjuryCache.set(fixId,out);return out;
+  }).finally(()=>_fixtureInjuryInflight.delete(fixId));
+  _fixtureInjuryInflight.set(fixId,p);return p;
 }
 const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
@@ -1457,6 +1509,11 @@ async function buildIntel(tId,lg,s,isHome){
 
   // Hit: έχουμε ήδη το result
   if(_buildIntelCache.has(cacheKey)) return _buildIntelCache.get(cacheKey);
+  const persistedIntel=persistentTeamIntelCache.get(cacheKey);
+  if(persistedIntel!==undefined){
+    _buildIntelCache.set(cacheKey,persistedIntel);
+    return persistedIntel;
+  }
 
   // In-flight dedup: αν τρέχει ήδη το ίδιο request, περίμενε το
   if(_buildIntelPromises.has(cacheKey)) return _buildIntelPromises.get(cacheKey);
@@ -1464,6 +1521,7 @@ async function buildIntel(tId,lg,s,isHome){
   // Miss: νέο request
   const promise = _buildIntelImpl(tId, lg, s, isHome).then(result => {
     _buildIntelCache.set(cacheKey, result);
+    persistentTeamIntelCache.set(cacheKey,result);
     _buildIntelPromises.delete(cacheKey);
     return result;
   }).catch(err => {
@@ -2483,7 +2541,7 @@ function renderVerificationLearning(summary){
   const pct2=v=>Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'N/A';
   const state=summary.n<VERIFY_LEARN_MIN_N?'WAITING':summary.skipped?'UNCHANGED':summary.accepted?'VALIDATED & APPLIED':'NO HOLD-OUT IMPROVEMENT';
   const col=summary.accepted?'var(--accent-green)':summary.n<VERIFY_LEARN_MIN_N?'var(--text-muted)':'var(--accent-gold)';
-  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.4.1</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
+  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.5</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
 }
 
 // ================================================================
@@ -2711,124 +2769,137 @@ function computeHTAnalysis(hExp, aExp, lp) {
 // ================================================================
 //  SCANNER MAIN LOOP
 // ================================================================
+// ── v6.5 FAST CORE: player intelligence is not allowed to block every match. ──
+// Top scorers / assists are fetched on the critical path ONLY when lineup or
+// injuries can actually change the xG adjustment. Full player/card enrichment
+// is completed afterwards at low API priority and updates the Players tab.
+let _playerEnrichmentQueue = [];
+let _playerEnrichmentToken = 0;
+
+function _needsBlockingPlayerIntel(lineupData,hInjuries,aInjuries){
+  return !!lineupData?.available || (Array.isArray(hInjuries)&&hInjuries.length>0) || (Array.isArray(aInjuries)&&aInjuries.length>0);
+}
+
+function queueDeferredPlayerEnrichment(rec,ctx={}){
+  if(!rec?.fixId||!rec?.m)return;
+  _playerEnrichmentQueue.push({rec,...ctx});
+}
+
+async function enrichPlayerIntelDeferred(item){
+  const rec=item?.rec;
+  if(!rec?.m)return;
+  const lg=rec.m.league.id,s=rec.m.league.season;
+  const [leagueScorers,leagueAssists,leagueCards]=await Promise.all([
+    item.coreScorers || getLeagueTopScorers(lg,s,'low'),
+    item.coreAssists || getLeagueTopAssists(lg,s,'low'),
+    getLeagueTopCards(lg,s,'low')
+  ]);
+  const hPlayers=buildPlayerProfiles(rec.m.teams.home.id,leagueScorers,leagueAssists,leagueCards,rec.hS?.totalTeamGoalsSeason||0);
+  const aPlayers=buildPlayerProfiles(rec.m.teams.away.id,leagueScorers,leagueAssists,leagueCards,rec.aS?.totalTeamGoalsSeason||0);
+  const hXI=rec.lineupData?.available?rec.lineupData.home:null;
+  const aXI=rec.lineupData?.available?rec.lineupData.away:null;
+  // Re-run only to annotate player availability/injury flags. The core xG/pick is
+  // deliberately not rewritten here: scorers+assists already supplied every GAP
+  // component that can affect the lineup/injury adjustment on the blocking path.
+  applyLineupAdjustment(rec.hXGbase,hPlayers,hXI,item.hInjuries||[]);
+  applyLineupAdjustment(rec.aXGbase,aPlayers,aXI,item.aInjuries||[]);
+  const cardCtx={xgDiff:rec.xgDiff,leagueId:rec.leagueId};
+  adjustPlayerCardProbs(hPlayers,rec.aS,cardCtx);
+  adjustPlayerCardProbs(aPlayers,rec.hS,cardCtx);
+  rec.hPlayers=hPlayers;rec.aPlayers=aPlayers;
+  rec.hScorerProb=calculateScorerProb(leagueScorers,rec.m.teams.home.id,rec.hExp,rec.hS?.totalTeamGoalsSeason||0,hPlayers);
+  rec.aScorerProb=calculateScorerProb(leagueScorers,rec.m.teams.away.id,rec.aExp,rec.aS?.totalTeamGoalsSeason||0,aPlayers);
+  rec.playerIntelReady=true;
+}
+
+function startDeferredPlayerEnrichment(){
+  const queue=_playerEnrichmentQueue.splice(0);
+  if(!queue.length)return;
+  const token=++_playerEnrichmentToken;
+  // Small pool + LOW-priority API calls: odds/live/core traffic always wins.
+  runWorkerPool(queue,3,async item=>{try{await enrichPlayerIntelDeferred(item);}catch(e){console.warn('[APEX] deferred player intel',e?.message||e);}})
+    .then(()=>{
+      if(token!==_playerEnrichmentToken)return;
+      try{rebuildTopLists();renderTopSections();}catch{}
+    }).catch(()=>{});
+}
+
 async function analyzeMatchSafe(m,index,total){
   try{
-    const[hS, aS, stand, h2hFix, leagueScorers, leagueAssists, leagueCards, hInjuries, aInjuries, lineupData] = await Promise.all([
-      buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
-      buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
-      getStand(m.league.id, m.league.season),
-      getH2H(m.teams.home.id, m.teams.away.id),
-      getLeagueTopScorers(m.league.id, m.league.season),
-      getLeagueTopAssists(m.league.id, m.league.season),
-      getLeagueTopCards(m.league.id, m.league.season),
-      getTeamInjuries(m.teams.home.id, m.league.id, m.league.season),
-      getTeamInjuries(m.teams.away.id, m.league.id, m.league.season),
-      getSmartScanLineup(m)                 // 📋 Turbo: fetch XI only when it can actually be available
+    // FAST CORE critical path: only data that can change the actual match model.
+    // League player tables are no longer fetched unconditionally for every match.
+    const[hS,aS,stand,h2hFix,fixtureInjuries,lineupData]=await Promise.all([
+      buildIntel(m.teams.home.id,m.league.id,m.league.season,true),
+      buildIntel(m.teams.away.id,m.league.id,m.league.season,false),
+      getStand(m.league.id,m.league.season),
+      getH2H(m.teams.home.id,m.teams.away.id),
+      getFixtureInjuries(m),
+      getSmartScanLineup(m)
     ]);
-    
+    const hInjuries=fixtureInjuries?.home||[],aInjuries=fixtureInjuries?.away||[];
+
     const lp=getLeagueParams(m.league.id);
-    
-    // ── DIXON-COLES ΛΑΜΒΔΑ — blended με form-based xG ──────────────
-    const dcResult = computeDCLambdas(hS, aS, m.league.id);
-    
-    // H2H Lambda Blend: αν υπάρχουν >= 4 H2H αγώνες, μεταθέτουμε 12% του λ προς το H2H avg goals
+    const dcResult=computeDCLambdas(hS,aS,m.league.id);
     const h2hSummary=summarizeH2H(h2hFix,m.teams.home.id,m.teams.away.id);
     const h2hGames=h2hSummary.homeWins+h2hSummary.awayWins+h2hSummary.draws;
-    let hXG=Number(hS.fXG)*lp.mult, aXG=Number(aS.fXG)*lp.mult;
+    let hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
     if(h2hGames>=4){
-      const h2hAvg=parseFloat(h2hSummary.h2hAvgGoals)||0;
-      const modelAvg=hXG+aXG;
-      if(modelAvg>0&&h2hAvg>0){
-        const scale=h2hAvg/modelAvg; const blend=0.12;
-        hXG=hXG*(1-blend)+(hXG*scale)*blend;
-        aXG=aXG*(1-blend)+(aXG*scale)*blend;
-      }
+      const h2hAvg=parseFloat(h2hSummary.h2hAvgGoals)||0,modelAvg=hXG+aXG;
+      if(modelAvg>0&&h2hAvg>0){const scale=h2hAvg/modelAvg,blend=0.12;hXG=hXG*(1-blend)+(hXG*scale)*blend;aXG=aXG*(1-blend)+(aXG*scale)*blend;}
     }
+    const blended=blendLambdas(hXG,aXG,dcResult.dcH,dcResult.dcA,dcResult.trust);
+    hXG=blended.blendH;aXG=blended.blendA;
+    const sitCtx=computeSituationalContext(stand,m.teams.home.id,m.teams.away.id,m.league.id);
+    hXG*=sitCtx.hMot;aXG*=sitCtx.aMot;
 
-    // Blend DC with form-based
-    const blended = blendLambdas(hXG, aXG, dcResult.dcH, dcResult.dcA, dcResult.trust);
-    hXG = blended.blendH; aXG = blended.blendA;
-
-    // ── SITUATIONAL CONTEXT ──────────────────────────────────────────
-    const sitCtx = computeSituationalContext(stand, m.teams.home.id, m.teams.away.id, m.league.id);
-    hXG *= sitCtx.hMot;
-    aXG *= sitCtx.aMot;
-    
-    const tXG=hXG+aXG; // base, pre-injury
-
-    // 🏥 PLAYER PROFILES — xG contribution + card probability per player
-    const hPlayers = buildPlayerProfiles(m.teams.home.id, leagueScorers, leagueAssists, leagueCards, hS.totalTeamGoalsSeason);
-    const aPlayers = buildPlayerProfiles(m.teams.away.id, leagueScorers, leagueAssists, leagueCards, aS.totalTeamGoalsSeason);
-
-    // ⚠️ ADJUSTMENT — Lineup-first: αν υπάρχει XI → lineup-based, αλλιώς injury-based
-    const hXI = lineupData?.available ? lineupData.home : null;
-    const aXI = lineupData?.available ? lineupData.away  : null;
-    const hInjAdj = applyLineupAdjustment(hXG, hPlayers, hXI, hInjuries);
-    const aInjAdj = applyLineupAdjustment(aXG, aPlayers, aXI, aInjuries);
-    const hXGfinal = hInjAdj.adjXG;
-    const aXGfinal = aInjAdj.adjXG;
-    const tXGfinal = hXGfinal + aXGfinal;
-
-    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,h2hSummary,{lineupData,hInjAdj,aInjAdj});
-
-    // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
-    const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
-    // Καλείται ΜΕΤΑ το computePick για να έχουμε το result.xgDiff
-    // Ταξινομεί τους players κατά adjCardProb DESC
-    const cardCtx = { xgDiff: result.xgDiff, leagueId: m.league.id };
-    adjustPlayerCardProbs(hPlayers, aS, cardCtx); // home team players: opponent = away stats
-    adjustPlayerCardProbs(aPlayers, hS, cardCtx); // away team players: opponent = home stats
-    
-    const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason, hPlayers);
-    const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason, aPlayers);
-
-    let actStats = null;
-    if (isFinished(m.fixture.status.short)) {
-      const sr = await getFixStats(m.fixture.id);
-      if(sr && sr.length === 2) {
-        const hs = sr[0].statistics; const as = sr[1].statistics;
-        actStats = {
-          hPoss: statValNullable(hs, 'Ball Possession'),
-          aPoss: statValNullable(as, 'Ball Possession'),
-          hCor:  statValNullable(hs, 'Corner Kicks', {nullAsZero:true}),
-          aCor:  statValNullable(as, 'Corner Kicks', {nullAsZero:true}),
-          hCrd:  sumStatsNullable(hs, ['Yellow Cards','Red Cards']),
-          aCrd:  sumStatsNullable(as, ['Yellow Cards','Red Cards']),
-          hOff:  statValNullable(hs, 'Offsides', {nullAsZero:true}),
-          aOff:  statValNullable(as, 'Offsides', {nullAsZero:true}),
-          hXg:   statValNullable(hs, 'expected_goals'),
-          aXg:   statValNullable(as, 'expected_goals')
-        };
-      }
+    // Fetch scorer/assist tables on the blocking path only when their GAP shares
+    // are needed for a real injury or lineup adjustment.
+    const needPlayerAdjustment=_needsBlockingPlayerIntel(lineupData,hInjuries,aInjuries);
+    let leagueScorers=null,leagueAssists=null;
+    if(needPlayerAdjustment){
+      [leagueScorers,leagueAssists]=await Promise.all([
+        getLeagueTopScorers(m.league.id,m.league.season,'normal'),
+        getLeagueTopAssists(m.league.id,m.league.season,'normal')
+      ]);
     }
+    const hPlayers=needPlayerAdjustment?buildPlayerProfiles(m.teams.home.id,leagueScorers,leagueAssists,[],hS.totalTeamGoalsSeason):[];
+    const aPlayers=needPlayerAdjustment?buildPlayerProfiles(m.teams.away.id,leagueScorers,leagueAssists,[],aS.totalTeamGoalsSeason):[];
 
-    const rec = {
+    const hXI=lineupData?.available?lineupData.home:null;
+    const aXI=lineupData?.available?lineupData.away:null;
+    const hInjAdj=applyLineupAdjustment(hXG,hPlayers,hXI,hInjuries);
+    const aInjAdj=applyLineupAdjustment(aXG,aPlayers,aXI,aInjuries);
+    const hXGfinal=hInjAdj.adjXG,aXGfinal=aInjAdj.adjXG,tXGfinal=hXGfinal+aXGfinal;
+
+    const bttsScore=Math.min(hXGfinal,aXGfinal);
+    const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,h2hSummary,{lineupData,hInjAdj,aInjAdj});
+    const htAnalysis=computeHTAnalysis(result.hExp,result.aExp,lp);
+
+    // If player data was already necessary for the core, scorer probability is
+    // available immediately. Card-specific player data remains deferred.
+    const hScorerProb=leagueScorers?calculateScorerProb(leagueScorers,m.teams.home.id,result.hExp,hS.totalTeamGoalsSeason,hPlayers):null;
+    const aScorerProb=leagueScorers?calculateScorerProb(leagueScorers,m.teams.away.id,result.aExp,aS.totalTeamGoalsSeason,aPlayers):null;
+
+    const rec={
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
       tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
-      hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,
-      hInjAdj, aInjAdj,
-      hPlayers, aPlayers,
-      htAnalysis,
-      lineupData,
+      hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,hInjAdj,aInjAdj,
+      hPlayers,aPlayers,htAnalysis,lineupData,
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,ppRaw:result.ppRaw,oneXTwo:result.oneXTwo,verification:result.verification,rawOutPick:result.rawOutPick,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,
       hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,
-      hS,aS,h2h:h2hSummary,
-      actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
-      sitCtx,    // Situational context (motivation flags, derby)
-      dcResult,  // Dixon-Coles attack/defense strengths
-      offside: result.offside,   // Offside projection (Poisson model)
+      hS,aS,h2h:h2hSummary,actStats:null,isBomb:result.omegaPick.includes('💣'),hScorerProb,aScorerProb,
+      sitCtx,dcResult,offside:result.offside,playerIntelReady:false
     };
     window.scannedMatchesData.push(rec);
     appendProgressiveMatch(rec,false);
+    queueDeferredPlayerEnrichment(rec,{hInjuries,aInjuries,coreScorers:leagueScorers,coreAssists:leagueAssists});
     return rec;
   }catch(err){
-    console.error('[APEX] Analysis failed:', m?.teams?.home?.name, 'vs', m?.teams?.away?.name, err);
+    console.error('[APEX] Analysis failed:',m?.teams?.home?.name,'vs',m?.teams?.away?.name,err);
     const rec={m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'-',rawOutPick:'X',exact:'0-0',cornerConf:0};
-    window.scannedMatchesData.push(rec);
-    appendProgressiveMatch(rec,true);
-    return rec;
+    window.scannedMatchesData.push(rec);appendProgressiveMatch(rec,true);return rec;
   }
 }
 
@@ -2836,10 +2907,11 @@ window.runScan=async function(){
   if(isRunning)return;
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
-  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ Progressive Smart Scan — initializing…');
-  console.log('[APEX] Progressive Scan started · adaptive API', window.APEX_API_RATE);
-  // Clear team intel cache — fresh data για κάθε scan
-  try { _buildIntelPromises.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); } catch {} // v6.3: keep 10m team-intel cache across scans
+  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ FAST CORE Smart Scan — initializing…');
+  console.log('[APEX] FAST CORE Scan started · adaptive API', window.APEX_API_RATE);
+  _playerEnrichmentQueue=[]; _playerEnrichmentToken++; // invalidate older deferred UI refreshes
+  // Clear only in-flight registries. Memory + persistent caches are deliberately retained.
+  try { _buildIntelPromises.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); _teamStatsInflight.clear(); _lastFixInflight.clear(); _h2hInflight.clear(); _injuryInflight.clear(); _fixtureInjuryInflight.clear(); } catch {}
   ['progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
@@ -2881,7 +2953,7 @@ window.runScan=async function(){
     // TURBO: περισσότερα matches μπορούν να είναι in-flight, ενώ ο global API
     // limiter εξακολουθεί να ελέγχει με ακρίβεια πόσα HTTP requests ξεκινούν.
     const SCAN_BATCH = apiClamp(Math.max(SMART_SCAN.MIN_BATCH,API_RATE.maxConcurrent),SMART_SCAN.MIN_BATCH,SMART_SCAN.MAX_BATCH);
-    console.log(`[APEX] Progressive Smart Scan: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · match batch ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
+    console.log(`[APEX] FAST CORE Smart Scan: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · workers ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
     // v6.3 continuous worker pool: μόλις τελειώσει ένα match, ο worker παίρνει
     // αμέσως το επόμενο. Καταργεί το head-of-line blocking των fixed batches.
     let scanCursor=0;
@@ -2910,13 +2982,15 @@ window.runScan=async function(){
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
       showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`⚡ Progressive Smart Scan ολοκληρώθηκε — ${all.length} αναλύθηκαν · ${skippedFinished} τελειωμένοι παραλείφθηκαν · ${SMART_SCAN.DETAIL_FIXTURES} detailed matches/team.`);
+      showOk(`⚡ FAST CORE ολοκληρώθηκε — ${all.length} αγώνες σε ${_progressiveElapsed()} · ${skippedFinished} FT skipped · player intel φορτώνει στο background.`);
     }
-    // Market pricing runs in background and does NOT block Smart Scan. BEST 4 and Bombs share the same odds cache/in-flight calls.
+    // Market pricing is more decision-critical than player props, so it starts
+    // immediately; deferred player endpoints run LOW priority and cannot block it.
     Promise.allSettled([
       window.refreshBest4({silent:true}),
       window.refreshBombs({silent:true})
     ]).catch(()=>{});
+    startDeferredPlayerEnrichment();
   }catch(e){showErr(e.message);}finally{if(_progressiveScanState.active)finalizeProgressiveScan();isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
