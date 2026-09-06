@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.3 — MASTER ENGINE · ULTRA PIPELINE + ADAPTIVE 1X2 CALIBRATION + NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING
+// APEX OMEGA v6.3.1 — MASTER ENGINE · ULTRA PIPELINE + ADAPTIVE 1X2 CALIBRATION + NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -277,6 +277,22 @@ function compactFinishedFixture(f){
     goals:{home:safeNum(f.goals?.home,0),away:safeNum(f.goals?.away,0)}
   };
 }
+// v6.3.1: Smart Scan never re-analyzes settled fixtures.
+// A finished fixture is also copied into the persistent FT cache so Audit can
+// reuse the final score without another fixture request.
+function shouldSkipFinishedSmartScan(m){
+  const id=String(m?.fixture?.id||'');
+  const st=String(m?.fixture?.status?.short||'').toUpperCase();
+  if(isFinished(st)){
+    const compact=compactFinishedFixture(m);
+    if(id&&compact)persistentFTCache.set(id,compact);
+    return true;
+  }
+  // Audit may already have settled this fixture even if a short-lived day-cache
+  // still contains an older status. In that case, the immutable FT cache wins.
+  return !!(id&&persistentFTCache.get(id));
+}
+
 function slimFixtureStats(rows){
   const keep=new Set(['Corner Kicks','Yellow Cards','Red Cards','Shots on Goal','Shots off Goal','Offsides','expected_goals','Ball Possession']);
   return (rows||[]).map(t=>({team:{id:t?.team?.id||0,name:t?.team?.name||''},statistics:(t?.statistics||[]).filter(x=>keep.has(x?.type)).map(x=>({type:x.type,value:x.value}))}));
@@ -387,9 +403,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.3';
+const APP_VERSION   = 'v6.3.1';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'ULTRA PIPELINE';
+const BUILD_TIME    = 'ULTRA PIPELINE · SKIP FINISHED';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -2457,14 +2473,28 @@ window.runScan=async function(){
   ['progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
-    const selLg=document.getElementById('leagueFilter').value;let all=[];
+    const selLg=document.getElementById('leagueFilter').value;let all=[],skippedFinished=0;
     for(const date of getDatesInRange(startD,endD)){
       setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:CACHE_TTL.FIXTURE_DAY});
       if(res?.__apiError) throw new Error(`API-Football: ${res.__apiError}`);
-      const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
+      const dm=(res.response||[]).filter(m=>{
+        let leagueOk=false;
+        if(selLg==='WORLD')leagueOk=true;
+        else if(selLg==='ALL')leagueOk=typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);
+        else if(selLg==='MY_LEAGUES')leagueOk=getActiveMyLeagues().includes(m.league.id);
+        else leagueOk=m.league.id===parseInt(selLg);
+        if(!leagueOk)return false;
+        if(shouldSkipFinishedSmartScan(m)){skippedFinished++;return false;}
+        return true;
+      });
       all.push(...dm);if(all.length>350)break;
     }
-    if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
+    if(!all.length){
+      const msg=skippedFinished>0
+        ? `Δεν υπάρχουν μη ολοκληρωμένοι αγώνες για ανάλυση · ${skippedFinished} τελειωμένοι παραλείφθηκαν.`
+        : 'Δεν βρέθηκαν αγώνες.';
+      showErr(msg);return;
+    }
     if(all.length>350) all=all.slice(0,350);
     initProgressiveScan(all.length);
 
@@ -2472,7 +2502,7 @@ window.runScan=async function(){
     // Τα in-flight maps παραπάνω εξασφαλίζουν ότι ακόμη κι αν πολλά matches
     // του ίδιου league ξεκινήσουν μαζί, γίνεται μία μόνο κοινή API κλήση.
     // Έτσι δεν υπάρχει blocking warm-up πριν εμφανιστεί το πρώτο αποτέλεσμα.
-    setProgress(8, `Progressive scan · ${all.length} αγώνες · έναρξη ανάλυσης…`);
+    setProgress(8, `Progressive scan · ${all.length} ενεργοί αγώνες · ${skippedFinished} FT skipped · έναρξη ανάλυσης…`);
 
     // Match concurrency follows detected API capacity. The global queue still
     // enforces the exact request-launch rate, so bigger plans scale automatically.
@@ -2508,7 +2538,7 @@ window.runScan=async function(){
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
       showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`⚡ Progressive Smart Scan ολοκληρώθηκε — ${all.length} αγώνες · ${SMART_SCAN.DETAIL_FIXTURES} detailed matches/team.`);
+      showOk(`⚡ Progressive Smart Scan ολοκληρώθηκε — ${all.length} αναλύθηκαν · ${skippedFinished} τελειωμένοι παραλείφθηκαν · ${SMART_SCAN.DETAIL_FIXTURES} detailed matches/team.`);
     }
     // Market pricing runs in background and does NOT block Smart Scan. BEST 4 and Bombs share the same odds cache/in-flight calls.
     Promise.allSettled([
