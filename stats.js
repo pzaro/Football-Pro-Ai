@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.2 — MASTER ENGINE · ADAPTIVE 1X2 CALIBRATION + NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING
+// APEX OMEGA v6.3 — MASTER ENGINE · ULTRA PIPELINE + ADAPTIVE 1X2 CALIBRATION + NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -129,8 +129,8 @@ const CACHE_TTL = Object.freeze({
 const SMART_SCAN = Object.freeze({
   DETAIL_FIXTURES: 5,
   LINEUP_WINDOW_MIN: 90,   // αυτόματο lineup fetch μόνο κοντά στο kickoff
-  MIN_BATCH: 4,
-  MAX_BATCH: 8,
+  MIN_BATCH: 5,
+  MAX_BATCH: 10,
   RATE_UTILIZATION: 0.95   // 5% safety margin αφού ανιχνευθεί το plan
 });
 
@@ -236,6 +236,83 @@ const SETTINGS_MAP = {
 const _apiQueue = []; let _apiActive = 0;
 const _apiInflight = new Map();
 const _apiResponseCache = new BoundedCache(300, 30*1000);
+
+// ── v6.3 ULTRA PIPELINE: persistent immutable-result caches ──────────────────
+// Finished fixtures and historical fixture statistics do not need to be
+// downloaded again on every Audit / reload. Values are compacted before
+// localStorage so the cache stays small and safe.
+function createPersistentTTLCache(lsKey,{maxEntries=300,ttlMs=30*24*60*60*1000}={}){
+  let loaded=false, rows={}, saveTimer=null;
+  const load=()=>{
+    if(loaded)return; loaded=true;
+    try{const raw=JSON.parse(localStorage.getItem(lsKey)||'{}'); rows=raw&&typeof raw==='object'?raw:{};}catch{rows={};}
+  };
+  const prune=()=>{
+    load(); const now=Date.now();
+    Object.keys(rows).forEach(k=>{const e=rows[k];if(!e||!Number.isFinite(e.ts)||now-e.ts>ttlMs)delete rows[k];});
+    const keys=Object.keys(rows);
+    if(keys.length>maxEntries){keys.sort((a,b)=>(rows[b]?.ts||0)-(rows[a]?.ts||0));keys.slice(maxEntries).forEach(k=>delete rows[k]);}
+  };
+  const flush=()=>{saveTimer=null;prune();try{localStorage.setItem(lsKey,JSON.stringify(rows));}catch(e){console.warn('[APEX] persistent cache save failed',lsKey,e?.message||e);}};
+  const schedule=()=>{if(saveTimer!==null)return;saveTimer=setTimeout(flush,700);};
+  return {
+    get(key){load();const e=rows[String(key)];if(!e)return undefined;if(Date.now()-e.ts>ttlMs){delete rows[String(key)];schedule();return undefined;}return e.value;},
+    set(key,value){load();rows[String(key)]={ts:Date.now(),value};prune();schedule();return value;},
+    flush,
+    clear(){rows={};loaded=true;try{localStorage.removeItem(lsKey);}catch{}},
+    get size(){prune();return Object.keys(rows).length;}
+  };
+}
+
+const persistentFTCache = createPersistentTTLCache('omega_ft_results_v6.3',{maxEntries:1200,ttlMs:365*24*60*60*1000});
+const persistentFixStatsCache = createPersistentTTLCache('omega_fixstats_v6.3',{maxEntries:260,ttlMs:120*24*60*60*1000});
+const AUDIT_FETCH_WORKERS = 8;
+
+function compactFinishedFixture(f){
+  if(!f||!f.fixture?.id)return null;
+  return {
+    fixture:{id:f.fixture.id,date:f.fixture.date,status:{short:f.fixture.status?.short||'FT'}},
+    league:{id:f.league?.id||0,name:f.league?.name||'',season:f.league?.season||null},
+    teams:{home:{id:f.teams?.home?.id||0,name:f.teams?.home?.name||''},away:{id:f.teams?.away?.id||0,name:f.teams?.away?.name||''}},
+    goals:{home:safeNum(f.goals?.home,0),away:safeNum(f.goals?.away,0)}
+  };
+}
+function slimFixtureStats(rows){
+  const keep=new Set(['Corner Kicks','Yellow Cards','Red Cards','Shots on Goal','Shots off Goal','Offsides','expected_goals','Ball Possession']);
+  return (rows||[]).map(t=>({team:{id:t?.team?.id||0,name:t?.team?.name||''},statistics:(t?.statistics||[]).filter(x=>keep.has(x?.type)).map(x=>({type:x.type,value:x.value}))}));
+}
+async function runWorkerPool(items,workerCount,fn){
+  let cursor=0; const n=Math.max(1,Math.min(workerCount||1,items.length||1));
+  const workers=Array.from({length:n},async()=>{while(true){const i=cursor++;if(i>=items.length)return;await fn(items[i],i);}});
+  await Promise.all(workers);
+}
+async function preloadAuditFixtures(cands){
+  const out=new Map(), wanted=new Map();
+  (cands||[]).forEach(p=>wanted.set(String(p.fixtureId),p));
+  // 1) instant hits from persistent FT cache
+  for(const [id] of wanted){const hit=persistentFTCache.get(id);if(hit)out.set(id,hit);}
+  const unresolved=()=>[...wanted.keys()].filter(id=>!out.has(id));
+  // 2) bulk-by-date: usually 1 API call settles many fixtures
+  const dates=[...new Set(unresolved().map(id=>(wanted.get(id)?.date||'').split('T')[0]).filter(Boolean))];
+  let completedDates=0;
+  await runWorkerPool(dates,Math.min(AUDIT_FETCH_WORKERS,6),async date=>{
+    const fr=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:6*60*60*1000});
+    for(const f of (fr?.response||[])){
+      const id=String(f?.fixture?.id||''); if(!wanted.has(id)||!isFinished(f?.fixture?.status?.short))continue;
+      const compact=compactFinishedFixture(f);if(compact){out.set(id,compact);persistentFTCache.set(id,compact);}
+    }
+    completedDates++; setProgress(5+Math.round((completedDates/Math.max(dates.length,1))*45),`Audit bulk fetch: ${completedDates}/${dates.length} ημέρες`);
+  });
+  // 3) fallback only for fixtures absent from their date response
+  const missing=unresolved(); let done=0;
+  await runWorkerPool(missing,AUDIT_FETCH_WORKERS,async id=>{
+    const fr=await apiReq(`fixtures?id=${id}`,{priority:'high',cacheMs:6*60*60*1000});
+    const f=fr?.response?.[0];
+    if(f&&isFinished(f?.fixture?.status?.short)){const compact=compactFinishedFixture(f);if(compact){out.set(id,compact);persistentFTCache.set(id,compact);}}
+    done++; setProgress(50+Math.round((done/Math.max(missing.length,1))*20),`Audit fallback: ${done}/${missing.length}`);
+  });
+  return out;
+}
 let _apiDrainTimer = null;
 let _nextRequestAt = 0;
 let _globalBackoffUntil = 0;
@@ -310,9 +387,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.2';
+const APP_VERSION   = 'v6.3';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'ADAPTIVE 1X2 ENGINE';
+const BUILD_TIME    = 'ULTRA PIPELINE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1185,11 +1262,19 @@ const _fixStatsInflight = new Map();
 async function getFixStats(fixtureId){
   const k=String(fixtureId);
   if(fixStatsCache.has(k))return fixStatsCache.get(k);
+  const persisted=persistentFixStatsCache.get(k);
+  if(persisted!==undefined){fixStatsCache.set(k,persisted);return persisted;}
   if(_fixStatsInflight.has(k))return _fixStatsInflight.get(k);
 
   const promise=(async()=>{
     const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`,{priority:'normal',cacheMs:CACHE_TTL.FIXTURE_STATS});
     const r=d?.response||[];
+    if(r.length>=2){
+      const slim=slimFixtureStats(r);
+      fixStatsCache.set(k,slim);
+      persistentFixStatsCache.set(k,slim);
+      return slim;
+    }
     fixStatsCache.set(k,r);
     return r;
   })().finally(()=>_fixStatsInflight.delete(k));
@@ -1304,7 +1389,7 @@ function getFormRating(hist){if(!hist?.length)return 50;const w=[1,0.8,0.6,0.4,0
 // ── buildIntel cache — αποφεύγει duplicate calls για ίδια ομάδα ──
 // Key: `${tId}_${lg}_${s}` — αποθηκεύει το Promise (όχι το result)
 // ώστε παράλληλα requests για την ίδια ομάδα να μοιραστούν ένα call
-const _buildIntelCache = new BoundedCache(80);
+const _buildIntelCache = new BoundedCache(160, 10*60*1000); // v6.3: reuse computed team intel for 10m across scans
 const _buildIntelPromises = new Map(); // dedup in-flight requests
 
 async function buildIntel(tId,lg,s,isHome){
@@ -2313,9 +2398,9 @@ async function analyzeMatchSafe(m,index,total){
 
     let actStats = null;
     if (isFinished(m.fixture.status.short)) {
-      const sr = await apiReq(`fixtures/statistics?fixture=${m.fixture.id}`);
-      if(sr.response && sr.response.length === 2) {
-        const hs = sr.response[0].statistics; const as = sr.response[1].statistics;
+      const sr = await getFixStats(m.fixture.id);
+      if(sr && sr.length === 2) {
+        const hs = sr[0].statistics; const as = sr[1].statistics;
         actStats = {
           hPoss: statValNullable(hs, 'Ball Possession'),
           aPoss: statValNullable(as, 'Ball Possession'),
@@ -2368,7 +2453,7 @@ window.runScan=async function(){
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ Progressive Smart Scan — initializing…');
   console.log('[APEX] Progressive Scan started · adaptive API', window.APEX_API_RATE);
   // Clear team intel cache — fresh data για κάθε scan
-  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); } catch {}
+  try { _buildIntelPromises.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); } catch {} // v6.3: keep 10m team-intel cache across scans
   ['progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
@@ -2395,10 +2480,17 @@ window.runScan=async function(){
     // limiter εξακολουθεί να ελέγχει με ακρίβεια πόσα HTTP requests ξεκινούν.
     const SCAN_BATCH = apiClamp(Math.max(SMART_SCAN.MIN_BATCH,API_RATE.maxConcurrent),SMART_SCAN.MIN_BATCH,SMART_SCAN.MAX_BATCH);
     console.log(`[APEX] Progressive Smart Scan: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · match batch ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
-    for(let i=0; i<all.length; i+=SCAN_BATCH){
-      const batch = all.slice(i, i+SCAN_BATCH);
-      await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
-    }
+    // v6.3 continuous worker pool: μόλις τελειώσει ένα match, ο worker παίρνει
+    // αμέσως το επόμενο. Καταργεί το head-of-line blocking των fixed batches.
+    let scanCursor=0;
+    const scanWorkers=Array.from({length:Math.min(SCAN_BATCH,all.length)},async()=>{
+      while(true){
+        const idx=scanCursor++;
+        if(idx>=all.length)return;
+        await analyzeMatchSafe(all[idx],idx,all.length);
+      }
+    });
+    await Promise.all(scanWorkers);
     
     finalizeProgressiveScan();
     saveToVault(window.scannedMatchesData);
@@ -6020,7 +6112,7 @@ function renderSummaryTable() {
 //  AUDIT, VAULT & AI ADVISOR (Auto-Optimization Logic)
 // ================================================================
 // ================================================================
-//  AUDIT ENGINE v3 — Auto-detect + Immediate Calibration
+//  AUDIT ENGINE v3.3 ULTRA — Bulk Fetch + Persistent FT Cache + Immediate Calibration
 // ================================================================
 
 /**
@@ -6103,12 +6195,16 @@ window.runCustomAudit = async function(autoMode = false) {
     const rows = [], curveData = [], calibRecs = [];
     let settled = 0;
 
+    // v6.3 ULTRA AUDIT: cache first, then bulk-by-date, then only missing IDs.
+    // This turns e.g. 100 fixture requests across 5 dates into ~5 bulk calls.
+    setProgress(3,'Audit: έλεγχος persistent cache…');
+    const auditFixtureMap = await preloadAuditFixtures(cands);
+
     for(let i = 0; i < cands.length; i++) {
       const p = cands[i];
-      setProgress(Math.round(((i+1)/cands.length)*100), `Έλεγχος: ${p.homeTeam} vs ${p.awayTeam}`);
+      setProgress(70+Math.round(((i+1)/cands.length)*22), `Audit processing: ${i+1}/${cands.length}`);
 
-      const fr  = await apiReq(`fixtures?id=${p.fixtureId}`);
-      const fix = fr?.response?.[0];
+      const fix = auditFixtureMap.get(String(p.fixtureId));
       if(!fix || !isFinished(fix?.fixture?.status?.short)) continue;
 
       settled++;
