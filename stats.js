@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.5.1 — MASTER ENGINE · PROGRAM MAP · FAST CORE SCAN + PERSISTENT TEAM INTEL + UNIFIED 1X2 VERIFICATION + 60s LIFECYCLE REFRESH + AUTO-CLEAR + CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
+// APEX OMEGA v6.6 — MASTER ENGINE · PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + PROGRAM MAP + FAST CORE SCAN + UNIFIED 1X2 VERIFICATION + 60s LIFECYCLE REFRESH + AUTO-CLEAR + CYPRUS
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -432,9 +432,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.5.1';
+const APP_VERSION   = 'v6.6';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'PROGRAM MAP + FAST CORE';
+const BUILD_TIME    = 'PERFORMANCE + LIVE SEGREGATION';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -644,6 +644,39 @@ const getTeamGoals = (f,t) => f?.teams?.home?.id===t?(f?.goals?.home??0):(f?.goa
 const getOppGoals  = (f,t) => f?.teams?.home?.id===t?(f?.goals?.away??0):(f?.goals?.home??0);
 const isLive     = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
+
+// ================================================================
+//  v6.6 LIVE SEGREGATION — live fixtures never enter Progressive Scan
+// ================================================================
+window.scanLiveFixtures = window.scanLiveFixtures || [];
+
+function _dedupeFixturesById(fixtures){
+  const m=new Map();
+  (fixtures||[]).forEach(f=>{const id=String(f?.fixture?.id||'');if(id)m.set(id,f);});
+  return [...m.values()];
+}
+
+function renderDetachedLiveFixtures(fixtures=window.scanLiveFixtures){
+  const sec=document.getElementById('liveNowSection');if(!sec)return;
+  const live=_dedupeFixturesById(fixtures).filter(f=>isLive(String(f?.fixture?.status?.short||'').toUpperCase()))
+    .sort((a,b)=>kickoffEpoch(a)-kickoffEpoch(b));
+  window.scanLiveFixtures=live;
+  if(!live.length){sec.innerHTML='';return;}
+  sec.innerHTML=`<div class="quant-panel" style="padding:0;overflow:hidden;border-color:rgba(34,197,94,.32);">
+    <div style="padding:12px 16px;background:rgba(34,197,94,.07);border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+      <div><b style="color:var(--accent-green);letter-spacing:.06em;">🔴 LIVE NOW</b><div style="font-size:.65rem;color:var(--text-muted);margin-top:2px;">Ενεργοί αγώνες · εξαιρούνται από το PROGRESSIVE SMART SCAN · refresh κάθε 60s</div></div>
+      <span style="font-family:var(--font-mono);font-size:.75rem;font-weight:900;color:var(--accent-green);">${live.length} LIVE</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;padding:10px;">
+      ${live.map(f=>{const st=f.fixture?.status||{},gh=f.goals?.home??0,ga=f.goals?.away??0,el=st.elapsed?`${st.elapsed}'`:'LIVE';return `<div style="border:1px solid rgba(34,197,94,.22);border-radius:9px;background:var(--bg-base);padding:10px 12px;">
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:5px;"><span class="live-dot" style="width:7px;height:7px;"></span><span style="background:rgba(34,197,94,.14);color:var(--accent-green);border:1px solid rgba(34,197,94,.28);border-radius:5px;padding:2px 7px;font-size:.65rem;font-weight:900;">LIVE</span><span style="font-family:var(--font-mono);font-size:.72rem;color:var(--accent-green);font-weight:900;">${esc(el)}</span><span style="margin-left:auto;font-family:var(--font-mono);font-size:.68rem;color:var(--accent-teal);">🕒 ${kickoffTimeLabel(f)}</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div style="font-weight:800;font-size:.84rem;min-width:0;">${esc(f.teams?.home?.name||'HOME')} <span style="color:var(--text-dim);">–</span> ${esc(f.teams?.away?.name||'AWAY')}</div><div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--accent-green);white-space:nowrap;">${gh}-${ga}</div></div>
+        <div style="font-size:.62rem;color:var(--text-muted);margin-top:4px;">${esc(f.league?.name||'')}</div>
+      </div>`;}).join('')}
+    </div>
+  </div>`;
+}
+
 const esc = s => String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const todayISO = () => new Date().toISOString().split('T')[0];
 const ATHENS_TZ = 'Europe/Athens';
@@ -729,6 +762,12 @@ function appendProgressiveMatch(rec,failed=false){
   const stat=document.getElementById('progressiveScanStatus');
   if(stat)stat.textContent=`${done}/${total} αναλύσεις ολοκληρωμένες · ${_progressiveElapsed()}${_progressiveScanState.failed?` · ${_progressiveScanState.failed} σφάλματα`:''}`;
   setProgress(10+(done/Math.max(total,1))*88,`Αναλύθηκαν ${done}/${total}`);
+
+  // v6.6: αν ο αγώνας ξεκίνησε όσο αναλυόταν, δεν επιτρέπεται να εμφανιστεί στο Progressive Scan.
+  if(isLive(String(rec.m?.fixture?.status?.short||'').toUpperCase())){
+    document.getElementById(`progressive-card-${rec.fixId}`)?.remove();
+    return;
+  }
 
   const list=document.getElementById('progressiveStreamList'); if(!list)return;
   const x=rec, conf=clamp(safeNum(x.strength),0,100);
@@ -2541,7 +2580,7 @@ function renderVerificationLearning(summary){
   const pct2=v=>Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'N/A';
   const state=summary.n<VERIFY_LEARN_MIN_N?'WAITING':summary.skipped?'UNCHANGED':summary.accepted?'VALIDATED & APPLIED':'NO HOLD-OUT IMPROVEMENT';
   const col=summary.accepted?'var(--accent-green)':summary.n<VERIFY_LEARN_MIN_N?'var(--text-muted)':'var(--accent-gold)';
-  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.5</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
+  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.6</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
 }
 
 // ================================================================
@@ -2912,10 +2951,11 @@ window.runScan=async function(){
   _playerEnrichmentQueue=[]; _playerEnrichmentToken++; // invalidate older deferred UI refreshes
   // Clear only in-flight registries. Memory + persistent caches are deliberately retained.
   try { _buildIntelPromises.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); _teamStatsInflight.clear(); _lastFixInflight.clear(); _h2hInflight.clear(); _injuryInflight.clear(); _fixtureInjuryInflight.clear(); } catch {}
-  ['progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
+  ['liveNowSection','progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
+  window.scanLiveFixtures=[];
   window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
   try{
-    const selLg=document.getElementById('leagueFilter').value;let all=[],skippedFinished=0;
+    const selLg=document.getElementById('leagueFilter').value;let all=[],skippedFinished=0,liveFixtures=[];
     for(const date of getDatesInRange(startD,endD)){
       setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:CACHE_TTL.FIXTURE_DAY});
       if(res?.__apiError) throw new Error(`API-Football: ${res.__apiError}`);
@@ -2926,12 +2966,21 @@ window.runScan=async function(){
         else if(selLg==='MY_LEAGUES')leagueOk=getActiveMyLeagues().includes(m.league.id);
         else leagueOk=m.league.id===parseInt(selLg);
         if(!leagueOk)return false;
+        const st=String(m?.fixture?.status?.short||'').toUpperCase();
+        if(isLive(st)){liveFixtures.push(m);return false;}
         if(shouldSkipFinishedSmartScan(m)){skippedFinished++;return false;}
         return true;
       });
       all.push(...dm);if(all.length>350)break;
     }
+    window.scanLiveFixtures=_dedupeFixturesById(liveFixtures);
+    renderDetachedLiveFixtures();
     if(!all.length){
+      if(window.scanLiveFixtures.length){
+        startAutoSync();
+        showOk(`🔴 ${window.scanLiveFixtures.length} αγώνες είναι ήδη LIVE και εξαιρέθηκαν από το Progressive Smart Scan${skippedFinished?` · ${skippedFinished} FT skipped`:''}.`);
+        return;
+      }
       const msg=skippedFinished>0
         ? `Δεν υπάρχουν μη ολοκληρωμένοι αγώνες για ανάλυση · ${skippedFinished} τελειωμένοι παραλείφθηκαν.`
         : 'Δεν βρέθηκαν αγώνες.';
@@ -2946,7 +2995,7 @@ window.runScan=async function(){
     // Τα in-flight maps παραπάνω εξασφαλίζουν ότι ακόμη κι αν πολλά matches
     // του ίδιου league ξεκινήσουν μαζί, γίνεται μία μόνο κοινή API κλήση.
     // Έτσι δεν υπάρχει blocking warm-up πριν εμφανιστεί το πρώτο αποτέλεσμα.
-    setProgress(8, `Progressive scan · ${all.length} ενεργοί αγώνες · ${skippedFinished} FT skipped · έναρξη ανάλυσης…`);
+    setProgress(8, `Progressive scan · ${all.length} pre-match · ${window.scanLiveFixtures.length} LIVE separated · ${skippedFinished} FT skipped · έναρξη ανάλυσης…`);
 
     // Match concurrency follows detected API capacity. The global queue still
     // enforces the exact request-launch rate, so bigger plans scale automatically.
@@ -2982,7 +3031,7 @@ window.runScan=async function(){
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
       showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`⚡ FAST CORE ολοκληρώθηκε — ${all.length} αγώνες σε ${_progressiveElapsed()} · ${skippedFinished} FT skipped · player intel φορτώνει στο background.`);
+      showOk(`⚡ FAST CORE ολοκληρώθηκε — ${all.length} pre-match σε ${_progressiveElapsed()} · ${window.scanLiveFixtures.length} LIVE separated · ${skippedFinished} FT skipped · player intel φορτώνει στο background.`);
     }
     // Market pricing is more decision-critical than player props, so it starts
     // immediately; deferred player endpoints run LOW priority and cannot block it.
@@ -3828,7 +3877,8 @@ window.syncLiveScores=async function(silent=false){
   if(btn&&!silent){btn.innerText='Syncing…';btn.disabled=true;}
   try{
     const data=window.scannedMatchesData||[];
-    if(!data.length)return;
+    const detached=window.scanLiveFixtures||[];
+    if(!data.length&&!detached.length)return;
 
     // 1) Live index: ανακαλύπτει και αγώνες που ήταν NS στο αρχικό scan αλλά μόλις ξεκίνησαν.
     const res=await apiReq('fixtures?live=all',{priority:'high',cacheMs:15*1000});
@@ -3854,8 +3904,9 @@ window.syncLiveScores=async function(silent=false){
       if(isFinished(d.m?.fixture?.status?.short))return true;
       const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
     });
-    const dueIds=new Set(due.map(d=>String(d.fixId)));
-    const dates=[...new Set(due.map(d=>(d.m?.fixture?.date||'').split('T')[0]).filter(Boolean))];
+    const detachedDue=detached.filter(f=>{const st=String(f?.fixture?.status?.short||'').toUpperCase();if(isFinished(st)||isLive(st))return true;const k=kickoffEpoch(f);return Number.isFinite(k)&&k<=now+10*60*1000;});
+    const dueIds=new Set([...due.map(d=>String(d.fixId)),...detachedDue.map(f=>String(f?.fixture?.id||''))].filter(Boolean));
+    const dates=[...new Set([...due.map(d=>(d.m?.fixture?.date||'').split('T')[0]),...detachedDue.map(f=>(f?.fixture?.date||'').split('T')[0])].filter(Boolean))];
     const freshMap=new Map();
     await Promise.all(dates.map(async date=>{
       try{
@@ -3870,6 +3921,21 @@ window.syncLiveScores=async function(silent=false){
       d.m.goals=f.goals||d.m.goals;
       d.m.fixture.status=f.fixture?.status||d.m.fixture.status;
     });
+
+    // v6.6: μόλις pre-match record γίνει LIVE, φεύγει αμέσως από το Progressive panel.
+    data.filter(d=>isLive(String(d.m?.fixture?.status?.short||'').toUpperCase())).forEach(d=>document.getElementById(`progressive-card-${d.fixId}`)?.remove());
+
+    // Refresh του ξεχωριστού LIVE NOW set. Finished fixtures αφαιρούνται και μπαίνουν FT cache.
+    const nextDetached=[];
+    for(const old of detached){
+      const id=String(old?.fixture?.id||'');
+      const fresh=freshMap.get(id)||liveMap.get(id)||old;
+      const st=String(fresh?.fixture?.status?.short||'').toUpperCase();
+      if(isFinished(st)){const compact=compactFinishedFixture(fresh);if(compact)persistentFTCache.set(id,compact);continue;}
+      if(isLive(st))nextDetached.push(fresh);
+    }
+    window.scanLiveFixtures=_dedupeFixturesById(nextDetached);
+    renderDetachedLiveFixtures();
 
     // 3) AUTO-CLEAR: τελειωμένοι αγώνες αποθηκεύονται για Audit και αφαιρούνται
     // από το ενεργό Smart Scan/Dashboard. Δεν χάνονται οι pre-match προβλέψεις στο Vault.
@@ -3895,7 +3961,7 @@ window.syncLiveScores=async function(silent=false){
     const liveTracked=(window.scannedMatchesData||[]).filter(d=>liveMap.has(String(d.fixId)));
     if(!liveTracked.length){
       renderSummaryTable();tickerRefresh();
-      if(!silent&&!removed.length)showOk(`✅ Lifecycle sync · ${dates.length} ημερομηνίες · κανένας live αγώνας.`);
+      if(!silent&&!removed.length)showOk(`✅ Lifecycle sync · ${dates.length} ημερομηνίες · ${window.scanLiveFixtures.length} detached LIVE.`);
       return;
     }
 
@@ -4048,12 +4114,13 @@ function startAutoSync(){
   const tick=()=>{
     if(isRunning)return;
     const data=window.scannedMatchesData||[];
-    if(!data.length)return;
+    const detached=window.scanLiveFixtures||[];
+    if(!data.length&&!detached.length)return;
     const now=Date.now();
     // Tick κάθε 60s. API refresh γίνεται για live/finished/stale imported fixtures και
     // για όσα πλησιάζουν ή έχουν περάσει την ώρα έναρξης. Έτσι αποφεύγουμε άσκοπα
     // date calls για αυριανά fixtures, αλλά η εκκαθάριση ελέγχεται ακριβώς ανά λεπτό.
-    const shouldCheck=data.some(d=>{
+    const shouldCheck=detached.length>0||data.some(d=>{
       const st=d.m?.fixture?.status?.short;
       if(isFinished(st)||isLive(st))return true;
       const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
@@ -6509,7 +6576,7 @@ function renderSummaryTable() {
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
           <td class="col-match left-align" style="font-weight:700;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              ${live ? `<span class="live-dot" style="width:7px;height:7px;flex-shrink:0;display:inline-block;"></span>` : ''}
+              ${live ? `<span class="live-dot" style="width:7px;height:7px;flex-shrink:0;display:inline-block;"></span><span style="background:rgba(34,197,94,.15);color:var(--accent-green);border:1px solid rgba(34,197,94,.30);border-radius:4px;padding:1px 6px;font-size:.62rem;font-weight:900;letter-spacing:.06em;">LIVE</span>` : ''}
               ${live && elapsed ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);font-family:var(--font-mono);font-size:0.72rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(74,222,128,0.3);flex-shrink:0;">${elapsed}'</span>` : ''}
               <span style="background:rgba(45,212,191,.10);color:var(--accent-teal);font-family:var(--font-mono);font-size:.68rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(45,212,191,.22);flex-shrink:0;" title="Ώρα έναρξης Ελλάδας">🕒 ${kickoffTimeLabel(x)}</span>
               <span style="font-size:0.95rem;">${esc(x.ht)}</span>
@@ -6677,6 +6744,50 @@ function renderSummaryTable() {
   }
 
   sec.innerHTML = finalHtml;
+}
+
+
+// ================================================================
+//  v6.6 PERFORMANCE INTELLIGENCE — all settled results → best league/settings
+// ================================================================
+function _wilsonLower(h,n,z=1.96){
+  if(!n)return 0;const p=h/n,z2=z*z,den=1+z2/n;
+  return Math.max(0,(p+z2/(2*n)-z*Math.sqrt((p*(1-p)+z2/(4*n))/n))/den);
+}
+function _leaderFromVaultRecord(p){
+  const v=String(p?.verificationLeader||p?.verification?.leader||'');if(['1','X','2'].includes(v))return v;
+  const pp=p?.calibratedPP;if(pp){return [['1',safeNum(pp.pHome,0)],['X',safeNum(pp.pDraw,0)],['2',safeNum(pp.pAway,0)]].sort((a,b)=>b[1]-a[1])[0][0];}
+  return ['1','X','2'].includes(p?.outPick)?p.outPick:null;
+}
+function _multiclassBrier(pp,aOut){
+  if(!pp||!['1','X','2'].includes(aOut))return null;
+  const ph=safeNum(pp.pHome,NaN),pd=safeNum(pp.pDraw,NaN),pa=safeNum(pp.pAway,NaN);if(![ph,pd,pa].every(Number.isFinite))return null;
+  return ((ph-(aOut==='1'?1:0))**2+(pd-(aOut==='X'?1:0))**2+(pa-(aOut==='2'?1:0))**2)/3;
+}
+function buildPerformanceIntelligence(rows){
+  const groups=new Map();
+  (rows||[]).forEach(r=>{const p=r.p||{},lid=String(p.leagueId||0);if(!groups.has(lid))groups.set(lid,{lid:Number(lid),name:p.league||`League ${lid}`,n:0,modelN:0,modelH:0,verN:0,verH:0,v80N:0,v80H:0,brier:[],scores:[]});const g=groups.get(lid);g.n++;const leader=_leaderFromVaultRecord(p);if(leader){g.modelN++;if(leader===r.aOut)g.modelH++;const sc=safeNum(p.verificationScore??p.verification?.score,0);g.scores.push({score:sc,hit:leader===r.aOut});}const sig=p.verificationSignal||p.verification?.signal;const sc=safeNum(p.verificationScore??p.verification?.score,0);if(['1','X','2'].includes(sig)&&sc>=VERIFY_1X2.MIN_SIGNAL_SCORE){g.verN++;if(sig===r.aOut)g.verH++;if(sc>=VERIFY_1X2.VERIFIED_SCORE){g.v80N++;if(sig===r.aOut)g.v80H++;}}const b=_multiclassBrier(p.calibratedPP,r.aOut);if(Number.isFinite(b))g.brier.push(b);});
+  const leagues=[...groups.values()].map(g=>{g.modelAcc=g.modelN?g.modelH/g.modelN:null;g.verAcc=g.verN?g.verH/g.verN:null;g.v80Acc=g.v80N?g.v80H/g.v80N:null;g.brierMean=g.brier.length?g.brier.reduce((a,b)=>a+b,0)/g.brier.length:null;g.rankMetric=g.verN>=8?_wilsonLower(g.verH,g.verN):g.modelN>=10?_wilsonLower(g.modelH,g.modelN):-1;return g;}).sort((a,b)=>b.rankMetric-a.rankMetric||b.verN-a.verN||b.modelN-a.modelN);
+  const best=leagues.find(g=>g.rankMetric>=0)||null;
+
+  const allScoreRows=[];(rows||[]).forEach(r=>{const p=r.p||{},leader=_leaderFromVaultRecord(p),sc=safeNum(p.verificationScore??p.verification?.score,0);if(leader&&Number.isFinite(sc))allScoreRows.push({score:sc,hit:leader===r.aOut});});
+  const minN=Math.max(12,Math.ceil(allScoreRows.length*0.15));
+  const cutoffs=[];for(let t=55;t<=90;t+=5){const a=allScoreRows.filter(x=>x.score>=t),h=a.filter(x=>x.hit).length;if(a.length)cutoffs.push({t,n:a.length,h,acc:h/a.length,lb:_wilsonLower(h,a.length)});}
+  const eligible=cutoffs.filter(x=>x.n>=minN);const bestCut=(eligible.length?eligible:cutoffs).sort((a,b)=>b.lb-a.lb||b.n-a.n)[0]||null;
+  return {leagues,best,bestCut,total:rows?.length||0,minN};
+}
+function renderPerformanceIntelligence(rows){
+  const intel=buildPerformanceIntelligence(rows);window._lastPerformanceIntelligence=intel;
+  const fmt=v=>Number.isFinite(v)?(v*100).toFixed(1)+'%':'N/A',num=v=>Number.isFinite(v)?v.toFixed(4):'N/A';
+  const pending=window._pendingAdjustments||{};
+  const best=intel.best;const bestTitle=best?`${esc(best.name)} · ${best.verN>=8?fmt(best.verAcc)+' Verified':fmt(best.modelAcc)+' model leader'} · n=${best.verN>=8?best.verN:best.modelN}`:'Ανεπαρκές δείγμα ανά πρωτάθλημα';
+  const lgRows=intel.leagues.map((g,i)=>{const pr=pending[String(g.lid)]||pending[g.lid]||{},opt=pr.optimized||{},lp=getLeagueParams(g.lid);const rec=Object.keys(opt).length?Object.entries(opt).map(([k,v])=>`${k}→${Number(v).toFixed(3)}`).join(' · '):'χωρίς validated αλλαγή';const rank=g.rankMetric>=0?`${(g.rankMetric*100).toFixed(1)}%`:'—';return `<tr><td class="left-align"><b>${i+1}. ${esc(g.name)}</b><div style="font-size:.58rem;color:var(--text-muted);">Wilson lower bound ${rank}</div></td><td>${g.modelN?fmt(g.modelAcc):'N/A'}<small style="display:block;color:var(--text-muted);">${g.modelH}/${g.modelN}</small></td><td>${g.verN?fmt(g.verAcc):'N/A'}<small style="display:block;color:var(--text-muted);">${g.verH}/${g.verN}</small></td><td>${g.v80N?fmt(g.v80Acc):'N/A'}<small style="display:block;color:var(--text-muted);">${g.v80H}/${g.v80N}</small></td><td>${num(g.brierMean)}</td><td style="font-family:var(--font-mono);font-size:.62rem;">${esc(rec)}</td><td style="font-family:var(--font-mono);font-size:.58rem;color:var(--text-muted);">mult ${lp.mult.toFixed(2)} · xGΔ ${lp.xgDiff.toFixed(2)} · O2.5 ${lp.minXGO25.toFixed(2)}</td></tr>`;}).join('');
+  const cut=intel.bestCut;const cutHtml=cut?`<b style="color:var(--accent-green);">V-Score ≥${cut.t}</b> · accuracy ${fmt(cut.acc)} · ${cut.h}/${cut.n} · Wilson LB ${(cut.lb*100).toFixed(1)}%`:'Ανεπαρκές sample για cutoff optimization';
+  return `<div class="quant-panel" style="border-color:rgba(56,189,248,.28);margin-bottom:14px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><div style="font-size:.9rem;font-weight:900;color:var(--accent-blue);">🏆 SYSTEM PERFORMANCE INTELLIGENCE</div><div style="font-size:.64rem;color:var(--text-muted);margin-top:2px;">Κατάταξη από το σύνολο των settled αποτελεσμάτων του επιλεγμένου Audit. Δεν θεωρεί 100% σε μικρό n ως ισχυρότερο από μεγάλο δείγμα: χρησιμοποιεί Wilson confidence.</div></div><span style="font-family:var(--font-mono);font-size:.66rem;color:var(--accent-blue);">n=${intel.total}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:12px 0;"><div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;"><div style="font-size:.61rem;color:var(--text-muted);text-transform:uppercase;">Καλύτερα υποστηριζόμενο πρωτάθλημα 1X2</div><div style="font-weight:900;color:var(--accent-green);margin-top:4px;">${bestTitle}</div></div><div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;"><div style="font-size:.61rem;color:var(--text-muted);text-transform:uppercase;">Προτεινόμενο verification cutoff</div><div style="margin-top:4px;font-size:.74rem;">${cutHtml}</div><div style="font-size:.57rem;color:var(--text-muted);margin-top:4px;">Diagnostic recommendation: εφαρμόζεται μόνο μετά από επαρκές hold-out validation.</div></div></div>
+    <div style="font-size:.65rem;color:var(--text-muted);margin-bottom:7px;"><b style="color:var(--text-main);">Ρυθμίσεις καλύτερης απόδοσης:</b> οι validated παράμετροι είναι league-specific. Το panel εμφανίζει τις αλλαγές που βρήκε το Auto-Calibration αντί να επιβάλλει ένα ενιαίο global set σε όλα τα πρωταθλήματα.</div>
+    <div class="data-table-wrapper"><table class="summary-table"><thead><tr><th class="left-align">League</th><th>Model 1X2</th><th>V≥60</th><th>V≥80</th><th>Brier ↓</th><th>Validated settings</th><th>Effective params</th></tr></thead><tbody>${lgRows||'<tr><td colspan="7">Δεν υπάρχουν δεδομένα.</td></tr>'}</tbody></table></div>
+  </div>`;
 }
 
 // ================================================================
@@ -6977,6 +7088,10 @@ window.runCustomAudit = async function(autoMode = false) {
         if(cp) cp.scrollIntoView({ behavior:'smooth', block:'start' });
       }, 350);
     }
+
+    // v6.6: συνολική απόδοση + league ranking + validated settings.
+    const perfHtml=renderPerformanceIntelligence(rows);
+    const auditEl=document.getElementById('auditSection');if(auditEl&&perfHtml)auditEl.insertAdjacentHTML('afterbegin',perfHtml);
 
     showOk(`✅ Audit ολοκληρώθηκε — ${settled} αγώνες αξιολογήθηκαν.`);
 

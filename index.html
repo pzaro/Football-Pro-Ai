@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v6.5.1 — PROGRAM MAP + FAST CORE SCAN · UNIFIED 1X2 VERIFICATION · 60s REFRESH · AUTO-CLEAR · CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING</title>
+  <title>APEX OMEGA v6.6 — PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + PROGRAM MAP + FAST CORE SCAN · UNIFIED 1X2 VERIFICATION · 60s REFRESH · AUTO-CLEAR · CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -15,7 +15,7 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <div class="brand-logo">
       APEX<span>OMEGA</span>
-      <span class="version-tag" id="versionTag">v6.5.1</span>
+      <span class="version-tag" id="versionTag">v6.6</span>
     </div>
     <div id="lastUpdatedBadge" style="display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.58rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:3px 9px;white-space:nowrap;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
@@ -64,7 +64,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v6.5.1 · PROGRAM MAP + FAST CORE SCAN + PERSISTENT TEAM INTEL + UNIFIED 1X2 VERIFICATION + 60s REFRESH + AUTO-CLEAR + CYPRUS + VERIFIED BOMBS</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v6.6 · PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + FAST CORE + UNIFIED 1X2 + 60s REFRESH + AUTO-CLEAR + CYPRUS</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -93,7 +93,7 @@
       <div class="panel-title clickable" style="color:var(--purple);" onclick="togglePanel('programMapPanel','programMapArrow')">
         <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           🧭 Program Map — Τι κάνει κάθε τμήμα
-          <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">v6.5.1 · λειτουργικός χάρτης του APEX OMEGA</span>
+          <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">v6.6 · λειτουργικός χάρτης του APEX OMEGA</span>
         </span>
         <span id="programMapArrow" class="arrow">▼</span>
       </div>
@@ -120,6 +120,7 @@
               <tr><td><b>⭐ My Leagues</b></td><td>Καθορίζει ποια πρωταθλήματα θα συμπεριλαμβάνονται στο High-Yield Smart Scan.</td><td>Επιλογές χρήστη, GOLD/TIGHT/TRAP/Standard classification.</td><td>Fixture universe του scan.</td><td style="text-align:center;">🖱️</td></tr>
               <tr><td><b>⚡ API + Cache Pipeline</b></td><td>Ελέγχει rate limit, priority queue, retries, request de-duplication και persistent TTL caches.</td><td>API headers, cached responses, in-flight requests.</td><td>Ταχύτητα, σταθερότητα και μικρότερη κατανάλωση API calls.</td><td style="text-align:center;">⚡</td></tr>
               <tr><td><b>🔄 60s Lifecycle / Auto-Clear</b></td><td>Ανανεώνει statuses ανά λεπτό και αφαιρεί FT/AET/PEN από το ενεργό dashboard.</td><td>Fixture status + kickoff time.</td><td>Καθαρό active scan, FT cache και Audit availability.</td><td style="text-align:center;">⚡</td></tr>
+              <tr><td><b>🔴 Live Segregation</b></td><td>Αναγνωρίζει αγώνες που έχουν ήδη ξεκινήσει, τους επισημαίνει LIVE και τους κρατά έξω από το Progressive Smart Scan.</td><td>Fixture status, elapsed minute, score.</td><td>Ξεχωριστό LIVE NOW panel + καθαρό pre-match progressive queue.</td><td style="text-align:center;">⚡</td></tr>
               <tr><td><b>📥 Import / 📤 Export</b></td><td>Εισάγει JSON snapshot ή εξάγει JSON/Excel για offline χρήση.</td><td>scannedMatchesData / JSON file.</td><td>Επαναφόρτωση scan, Vault sync, Excel reports.</td><td style="text-align:center;">🖱️</td></tr>
 
               <tr><td colspan="5" style="padding:7px 10px;background:rgba(45,212,191,.07);color:var(--teal);font-weight:900;letter-spacing:.08em;text-transform:uppercase;">B. Core Pre-Match Analysis</td></tr>
@@ -155,6 +156,7 @@
               <tr><td><b>🔬 Model Accuracy Analysis</b></td><td>Μετρά MAE, Bias και correlation ανά metric με Data Quality Guard.</td><td>Predicted vs valid actual metrics.</td><td>Accuracy diagnostics ανά xG/corners/cards/offsides/goals.</td><td style="text-align:center;">⚡</td></tr>
               <tr><td><b>🗄️ Vault</b></td><td>Κρατά immutable pre-match snapshots για ιστορικό validation και learning.</td><td>Scan records, raw/calibrated probabilities, features, picks.</td><td>Dataset για Audit, calibration και settlement.</td><td style="text-align:center;">⚡</td></tr>
               <tr><td><b>📊 Smart Audit & AI Advisor</b></td><td>Φέρνει/χρησιμοποιεί FT results, αξιολογεί picks/markets και δημιουργεί calibration records.</td><td>Vault + persistent FT cache + final outcomes.</td><td>Hit rates, Bomb ROI, calibration dataset, diagnostics.</td><td style="text-align:center;">🖱️ + ⚡</td></tr>
+              <tr><td><b>🏆 Performance Intelligence</b></td><td>Κατατάσσει πρωταθλήματα με βάση πραγματική 1X2 ακρίβεια, Verified hit rate, Brier και Wilson confidence, και συνοψίζει validated προτεινόμενες ρυθμίσεις.</td><td>Όλα τα settled Audit records + Auto-Calibration output.</td><td>Best league, league ranking, recommended V-Score cutoff και parameter changes.</td><td style="text-align:center;">⚡ + 🧠</td></tr>
               <tr><td><b>🎯 Auto-Calibration</b></td><td>Grid-searches league/market parameters σε settled records και εφαρμόζει validated improvements.</td><td>Audit calibration records.</td><td>Updated league thresholds/multipliers.</td><td style="text-align:center;">🧠</td></tr>
               <tr><td><b>🛡️ Verification Learning</b></td><td>Μαθαίνει reliability layer για το V-Score και εφαρμόζεται μόνο όταν βελτιώνει hold-out Brier.</td><td>Settled 1X2 samples + verification components.</td><td>Καλύτερη πιθανότητα ότι ένα VERIFIED/STRONG signal είναι αξιόπιστο.</td><td style="text-align:center;">🧠</td></tr>
 
@@ -370,6 +372,7 @@
     </div>
 
     <!-- ── OUTPUT ───────────────────────────────────────────── -->
+    <div id="liveNowSection"></div>
     <div id="progressiveSection"></div>
     <div id="advisorSection"></div>
     <div id="topSection"></div>
