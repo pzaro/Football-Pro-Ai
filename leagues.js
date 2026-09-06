@@ -58,6 +58,9 @@ const LEAGUES_DATA = [
   // ── Greece ────────────────────────────────────────────────
   { id:197, name:"Super League (GR)"       },   // TIGHT
 
+  // ── Cyprus ────────────────────────────────────────────────
+  { id:318, name:"1. Division (CY)"         },   // Standard — Α΄ Εθνική Κύπρου
+
   // ── ═══ ΒΟΡΕΙΕΣ ΧΩΡΕΣ ═══ ────────────────────────────────
 
   // Denmark — Superliga: avg 2.78 γκολ, καλή Poisson εφαρμογή
@@ -121,6 +124,7 @@ const MY_LEAGUES_IDS  = [
   140,  // La Liga ES
   135,  // Serie A IT
   197,  // Super League GR
+  318,  // 1. Division CY — Α΄ Εθνική Κύπρου
 ];
 
 // ── League avg goals per match (home + away) ──────────────────
@@ -231,8 +235,9 @@ const LEAGUES_HT_FACTORS = {
   179: 0.438,
   // Turkey
   203: 0.438,
-  // Greece
+  // Greece / Cyprus
   197: 0.435,
+  318: 0.435, // Cyprus 1. Division — standard HT fallback
   // Scandinavia / Nordic
   113: 0.430, // Allsvenskan (SE)
   103: 0.440, // Eliteserien (NO) — γκολ και στα 2 ημίχρονα

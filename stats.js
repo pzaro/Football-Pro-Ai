@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.3.2 — MASTER ENGINE · KICKOFF GROUPS + AUTO-CLEAR FINISHED + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
+// APEX OMEGA v6.3.3 — MASTER ENGINE · 60s LIFECYCLE REFRESH + AUTO-CLEAR IMPORTS + CYPRUS + KICKOFF GROUPS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -177,12 +177,25 @@ let liveLearningState         = null;
 // ── Dynamic My Leagues ────────────────────────────────────────────────────────
 // Επιστρέφει τα επιλεγμένα πρωταθλήματα του χρήστη.
 // Προτεραιότητα: localStorage > hardcoded default από leagues.js
+const LS_CYPRUS_MIGRATION = 'omega_my_leagues_add_cyprus_v6.3.3';
 function getUserMyLeagues() {
   try {
     const saved = JSON.parse(localStorage.getItem(LS_MY_LEAGUES));
-    if(Array.isArray(saved) && saved.length > 0) return saved.map(Number);
+    if(Array.isArray(saved) && saved.length > 0) {
+      const ids=saved.map(Number);
+      // v6.3.3 one-time migration: add Cyprus 1. Division (API-Football league 318)
+      // to existing MY_LEAGUES selections. After migration the user can deselect it normally.
+      if(!localStorage.getItem(LS_CYPRUS_MIGRATION)) {
+        if(!ids.includes(318)) ids.push(318);
+        localStorage.setItem(LS_MY_LEAGUES, JSON.stringify(ids));
+        localStorage.setItem(LS_CYPRUS_MIGRATION, '1');
+      }
+      return ids;
+    }
   } catch {}
-  return typeof MY_LEAGUES_IDS !== 'undefined' ? [...MY_LEAGUES_IDS] : [78,88,218,119,103,144,253,262,140,135,197];
+  const defaults = typeof MY_LEAGUES_IDS !== 'undefined' ? [...MY_LEAGUES_IDS] : [78,88,218,119,103,144,253,262,140,135,197,318];
+  try { localStorage.setItem(LS_CYPRUS_MIGRATION, '1'); } catch {}
+  return defaults;
 }
 function saveUserMyLeagues(ids) {
   try { localStorage.setItem(LS_MY_LEAGUES, JSON.stringify(ids.map(Number))); } catch {}
@@ -203,7 +216,7 @@ const HT_LEAGUE_FACTORS = (typeof LEAGUES_HT_FACTORS !== 'undefined')
       135:0.440,136:0.435,140:0.430,141:0.430,
       61:0.430, 62:0.435, 88:0.440, 144:0.435,
       94:0.432, 218:0.442,207:0.435,179:0.438,
-      203:0.438,197:0.435,
+      203:0.438,197:0.435,318:0.435,
       113:0.430,103:0.440,119:0.438,244:0.435,164:0.445,
       357:0.438,395:0.435,
       106:0.435,345:0.435,283:0.432,271:0.437,
@@ -403,9 +416,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.3.2';
+const APP_VERSION   = 'v6.3.3';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'KICKOFF GROUPS · AUTO-CLEAR FINISHED';
+const BUILD_TIME    = '60s REFRESH · AUTO-CLEAR IMPORTS · CYPRUS';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -916,7 +929,7 @@ window.importData=function(ev){
   const file=ev.target.files[0];
   if(!file)return;
   const reader=new FileReader();
-  reader.onload=e=>{
+  reader.onload=async e=>{
     try{
       const imported=JSON.parse(e.target.result);
       if(!Array.isArray(imported))throw new Error("Invalid format");
@@ -936,7 +949,13 @@ window.importData=function(ev){
       const endD   = dates[dates.length-1] || todayISO();
 
       syncAuditFromScan(imported, startD, endD);
-      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν. Vault ενημερώθηκε.`);
+
+      // v6.3.3: JSON imports μπαίνουν αμέσως στο ίδιο 60s lifecycle loop με το Smart Scan.
+      // Έτσι stale NS/LIVE statuses ανανεώνονται από το API και FT/AET/PEN αφαιρούνται
+      // αυτόματα χωρίς να χρειάζεται νέο Smart Scan ή manual Live Sync.
+      startAutoSync();
+
+      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν · Auto-refresh/Auto-clear κάθε 60s ενεργό.`);
     }catch(err){
       showErr("Σφάλμα αρχείου: " + err.message);
     }
@@ -3619,21 +3638,27 @@ window.fetchLineupForMatch = async function(fixId) {
 };
 
 let _autoSyncTimer=null;
+const AUTO_REFRESH_MS = 60*1000;
 function startAutoSync(){
   if(_autoSyncTimer)clearInterval(_autoSyncTimer);
   const tick=()=>{
     if(isRunning)return;
+    const data=window.scannedMatchesData||[];
+    if(!data.length)return;
     const now=Date.now();
-    const shouldCheck=(window.scannedMatchesData||[]).some(d=>{
+    // Tick κάθε 60s. API refresh γίνεται για live/finished/stale imported fixtures και
+    // για όσα πλησιάζουν ή έχουν περάσει την ώρα έναρξης. Έτσι αποφεύγουμε άσκοπα
+    // date calls για αυριανά fixtures, αλλά η εκκαθάριση ελέγχεται ακριβώς ανά λεπτό.
+    const shouldCheck=data.some(d=>{
       const st=d.m?.fixture?.status?.short;
       if(isFinished(st)||isLive(st))return true;
       const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
     });
     if(shouldCheck)window.syncLiveScores(true);
   };
-  _autoSyncTimer=setInterval(tick,90000);
-  // Αν υπάρχουν ήδη live/ληγμένοι αγώνες, η πρώτη εκκαθάριση δεν περιμένει 90 sec.
-  setTimeout(tick,1500);
+  _autoSyncTimer=setInterval(tick,AUTO_REFRESH_MS);
+  // Import/scan: πρώτο status refresh σχεδόν αμέσως, όχι μετά από 1 λεπτό.
+  setTimeout(tick,300);
 }
 
 let _tickerRaf=null,_tickerPx=45;
@@ -6663,6 +6688,7 @@ const LEAGUE_GROUPS = [
   { label: '🏴󠁧󠁢󠁳󠁣󠁴󠁿 Σκωτία', ids: [179] },
   { label: '🇹🇷 Τουρκία', ids: [203] },
   { label: '🇬🇷 Ελλάδα', ids: [197] },
+  { label: '🇨🇾 Κύπρος', ids: [318] },
   { label: '🇩🇰 Δανία', ids: [119] },
   { label: '🇸🇪 Σουηδία', ids: [113] },
   { label: '🇳🇴 Νορβηγία', ids: [103] },
