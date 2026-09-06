@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.1 — MASTER ENGINE · NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING + PROGRESSIVE SMART SCAN
+// APEX OMEGA v6.2 — MASTER ENGINE · ADAPTIVE 1X2 CALIBRATION + NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -310,9 +310,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.1';
-const BUILD_DATE    = '05/09/2026';
-const BUILD_TIME    = 'LIVE LEARNING ENGINE';
+const APP_VERSION   = 'v6.2';
+const BUILD_DATE    = '06/09/2026';
+const BUILD_TIME    = 'ADAPTIVE 1X2 ENGINE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1858,16 +1858,180 @@ function adjustPlayerCardProbs(players, oppStats, matchCtx) {
 }
 
 // ================================================================
+//  ADAPTIVE 1X2 CALIBRATION ENGINE v6.2
+//  Raw Poisson/Dixon-Coles probabilities remain the prior.
+//  A learned multinomial correction adjusts P(1)/P(X)/P(2) using
+//  pre-match features, and is updated ONLY from settled Audit records.
+// ================================================================
+const LS_ADAPTIVE_1X2 = 'omega_adaptive_1x2_v6.2';
+const ADAPTIVE_1X2_MIN_GLOBAL = 20;
+const ADAPTIVE_1X2_MIN_LEAGUE = 40;
+const ADAPTIVE_1X2_DEFAULT = Object.freeze({
+  homeBias:   0.060,
+  wXG:        0.080,
+  wForm:      0.060,
+  wSplit:     0.050,
+  wDefense:   0.050,
+  wCorners:   0.010,
+  wCards:     0.000,
+  wH2H:       0.030,
+  drawBias:   0.000,
+  drawBalance:0.080,
+});
+const ADAPTIVE_1X2_BOUNDS = {
+  homeBias:[-0.30,0.30], wXG:[-0.50,0.50], wForm:[-0.35,0.35],
+  wSplit:[-0.35,0.35], wDefense:[-0.35,0.35], wCorners:[-0.20,0.20],
+  wCards:[-0.15,0.15], wH2H:[-0.25,0.25], drawBias:[-0.40,0.40],
+  drawBalance:[-0.20,0.55],
+};
+let _adaptive1X2State = null;
+
+function _clone1X2Params(p){ return Object.fromEntries(Object.keys(ADAPTIVE_1X2_DEFAULT).map(k=>[k,safeNum(p?.[k],ADAPTIVE_1X2_DEFAULT[k])])); }
+function _loadAdaptive1X2State(){
+  if(_adaptive1X2State) return _adaptive1X2State;
+  let st=null;
+  try{ st=JSON.parse(localStorage.getItem(LS_ADAPTIVE_1X2)||'null'); }catch{}
+  if(!st||typeof st!=='object') st={version:2,global:{params:_clone1X2Params(ADAPTIVE_1X2_DEFAULT),n:0,metrics:null,fingerprint:''},leagues:{},log:[]};
+  st.global=st.global||{params:_clone1X2Params(ADAPTIVE_1X2_DEFAULT),n:0,metrics:null,fingerprint:''};
+  st.global.params=_clone1X2Params(st.global.params);
+  st.leagues=st.leagues||{}; st.log=Array.isArray(st.log)?st.log:[];
+  _adaptive1X2State=st; return st;
+}
+function _saveAdaptive1X2State(){
+  try{ localStorage.setItem(LS_ADAPTIVE_1X2,JSON.stringify(_loadAdaptive1X2State())); }catch{}
+}
+function _blend1X2Params(a,b,t){ const o={}; Object.keys(ADAPTIVE_1X2_DEFAULT).forEach(k=>o[k]=safeNum(a?.[k],ADAPTIVE_1X2_DEFAULT[k])*(1-t)+safeNum(b?.[k],ADAPTIVE_1X2_DEFAULT[k])*t); return o; }
+function _effectiveAdaptive1X2Params(leagueId){
+  const st=_loadAdaptive1X2State();
+  const g=_clone1X2Params(st.global?.params);
+  const l=st.leagues?.[String(leagueId)];
+  if(!l?.params || safeNum(l.n,0)<ADAPTIVE_1X2_MIN_GLOBAL) return {params:g,source:safeNum(st.global?.n,0)>=ADAPTIVE_1X2_MIN_GLOBAL?'GLOBAL':'DEFAULT',leagueBlend:0};
+  // Shrink small league samples toward the global calibration. Max league influence 70%.
+  const alpha=clamp((safeNum(l.n,0)-ADAPTIVE_1X2_MIN_GLOBAL)/100,0,0.70);
+  return {params:_blend1X2Params(g,l.params,alpha),source:'GLOBAL+LEAGUE',leagueBlend:alpha};
+}
+function _adaptive1X2Features(hXG,aXG,hS,aS,h2hSummary=null,ppRaw=null){
+  const logRatio=(a,b)=>Math.log((Math.max(0.05,safeNum(a,0))+0.20)/(Math.max(0.05,safeNum(b,0))+0.20));
+  const h2n=safeNum(h2hSummary?.homeWins,0)+safeNum(h2hSummary?.awayWins,0)+safeNum(h2hSummary?.draws,0);
+  const xg=clamp((safeNum(hXG,1.2)-safeNum(aXG,1.2))/1.25,-1.5,1.5);
+  const rawGap=Math.abs(safeNum(ppRaw?.pHome,0.33)-safeNum(ppRaw?.pAway,0.33));
+  return {
+    xg,
+    form:clamp((safeNum(hS?.formRating,50)-safeNum(aS?.formRating,50))/50,-1.2,1.2),
+    split:clamp(logRatio(hS?.sXG,aS?.sXG),-1.2,1.2),
+    defense:clamp(logRatio(aS?.fXGA,hS?.fXGA),-1.2,1.2),
+    corners:clamp((safeNum(hS?.cor,4.8)-safeNum(aS?.cor,4.8))/4,-1,1),
+    // Positive value means the away side is more card-prone; initial weight is zero and must earn influence from outcomes.
+    cards:clamp((safeNum(aS?.crd,2)-safeNum(hS?.crd,2))/3,-1,1),
+    h2h:h2n>0?clamp((safeNum(h2hSummary?.homeWins,0)-safeNum(h2hSummary?.awayWins,0))/h2n,-1,1):0,
+    balance:clamp(1-rawGap*1.65-Math.abs(xg)*0.18,0,1),
+  };
+}
+function _applyAdaptive1X2WithParams(ppRaw,features,params){
+  const p=_clone1X2Params(params),f=features||{};
+  const dir=p.homeBias + p.wXG*safeNum(f.xg,0) + p.wForm*safeNum(f.form,0) + p.wSplit*safeNum(f.split,0) + p.wDefense*safeNum(f.defense,0) + p.wCorners*safeNum(f.corners,0) + p.wCards*safeNum(f.cards,0) + p.wH2H*safeNum(f.h2h,0);
+  const drawAdj=p.drawBias + p.drawBalance*safeNum(f.balance,0);
+  const eps=1e-9;
+  const sh=Math.log(Math.max(eps,safeNum(ppRaw?.pHome,1/3)))+dir;
+  const sd=Math.log(Math.max(eps,safeNum(ppRaw?.pDraw,1/3)))+drawAdj;
+  const sa=Math.log(Math.max(eps,safeNum(ppRaw?.pAway,1/3)))-dir;
+  const mx=Math.max(sh,sd,sa),eh=Math.exp(sh-mx),ed=Math.exp(sd-mx),ea=Math.exp(sa-mx),z=eh+ed+ea||1;
+  return {pHome:eh/z,pDraw:ed/z,pAway:ea/z,dirScore:dir,drawAdj};
+}
+function applyAdaptive1X2(ppRaw,hXG,aXG,hS,aS,leagueId,h2hSummary=null){
+  const features=_adaptive1X2Features(hXG,aXG,hS,aS,h2hSummary,ppRaw);
+  const eff=_effectiveAdaptive1X2Params(leagueId);
+  const adj=_applyAdaptive1X2WithParams(ppRaw,features,eff.params);
+  const pp={...ppRaw,pHome:adj.pHome,pDraw:adj.pDraw,pAway:adj.pAway};
+  return {pp,features,params:eff.params,source:eff.source,leagueBlend:eff.leagueBlend,dirScore:adj.dirScore,drawAdj:adj.drawAdj};
+}
+function _oneXTwoOutcome(actual){
+  if(actual==='1'||actual==='X'||actual==='2') return actual;
+  const p=String(actual||'').split('-'); if(p.length<2) return null;
+  const h=parseInt(p[0]),a=parseInt(p[1]); if(!Number.isFinite(h)||!Number.isFinite(a)) return null;
+  return h>a?'1':a>h?'2':'X';
+}
+function _oneXTwoMetrics(rows,params){
+  if(!rows?.length) return {n:0,brier:null,logLoss:null,accuracy:null,biasHome:null,biasDraw:null,biasAway:null};
+  let bs=0,ll=0,hit=0,bh=0,bd=0,ba=0,n=0;
+  rows.forEach(r=>{const y=_oneXTwoOutcome(r.outcome||r.actual);if(!y||!r.rawPP||!r.features)return;const q=_applyAdaptive1X2WithParams(r.rawPP,r.features,params);const yh=y==='1'?1:0,yd=y==='X'?1:0,ya=y==='2'?1:0;bs+=((q.pHome-yh)**2+(q.pDraw-yd)**2+(q.pAway-ya)**2)/3;ll+=-Math.log(Math.max(1e-9,y==='1'?q.pHome:y==='X'?q.pDraw:q.pAway));bh+=q.pHome-yh;bd+=q.pDraw-yd;ba+=q.pAway-ya;const pred=q.pHome>=q.pDraw&&q.pHome>=q.pAway?'1':q.pAway>=q.pDraw?'2':'X';if(pred===y)hit++;n++;});
+  return n?{n,brier:bs/n,logLoss:ll/n,accuracy:hit/n,biasHome:bh/n,biasDraw:bd/n,biasAway:ba/n}:{n:0,brier:null,logLoss:null,accuracy:null,biasHome:null,biasDraw:null,biasAway:null};
+}
+function _fingerprint1X2(rows){
+  const str=(rows||[]).map(r=>`${r.fixtureId||''}:${_oneXTwoOutcome(r.outcome||r.actual)||''}`).sort().join('|');
+  let h=2166136261; for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);} return String(h>>>0);
+}
+function _trainAdaptive1X2(rows,currentParams){
+  const valid=(rows||[]).filter(r=>r?.rawPP&&r?.features&&_oneXTwoOutcome(r.outcome||r.actual));
+  if(valid.length<ADAPTIVE_1X2_MIN_GLOBAL) return {ready:false,n:valid.length};
+  const sorted=[...valid].sort((a,b)=>String(a.date||a.fixtureId||'').localeCompare(String(b.date||b.fixtureId||'')));
+  let val=sorted.filter(r=>Number(r.fixtureId||0)%5===0),train=sorted.filter(r=>Number(r.fixtureId||0)%5!==0);
+  if(val.length<4){const vn=Math.max(4,Math.ceil(sorted.length*.20));val=sorted.slice(-vn);train=sorted.slice(0,-vn);}
+  if(train.length<12){train=sorted;val=sorted;}
+  let p=_clone1X2Params(currentParams); const keys=['homeBias','wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H','drawBias','drawBalance'];
+  const featKey={wXG:'xg',wForm:'form',wSplit:'split',wDefense:'defense',wCorners:'corners',wCards:'cards',wH2H:'h2h'};
+  const lr=0.035,epochs=90,l2=0.035;
+  for(let ep=0;ep<epochs;ep++){
+    const g=Object.fromEntries(keys.map(k=>[k,0])); let n=0;
+    train.forEach(r=>{const y=_oneXTwoOutcome(r.outcome||r.actual),q=_applyAdaptive1X2WithParams(r.rawPP,r.features,p);const yh=y==='1'?1:0,yd=y==='X'?1:0,ya=y==='2'?1:0;const eDir=(q.pHome-yh)-(q.pAway-ya),eD=q.pDraw-yd;g.homeBias+=eDir;['wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H'].forEach(k=>g[k]+=eDir*safeNum(r.features?.[featKey[k]],0));g.drawBias+=eD;g.drawBalance+=eD*safeNum(r.features?.balance,0);n++;});
+    if(!n) break;
+    keys.forEach(k=>{const grad=g[k]/n + l2*(p[k]-ADAPTIVE_1X2_DEFAULT[k]);p[k]-=lr*grad;const b=ADAPTIVE_1X2_BOUNDS[k];p[k]=clamp(p[k],b[0],b[1]);});
+  }
+  const oldM=_oneXTwoMetrics(val,currentParams),candidateM=_oneXTwoMetrics(val,p);
+  const blend=valid.length<50?0.15:valid.length<100?0.25:0.35;
+  const blended=_blend1X2Params(currentParams,p,blend),newM=_oneXTwoMetrics(val,blended);
+  const improves=(Number.isFinite(oldM.brier)&&Number.isFinite(newM.brier)) && ((newM.brier<oldM.brier-0.0005)||(newM.logLoss<oldM.logLoss-0.002)) && newM.logLoss<=oldM.logLoss*1.01;
+  return {ready:true,n:valid.length,trainN:train.length,valN:val.length,oldMetrics:oldM,candidateMetrics:candidateM,newMetrics:newM,candidate:p,newParams:blended,accepted:improves,blend};
+}
+function runAdaptive1X2Calibration(auditRecords){
+  const rows=(auditRecords||[]).filter(r=>r?.rawPP&&r?.features&&_oneXTwoOutcome(r.actual));
+  const st=_loadAdaptive1X2State(),summary={global:null,leagues:{},eligibleN:rows.length,applied:0};
+  if(rows.length<ADAPTIVE_1X2_MIN_GLOBAL){summary.global={ready:false,n:rows.length};return summary;}
+  const fp=_fingerprint1X2(rows),gcur=_clone1X2Params(st.global?.params);
+  if(st.global?.fingerprint===fp){summary.global={ready:true,n:rows.length,skipped:true,metrics:_oneXTwoMetrics(rows,gcur)};}
+  else{
+    const res=_trainAdaptive1X2(rows,gcur);summary.global=res;
+    if(res.accepted){st.global={params:res.newParams,n:rows.length,metrics:res.newMetrics,fingerprint:fp,updatedAt:Date.now()};summary.applied++;}else{st.global.n=rows.length;st.global.metrics=res.newMetrics||res.oldMetrics;st.global.fingerprint=fp;}
+  }
+  const groups={};rows.forEach(r=>{const k=String(r.leagueId||0);(groups[k]||(groups[k]=[])).push(r);});
+  Object.entries(groups).forEach(([lid,recs])=>{
+    if(recs.length<ADAPTIVE_1X2_MIN_LEAGUE){summary.leagues[lid]={ready:false,n:recs.length};return;}
+    const lfp=_fingerprint1X2(recs),old=st.leagues[lid],cur=_clone1X2Params(old?.params||st.global.params);
+    if(old?.fingerprint===lfp){summary.leagues[lid]={ready:true,n:recs.length,skipped:true,metrics:_oneXTwoMetrics(recs,cur)};return;}
+    const res=_trainAdaptive1X2(recs,cur);summary.leagues[lid]=res;
+    if(res.accepted){st.leagues[lid]={params:res.newParams,n:recs.length,metrics:res.newMetrics,fingerprint:lfp,updatedAt:Date.now()};summary.applied++;}
+    else st.leagues[lid]={...(old||{}),params:cur,n:recs.length,metrics:res.newMetrics||res.oldMetrics,fingerprint:lfp,updatedAt:Date.now()};
+  });
+  if(summary.applied>0) st.log.unshift({ts:Date.now(),n:rows.length,applied:summary.applied,global:summary.global?.accepted||false});
+  st.log=st.log.slice(0,50);_saveAdaptive1X2State();return summary;
+}
+function renderAdaptive1X2Calibration(summary){
+  if(!summary) return '';
+  const g=summary.global||{},m=g.newMetrics||g.metrics||g.oldMetrics||{},ready=g.ready!==false&&safeNum(g.n,0)>=ADAPTIVE_1X2_MIN_GLOBAL;
+  const pct=v=>Number.isFinite(v)?(v*100).toFixed(1)+'%':'N/A',num=v=>Number.isFinite(v)?v.toFixed(4):'N/A';
+  const state=!ready?'WAITING':g.skipped?'UNCHANGED':g.accepted?'IMPROVED':'NO VALIDATED IMPROVEMENT';
+  const col=!ready?'var(--text-muted)':g.accepted?'var(--accent-green)':g.skipped?'var(--accent-blue)':'var(--accent-gold)';
+  const bias=`H ${pct(m.biasHome)} · X ${pct(m.biasDraw)} · A ${pct(m.biasAway)}`;
+  return `<div style="margin-bottom:12px;background:rgba(37,99,235,.05);border:1px solid rgba(37,99,235,.18);border-radius:8px;padding:12px 14px;">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;"><b style="color:var(--accent-blue);">🧠 Adaptive 1X2 Calibration v6.2</b><span style="font-family:var(--font-mono);font-size:.68rem;color:${col};font-weight:800;">${state}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-top:9px;font-size:.68rem;"><div>Samples<br><b>${safeNum(g.n,summary.eligibleN||0)}</b></div><div>Brier<br><b>${num(m.brier)}</b></div><div>Log Loss<br><b>${num(m.logLoss)}</b></div><div>Argmax accuracy<br><b>${pct(m.accuracy)}</b></div></div>
+    <div style="margin-top:7px;font-size:.64rem;color:var(--text-muted);">Probability bias (Predicted − Actual): ${bias}. Min global n=${ADAPTIVE_1X2_MIN_GLOBAL}, league n=${ADAPTIVE_1X2_MIN_LEAGUE}. Updates use hold-out validation + shrinkage; repeated Audit on the same fixtures does not retrain.</div>
+  </div>`;
+}
+window.getAdaptive1X2State=()=>_loadAdaptive1X2State();
+
+// ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
-function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
+function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null){
   // hXG/aXG έχουν ήδη βαθμονομηθεί με lp.mult πριν φτάσουν εδώ.
-  // ΜΗΝ εφαρμόζεις δεύτερη φορά τον league multiplier.
+  // Raw Poisson/Dixon-Coles = prior. Adaptive 1X2 = probability calibration layer.
   const hL=clamp(hXG,0.15,4.0),aL=clamp(aXG,0.15,4.0);
-  const pp=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
-  let outPick='X';
-  if(pp.pHome-pp.pAway>0.15&&xgDiff>lp.xgDiff)outPick='1';
-  else if(pp.pAway-pp.pHome>0.15&&xgDiff<-lp.xgDiff)outPick='2';
+  const ppRaw=getPoissonProbabilities(hL,aL);
+  const oneXTwo=applyAdaptive1X2(ppRaw,hXG,aXG,hS,aS,leagueId,h2hSummary);
+  const pp=oneXTwo.pp;const xgDiff=hXG-aXG;
+  // Full 1/X/2 argmax — το Χ είναι πλέον πραγματικό outcome του calibration και όχι fallback.
+  const outPick=[['1',pp.pHome],['X',pp.pDraw],['2',pp.pAway]].sort((x,y)=>y[1]-x[1])[0][0];
   
   // --- ASIAN HANDICAP (-1.5) CALCULATION ---
   let pAH_Home = 0, pAH_Away = 0;
@@ -2023,7 +2187,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
   return{omegaPick,reason,pickScore,outPick,
     hG:pp.bestScore.h,aG:pp.bestScore.a,
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
-    hExp:hL,aExp:aL,exactConf,xgDiff,pp,
+    hExp:hL,aExp:aL,exactConf,xgDiff,pp,ppRaw,oneXTwo,
     cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL,
     offside};
 }
@@ -2134,7 +2298,7 @@ async function analyzeMatchSafe(m,index,total){
     const aXGfinal = aInjAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
 
-    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id);
+    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,h2hSummary);
 
     // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
@@ -2176,7 +2340,7 @@ async function analyzeMatchSafe(m,index,total){
       htAnalysis,
       lineupData,
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
-      omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
+      omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,ppRaw:result.ppRaw,oneXTwo:result.oneXTwo,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,
       hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,
       hS,aS,h2h:h2hSummary,
@@ -2444,7 +2608,7 @@ function applySubstitution(d, newLineupData) {
   const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
   const tXGfinal = hXGfinal + aXGfinal;
   const btts = Math.min(hXGfinal, aXGfinal);
-  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
+  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null);
   const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
 
   // Παρακολούθηση changed fields (για flash)
@@ -2462,7 +2626,7 @@ function applySubstitution(d, newLineupData) {
     exact: `${result.hG}-${result.aG}`, exact2: `${result.hG2}-${result.aG2}`,
     exactConf: result.exactConf, omegaPick: result.omegaPick,
     strength: result.pickScore, reason: result.reason,
-    hExp: result.hExp, aExp: result.aExp, pp: result.pp, offside: result.offside,
+    hExp: result.hExp, aExp: result.aExp, pp: result.pp, ppRaw:result.ppRaw, oneXTwo:result.oneXTwo, offside: result.offside,
     lambdaTotal: result.lambdaTotal, cornerConf: result.cornerConf, expCor: result.expCor,
     lastSubEvents: subEvents,   // για accordion display
     subChanged: changed,        // για flash animation
@@ -2927,7 +3091,7 @@ async function _liveTrackerTick(){
           baseRec={
             fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,
             hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS,
-            pp:res2.pp,m:{fixture:{status:{short:lf.fixture.status.short}}}
+            pp:res2.pp,ppRaw:res2.ppRaw,oneXTwo:res2.oneXTwo,m:{fixture:{status:{short:lf.fixture.status.short}}}
           };
           baselineSource='LIVE-START SYNTHETIC';
         }catch{return null;}
@@ -3201,11 +3365,11 @@ window.fetchAllLineups = async function() {
         const lp = getLeagueParams(d.leagueId);
         const hA = applyLineupAdjustment(d.hXGbase||d.hXGfinal, d.hPlayers, nl.home, []);
         const aA = applyLineupAdjustment(d.aXGbase||d.aXGfinal, d.aPlayers, nl.away, []);
-        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId);
+        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId, d.h2h||null);
         Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
           outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
           exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
-          hExp:res.hExp,aExp:res.aExp,pp:res.pp,offside:res.offside});
+          hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,offside:res.offside});
         confirmed++;
       } else { unavailable++; }
     }catch(_){ unavailable++; }
@@ -3234,7 +3398,7 @@ window.fetchLineupForMatch = async function(fixId) {
     const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
     const btts = Math.min(hXGfinal, aXGfinal);
-    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
+    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null);
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
     const cardCtx = {xgDiff: result.xgDiff, leagueId: d.leagueId};
     adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
@@ -5999,12 +6163,18 @@ window.runCustomAudit = async function(autoMode = false) {
       else if(pick.includes('AH'))                                    correct = isHit1X2;
 
       calibRecs.push({
-        leagueId:  p.leagueId,
-        predicted: pick,
-        actual:    aExact,
-        tXG:       p.tXG   || 2.5,
-        xgDiff:    p.xgDiff || 0,
-        isBomb:    !!(p.isBomb),
+        fixtureId: p.fixtureId,
+        date:       p.date,
+        leagueId:   p.leagueId,
+        predicted:  pick,
+        actual:     aExact,
+        outcome:    aOut,
+        tXG:        p.tXG   || 2.5,
+        xgDiff:     p.xgDiff || 0,
+        // v6.2 Adaptive 1X2 learns from the RAW prior, never from already-calibrated probabilities.
+        rawPP:      p.rawPP || null,
+        features:   p.oneXTwoFeatures || null,
+        isBomb:     !!(p.isBomb),
         correct,
       });
     }
@@ -6160,6 +6330,11 @@ function saveToVault(data){
         omegaPick:    d.omegaPick || 'ΧΩΡΙΣ ΣΥΣΤΑΣΗ',
         tXG:          d.tXG   || 0,
         xgDiff:       d.xgDiff || 0,
+        // v6.2: immutable pre-match 1X2 calibration snapshot (raw prior + features + calibrated probabilities)
+        rawPP:        d.ppRaw ? {pHome:safeNum(d.ppRaw.pHome,0),pDraw:safeNum(d.ppRaw.pDraw,0),pAway:safeNum(d.ppRaw.pAway,0)} : null,
+        oneXTwoFeatures: d.oneXTwo?.features ? {...d.oneXTwo.features} : null,
+        calibratedPP: d.pp ? {pHome:safeNum(d.pp.pHome,0),pDraw:safeNum(d.pp.pDraw,0),pAway:safeNum(d.pp.pAway,0)} : null,
+        oneXTwoSource: d.oneXTwo?.source || null,
         strength:     d.strength || 0,
         isBomb:       !!(d.isBomb),
         hasPick:      !!(d.omegaPick && !d.omegaPick.includes('ΧΩΡΙΣ') && d.strength >= 70),
@@ -6169,7 +6344,7 @@ function saveToVault(data){
     try{_seedLiveBaselinesFromScan(data);}catch{}
   }catch(e){}
 }
-window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
+window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);localStorage.removeItem(LS_ADAPTIVE_1X2);_adaptive1X2State=null;showOk("Vault & Adaptive 1X2 calibration purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter() {
   const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
   const sel = document.getElementById('auditLeague');
@@ -7135,7 +7310,7 @@ function renderStabilitySignals(rec) {
 // ================================================================
 
 const CALIB_TARGETS = {
-  outcomes: 0.75,
+  // 1X2 is calibrated by Adaptive 1X2 v6.2 (Brier/Log Loss), not the legacy xgDiff hit-rate grid.
   btts:     0.80,
   over25:   0.75,
   over35:   0.75,
@@ -7236,7 +7411,6 @@ function gridSearchLeague(records, leagueId) {
   // 2. Δοκιμάζουμε thresholds σε ΟΛΑ τα settled ματς — ακόμα και αυτά
   // που ήταν "ΧΩΡΙΣ ΣΥΣΤΑΣΗ". Αν αλλάξει το όριο, μπορεί να πάρουν σήμα.
   const byMarket = {
-    outcomes: settledRecords,
     over25:   settledRecords,
     over35:   settledRecords,
     btts:     settledRecords,
@@ -7244,7 +7418,6 @@ function gridSearchLeague(records, leagueId) {
   };
 
   const marketToParam = {
-    outcomes: 'xgDiff',
     over25:   'minXGO25',
     over35:   'minXGO35',
     btts:     'minBTTS',
@@ -7368,6 +7541,14 @@ window.runAutoCalibration = function(auditRecords) {
     return;
   }
 
+  // v6.2: full probabilistic 1/X/2 calibration (Brier + Log Loss + hold-out validation).
+  const adaptive1X2Summary = runAdaptive1X2Calibration(auditRecords);
+  const adaptive1X2Html = renderAdaptive1X2Calibration(adaptive1X2Summary);
+  // Αν το probabilistic 1X2 βελτιώθηκε, εφαρμόζεται αμέσως στο τρέχον scan χωρίς νέο API call.
+  if(adaptive1X2Summary?.applied>0 && window.scannedMatchesData?.length){
+    try{ window.resimulateMatches(); saveToVault(window.scannedMatchesData); }catch(e){ console.warn('[APEX] Adaptive 1X2 re-simulate',e); }
+  }
+
   // Group by league
   const byLeague = {};
   auditRecords.forEach(r => {
@@ -7445,13 +7626,14 @@ window.runAutoCalibration = function(auditRecords) {
         <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:34px;font-size:0.8rem;">✅ Εφαρμογή & Re-Simulate</button>
       </div>`
     : `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);margin-bottom:14px;">
-        ✅ <strong>Το μοντέλο είναι άριστα βαθμονομημένο!</strong> Όλα τα πρωταθλήματα πετυχαίνουν τους στόχους ή δεν επιδέχονται περαιτέρω βελτίωση.
+        ✅ <strong>Δεν βρέθηκαν νέες validated αλλαγές στο legacy grid.</strong> Το Adaptive 1X2 εμφανίζεται ξεχωριστά παραπάνω και εφαρμόζει αλλαγές μόνο όταν βελτιώνουν hold-out Brier/Log Loss.
       </div>`;
 
   el.innerHTML = `
+    ${adaptive1X2Html}
     ${headerHtml}
     ${rows}
-    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Grid: ${CALIB_GRID_N} τιμές/παράμετρο · Min samples: ${CALIB_MIN_N} · Pure backtest χωρίς API calls</div>`;
+    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Adaptive 1X2: min global ${ADAPTIVE_1X2_MIN_GLOBAL} / league ${ADAPTIVE_1X2_MIN_LEAGUE} · Legacy grid: ${CALIB_GRID_N} τιμές/παράμετρο για totals/BTTS/corners · Pure backtest χωρίς API calls</div>`;
 };
 
 function renderCalibLog() {
@@ -7502,7 +7684,7 @@ window.resimulateMatches=function(){
     const hXGfinal=hXG*hFactor, aXGfinal=aXG*aFactor;
     const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
     const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
-    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId);
+    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId,d.h2h||null);
     const htAnalysis=computeHTAnalysis(res.hExp,res.aExp,lp);
     Object.assign(d,{
       tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
@@ -7512,7 +7694,7 @@ window.resimulateMatches=function(){
       outPick:res.outPick,xgDiff:res.xgDiff,
       exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
       omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
-      hExp:res.hExp,aExp:res.aExp,pp:res.pp,offside:res.offside,
+      hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,offside:res.offside,
       lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor
     });
     // Re-adjust card probabilities με νέο xgDiff
