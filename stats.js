@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.6 — MASTER ENGINE · PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + PROGRAM MAP + FAST CORE SCAN + UNIFIED 1X2 VERIFICATION + 60s LIFECYCLE REFRESH + AUTO-CLEAR + CYPRUS
+// APEX OMEGA v6.7 — MASTER ENGINE · CONTINUOUS 1X2 LEARNING + WALK-FORWARD VALIDATION + LEARNING ARCHIVE + PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + FAST CORE SCAN
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -183,6 +183,100 @@ const LIVE_LEARN_MAX_MATCHES  = 500;
 const LIVE_LEARN_DEFAULT_W    = {15:0.30,30:0.40,45:0.50,60:0.65,75:0.80};
 let liveLearningState         = null;
 
+
+// ── v6.7 Continuous 1X2 Learning Archive ───────────────────────────────────
+// Keeps compact, frozen pre-match snapshots together with settled outcomes.
+// This allows future Audit windows to recall old settled predictions without
+// re-analyzing those matches or contaminating training with post-match data.
+const LS_LEARNING_ARCHIVE = 'omega_learning_archive_v6.7';
+const LS_CONTINUOUS_META   = 'omega_continuous_learning_meta_v6.7';
+const LEARNING_ARCHIVE_MAX = 3500;
+const CONTINUOUS_DEFAULT_WINDOW_DAYS = 180;
+let _continuousLearnTimer=null;
+
+function _loadLearningArchive(){
+  try{const a=JSON.parse(localStorage.getItem(LS_LEARNING_ARCHIVE)||'[]');return Array.isArray(a)?a:[];}catch{return [];}
+}
+function _saveLearningArchive(rows){
+  try{
+    const arr=[...(rows||[])].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,LEARNING_ARCHIVE_MAX);
+    localStorage.setItem(LS_LEARNING_ARCHIVE,JSON.stringify(arr));
+  }catch(e){console.warn('[APEX] learning archive save failed',e?.message||e);}
+}
+function _loadContinuousMeta(){
+  let m={enabled:true,windowDays:CONTINUOUS_DEFAULT_WINDOW_DAYS,lastStart:null,lastEnd:null,lastLeague:'ALL',lastLearnAt:0,lastN:0,lastApplied:0};
+  try{const x=JSON.parse(localStorage.getItem(LS_CONTINUOUS_META)||'null');if(x&&typeof x==='object')m={...m,...x};}catch{}
+  return m;
+}
+function _saveContinuousMeta(m){try{localStorage.setItem(LS_CONTINUOUS_META,JSON.stringify(m));}catch{}}
+function _dateDaysInclusive(s,e){
+  const a=Date.parse(`${s}T00:00:00Z`),b=Date.parse(`${e}T00:00:00Z`);
+  return Number.isFinite(a)&&Number.isFinite(b)?Math.max(1,Math.round((b-a)/86400000)+1):CONTINUOUS_DEFAULT_WINDOW_DAYS;
+}
+function _rememberLearningWindow(s,e,league='ALL'){
+  if(!s||!e)return;const m=_loadContinuousMeta();m.windowDays=_dateDaysInclusive(s,e);m.lastStart=s;m.lastEnd=e;m.lastLeague=league||'ALL';_saveContinuousMeta(m);updateLearningArchiveBadge();
+}
+function _compactArchivePrediction(p,fix){
+  if(!p||!fix?.fixture?.id)return null;
+  const ah=safeNum(fix.goals?.home,0),aa=safeNum(fix.goals?.away,0),outcome=ah>aa?'1':aa>ah?'2':'X';
+  const v=p.verification||null;
+  return {
+    fixtureId:Number(p.fixtureId||p.fixId||fix.fixture.id),date:p.date||p.m?.fixture?.date||fix.fixture.date,
+    leagueId:Number(p.leagueId||p.m?.league?.id||fix.league?.id||0),league:p.league||p.lg||fix.league?.name||'',
+    homeTeam:p.homeTeam||p.ht||fix.teams?.home?.name||'',awayTeam:p.awayTeam||p.at||fix.teams?.away?.name||'',
+    rawPP:p.rawPP||p.ppRaw||null,features:p.oneXTwoFeatures||p.oneXTwo?.features||null,calibratedPP:p.calibratedPP||p.pp||null,
+    verificationLeader:p.verificationLeader||v?.leader||p.rawOutPick||null,verificationSignal:p.verificationSignal||v?.signal||null,
+    verificationScore:safeNum(p.verificationScore??v?.score,0),verificationStatus:p.verificationStatus||v?.status||'NO_SIGNAL',
+    verification:v?{leader:v.leader||null,signal:v.signal||null,score:safeNum(v.score,0),status:v.status||'NO_SIGNAL',gapPP:safeNum(v.gapPP,0),xgDiff:safeNum(v.xgDiff,0),components:v.components||null,policy:v.policy||null}:null,
+    tXG:safeNum(p.tXG,0),xgDiff:safeNum(p.xgDiff,0),omegaPick:p.omegaPick||'',strength:safeNum(p.strength,0),hasPick:!!p.hasPick,
+    actual:{home:ah,away:aa,outcome,status:String(fix.fixture?.status?.short||'FT'),date:fix.fixture?.date||p.date||null},settledAt:Date.now()
+  };
+}
+function _archiveSettledBatch(pairs){
+  if(!pairs?.length)return {added:0,total:_loadLearningArchive().length};
+  const old=_loadLearningArchive(),map=new Map(old.map(x=>[String(x.fixtureId),x]));let added=0;
+  for(const pair of pairs){const a=_compactArchivePrediction(pair?.p,pair?.fix);if(!a)continue;const k=String(a.fixtureId);if(!map.has(k))added++;map.set(k,{...(map.get(k)||{}),...a});}
+  const rows=[...map.values()];_saveLearningArchive(rows);updateLearningArchiveBadge();return {added,total:Math.min(rows.length,LEARNING_ARCHIVE_MAX)};
+}
+function _archiveToVaultRecord(a){
+  if(!a?.fixtureId)return null;const ac=a.actual||{};
+  return {
+    fixtureId:a.fixtureId,date:a.date,leagueId:a.leagueId,league:a.league,homeTeam:a.homeTeam,awayTeam:a.awayTeam,
+    rawPP:a.rawPP||null,oneXTwoFeatures:a.features||null,calibratedPP:a.calibratedPP||null,
+    verificationLeader:a.verificationLeader||a.verification?.leader||null,verificationSignal:a.verificationSignal||a.verification?.signal||null,
+    verificationScore:safeNum(a.verificationScore??a.verification?.score,0),verificationStatus:a.verificationStatus||a.verification?.status||'NO_SIGNAL',verification:a.verification||null,
+    tXG:safeNum(a.tXG,0),xgDiff:safeNum(a.xgDiff,0),omegaPick:a.omegaPick||'',strength:safeNum(a.strength,0),hasPick:!!a.hasPick,
+    _archivedFinal:{fixture:{id:a.fixtureId,date:ac.date||a.date,status:{short:ac.status||'FT'}},league:{id:a.leagueId||0,name:a.league||''},teams:{home:{name:a.homeTeam||''},away:{name:a.awayTeam||''}},goals:{home:safeNum(ac.home,0),away:safeNum(ac.away,0)}}
+  };
+}
+function _combinedLearningStore(){
+  let vault=[];try{vault=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');if(!Array.isArray(vault))vault=[];}catch{}
+  const archive=_loadLearningArchive(),map=new Map();
+  archive.forEach(a=>{const r=_archiveToVaultRecord(a);if(r)map.set(String(r.fixtureId),r);});
+  vault.forEach(v=>{const k=String(v.fixtureId);const old=map.get(k);map.set(k,{...(old||{}),...v,_archivedFinal:old?._archivedFinal||v._archivedFinal});});
+  return [...map.values()];
+}
+function updateLearningArchiveBadge(){
+  const el=document.getElementById('learningArchiveBadge');if(!el)return;const a=_loadLearningArchive(),m=_loadContinuousMeta();
+  const last=m.lastLearnAt?new Date(m.lastLearnAt).toLocaleString('el-GR',{timeZone:'Europe/Athens',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
+  el.textContent=`Archive ${a.length} · rolling ${m.windowDays}d · last learn ${last}`;
+}
+function _archiveRowsToCalib(rows){
+  return (rows||[]).map(a=>({fixtureId:a.fixtureId,date:a.date,leagueId:a.leagueId,predicted:a.omegaPick||'',actual:`${safeNum(a.actual?.home,0)}-${safeNum(a.actual?.away,0)}`,outcome:a.actual?.outcome||null,tXG:safeNum(a.tXG,0),xgDiff:safeNum(a.xgDiff,0),rawPP:a.rawPP||null,features:a.features||null,verification:a.verification||null,verificationLeader:a.verificationLeader||a.verification?.leader||null,verificationSignal:a.verificationSignal||a.verification?.signal||null,verificationScore:safeNum(a.verificationScore??a.verification?.score,0),correct:(a.verificationLeader||a.verification?.leader)===a.actual?.outcome})).filter(r=>r.outcome);
+}
+function _maybeBackgroundContinuousLearning(force=false){
+  const m=_loadContinuousMeta();if(!m.enabled)return null;const now=Date.now(),cooldown=15*60*1000,elapsed=now-safeNum(m.lastLearnAt,0);
+  if(!force&&elapsed<cooldown){if(!_continuousLearnTimer){_continuousLearnTimer=setTimeout(()=>{_continuousLearnTimer=null;_maybeBackgroundContinuousLearning(false);},cooldown-elapsed+1200);}return {throttled:true};}
+  const end=todayISO(),ed=Date.parse(`${end}T00:00:00Z`),sd=ed-(Math.max(20,safeNum(m.windowDays,CONTINUOUS_DEFAULT_WINDOW_DAYS))-1)*86400000,start=new Date(sd).toISOString().split('T')[0];
+  let rows=_loadLearningArchive().filter(a=>{const d=String(a.date||'').split('T')[0];return d>=start&&d<=end;});
+  const recs=_archiveRowsToCalib(rows);if(recs.length<ADAPTIVE_1X2_MIN_GLOBAL)return {n:recs.length,waiting:true};
+  const a=runAdaptive1X2Calibration(recs),v=runVerificationLearning(recs),pol=runVerificationPolicyLearning(recs);
+  m.lastLearnAt=now;m.lastN=recs.length;m.lastApplied=safeNum(a?.applied,0)+(v?.accepted?1:0)+safeNum(pol?.applied,0);_saveContinuousMeta(m);updateLearningArchiveBadge();
+  if(m.lastApplied>0&&window.scannedMatchesData?.length){try{window.resimulateMatches();saveToVault(window.scannedMatchesData);}catch(e){console.warn('[APEX] background re-simulate',e);}}
+  return {n:recs.length,adaptive:a,verification:v,policy:pol};
+}
+window.forceContinuousLearning=function(){const r=_maybeBackgroundContinuousLearning(true);if(r?.waiting)showErr(`Learning Archive: χρειάζονται τουλάχιστον ${ADAPTIVE_1X2_MIN_GLOBAL} frozen settled predictions (έχει ${r.n}).`);else if(r)showOk(`🧠 Continuous Learning: ${r.n} παλιά αποτελέσματα ανακλήθηκαν και επανεκτιμήθηκαν.`);updateLearningArchiveBadge();};
+
 // ── Dynamic My Leagues ────────────────────────────────────────────────────────
 // Επιστρέφει τα επιλεγμένα πρωταθλήματα του χρήστη.
 // Προτεραιότητα: localStorage > hardcoded default από leagues.js
@@ -334,8 +428,10 @@ async function runWorkerPool(items,workerCount,fn){
 async function preloadAuditFixtures(cands){
   const out=new Map(), wanted=new Map();
   (cands||[]).forEach(p=>wanted.set(String(p.fixtureId),p));
+  // 0) settled outcomes already recalled from the v6.7 Learning Archive
+  for(const [id,p] of wanted){if(p?._archivedFinal){out.set(id,p._archivedFinal);persistentFTCache.set(id,p._archivedFinal);}}
   // 1) instant hits from persistent FT cache
-  for(const [id] of wanted){const hit=persistentFTCache.get(id);if(hit)out.set(id,hit);}
+  for(const [id] of wanted){if(out.has(id))continue;const hit=persistentFTCache.get(id);if(hit)out.set(id,hit);}
   const unresolved=()=>[...wanted.keys()].filter(id=>!out.has(id));
   // 2) bulk-by-date: usually 1 API call settles many fixtures
   const dates=[...new Set(unresolved().map(id=>(wanted.get(id)?.date||'').split('T')[0]).filter(Boolean))];
@@ -432,9 +528,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.6';
+const APP_VERSION   = 'v6.7';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'PERFORMANCE + LIVE SEGREGATION';
+const BUILD_TIME    = 'CONTINUOUS 1X2 LEARNING + WALK-FORWARD';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -2110,6 +2206,7 @@ const ADAPTIVE_1X2_MIN_GLOBAL = 20;
 const ADAPTIVE_1X2_MIN_LEAGUE = 40;
 const ADAPTIVE_1X2_DEFAULT = Object.freeze({
   homeBias:   0.060,
+  awayBias:   0.000,
   wXG:        0.080,
   wForm:      0.060,
   wSplit:     0.050,
@@ -2121,7 +2218,7 @@ const ADAPTIVE_1X2_DEFAULT = Object.freeze({
   drawBalance:0.080,
 });
 const ADAPTIVE_1X2_BOUNDS = {
-  homeBias:[-0.30,0.30], wXG:[-0.50,0.50], wForm:[-0.35,0.35],
+  homeBias:[-0.30,0.30], awayBias:[-0.30,0.30], wXG:[-0.50,0.50], wForm:[-0.35,0.35],
   wSplit:[-0.35,0.35], wDefense:[-0.35,0.35], wCorners:[-0.20,0.20],
   wCards:[-0.15,0.15], wH2H:[-0.25,0.25], drawBias:[-0.40,0.40],
   drawBalance:[-0.20,0.55],
@@ -2171,12 +2268,12 @@ function _adaptive1X2Features(hXG,aXG,hS,aS,h2hSummary=null,ppRaw=null){
 }
 function _applyAdaptive1X2WithParams(ppRaw,features,params){
   const p=_clone1X2Params(params),f=features||{};
-  const dir=p.homeBias + p.wXG*safeNum(f.xg,0) + p.wForm*safeNum(f.form,0) + p.wSplit*safeNum(f.split,0) + p.wDefense*safeNum(f.defense,0) + p.wCorners*safeNum(f.corners,0) + p.wCards*safeNum(f.cards,0) + p.wH2H*safeNum(f.h2h,0);
+  const dir=p.wXG*safeNum(f.xg,0) + p.wForm*safeNum(f.form,0) + p.wSplit*safeNum(f.split,0) + p.wDefense*safeNum(f.defense,0) + p.wCorners*safeNum(f.corners,0) + p.wCards*safeNum(f.cards,0) + p.wH2H*safeNum(f.h2h,0);
   const drawAdj=p.drawBias + p.drawBalance*safeNum(f.balance,0);
   const eps=1e-9;
-  const sh=Math.log(Math.max(eps,safeNum(ppRaw?.pHome,1/3)))+dir;
+  const sh=Math.log(Math.max(eps,safeNum(ppRaw?.pHome,1/3)))+p.homeBias+dir;
   const sd=Math.log(Math.max(eps,safeNum(ppRaw?.pDraw,1/3)))+drawAdj;
-  const sa=Math.log(Math.max(eps,safeNum(ppRaw?.pAway,1/3)))-dir;
+  const sa=Math.log(Math.max(eps,safeNum(ppRaw?.pAway,1/3)))+p.awayBias-dir;
   const mx=Math.max(sh,sd,sa),eh=Math.exp(sh-mx),ed=Math.exp(sd-mx),ea=Math.exp(sa-mx),z=eh+ed+ea||1;
   return {pHome:eh/z,pDraw:ed/z,pAway:ea/z,dirScore:dir,drawAdj};
 }
@@ -2207,23 +2304,41 @@ function _trainAdaptive1X2(rows,currentParams){
   const valid=(rows||[]).filter(r=>r?.rawPP&&r?.features&&_oneXTwoOutcome(r.outcome||r.actual));
   if(valid.length<ADAPTIVE_1X2_MIN_GLOBAL) return {ready:false,n:valid.length};
   const sorted=[...valid].sort((a,b)=>String(a.date||a.fixtureId||'').localeCompare(String(b.date||b.fixtureId||'')));
-  let val=sorted.filter(r=>Number(r.fixtureId||0)%5===0),train=sorted.filter(r=>Number(r.fixtureId||0)%5!==0);
-  if(val.length<4){const vn=Math.max(4,Math.ceil(sorted.length*.20));val=sorted.slice(-vn);train=sorted.slice(0,-vn);}
-  if(train.length<12){train=sorted;val=sorted;}
-  let p=_clone1X2Params(currentParams); const keys=['homeBias','wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H','drawBias','drawBalance'];
+  const keys=['homeBias','awayBias','wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H','drawBias','drawBalance'];
   const featKey={wXG:'xg',wForm:'form',wSplit:'split',wDefense:'defense',wCorners:'corners',wCards:'cards',wH2H:'h2h'};
-  const lr=0.035,epochs=90,l2=0.035;
-  for(let ep=0;ep<epochs;ep++){
-    const g=Object.fromEntries(keys.map(k=>[k,0])); let n=0;
-    train.forEach(r=>{const y=_oneXTwoOutcome(r.outcome||r.actual),q=_applyAdaptive1X2WithParams(r.rawPP,r.features,p);const yh=y==='1'?1:0,yd=y==='X'?1:0,ya=y==='2'?1:0;const eDir=(q.pHome-yh)-(q.pAway-ya),eD=q.pDraw-yd;g.homeBias+=eDir;['wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H'].forEach(k=>g[k]+=eDir*safeNum(r.features?.[featKey[k]],0));g.drawBias+=eD;g.drawBalance+=eD*safeNum(r.features?.balance,0);n++;});
-    if(!n) break;
-    keys.forEach(k=>{const grad=g[k]/n + l2*(p[k]-ADAPTIVE_1X2_DEFAULT[k]);p[k]-=lr*grad;const b=ADAPTIVE_1X2_BOUNDS[k];p[k]=clamp(p[k],b[0],b[1]);});
+  const lr=0.030,epochs=120,l2=0.035,halfLifeDays=90;
+  const fit=(train,base)=>{
+    let p=_clone1X2Params(base);const newest=Math.max(...train.map(r=>Date.parse(r.date||'')||0),0);
+    const rowWeight=r=>{const t=Date.parse(r.date||'')||newest,age=Math.max(0,(newest-t)/86400000);return Math.max(.18,Math.exp(-Math.log(2)*age/halfLifeDays));};
+    for(let ep=0;ep<epochs;ep++){
+      const g=Object.fromEntries(keys.map(k=>[k,0]));let sw=0;
+      train.forEach(r=>{const y=_oneXTwoOutcome(r.outcome||r.actual),q=_applyAdaptive1X2WithParams(r.rawPP,r.features,p);const yh=y==='1'?1:0,yd=y==='X'?1:0,ya=y==='2'?1:0;const eH=q.pHome-yh,eD=q.pDraw-yd,eA=q.pAway-ya,eDir=eH-eA,w=rowWeight(r);g.homeBias+=w*eH;g.awayBias+=w*eA;['wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H'].forEach(k=>g[k]+=w*eDir*safeNum(r.features?.[featKey[k]],0));g.drawBias+=w*eD;g.drawBalance+=w*eD*safeNum(r.features?.balance,0);sw+=w;});
+      if(!sw)break;
+      keys.forEach(k=>{const grad=g[k]/sw+l2*(p[k]-ADAPTIVE_1X2_DEFAULT[k]);p[k]-=lr*grad;const b=ADAPTIVE_1X2_BOUNDS[k];p[k]=clamp(p[k],b[0],b[1]);});
+    }
+    return p;
+  };
+  // True expanding-window walk-forward validation. Every validation block is
+  // strictly later than the data used to fit its candidate parameters.
+  const splitFracs=sorted.length>=60?[0.55,0.70,0.85]:[0.75];
+  const folds=[];
+  for(const frac of splitFracs){
+    const cut=Math.max(12,Math.floor(sorted.length*frac)),nextFrac=frac+(sorted.length>=60?0.15:0.25),end=Math.min(sorted.length,Math.max(cut+5,Math.floor(sorted.length*nextFrac)));
+    const train=sorted.slice(0,cut),val=sorted.slice(cut,end);if(train.length<12||val.length<5)continue;
+    const cand=fit(train,currentParams),blend=valid.length<50?0.15:valid.length<100?0.25:valid.length<200?0.35:0.45,blended=_blend1X2Params(currentParams,cand,blend);
+    const oldM=_oneXTwoMetrics(val,currentParams),newM=_oneXTwoMetrics(val,blended);
+    folds.push({trainN:train.length,valN:val.length,oldMetrics:oldM,newMetrics:newM,brierGain:(oldM.brier??0)-(newM.brier??0),logLossGain:(oldM.logLoss??0)-(newM.logLoss??0),accDelta:(newM.accuracy??0)-(oldM.accuracy??0)});
   }
-  const oldM=_oneXTwoMetrics(val,currentParams),candidateM=_oneXTwoMetrics(val,p);
-  const blend=valid.length<50?0.15:valid.length<100?0.25:0.35;
-  const blended=_blend1X2Params(currentParams,p,blend),newM=_oneXTwoMetrics(val,blended);
-  const improves=(Number.isFinite(oldM.brier)&&Number.isFinite(newM.brier)) && ((newM.brier<oldM.brier-0.0005)||(newM.logLoss<oldM.logLoss-0.002)) && newM.logLoss<=oldM.logLoss*1.01;
-  return {ready:true,n:valid.length,trainN:train.length,valN:val.length,oldMetrics:oldM,candidateMetrics:candidateM,newMetrics:newM,candidate:p,newParams:blended,accepted:improves,blend};
+  if(!folds.length)return {ready:false,n:valid.length};
+  const mean=k=>folds.reduce((z,f)=>z+safeNum(f[k],0),0)/folds.length;
+  const positive=folds.filter(f=>f.brierGain>=0.0002||f.logLossGain>=0.001).length;
+  const walkBrierGain=mean('brierGain'),walkLLGain=mean('logLossGain'),walkAccDelta=mean('accDelta');
+  const accepted=(positive>=Math.ceil(folds.length/2))&&(walkBrierGain>=0.00035||walkLLGain>=0.0015)&&walkAccDelta>=-0.03;
+  // After temporal validation succeeds, fit on the complete selected history;
+  // the next unseen fixtures remain the real future test.
+  const fullCandidate=fit(sorted,currentParams),blend=valid.length<50?0.15:valid.length<100?0.25:valid.length<200?0.35:0.45,newParams=_blend1X2Params(currentParams,fullCandidate,blend);
+  const lastFold=folds[folds.length-1];
+  return {ready:true,n:valid.length,trainN:lastFold.trainN,valN:lastFold.valN,oldMetrics:lastFold.oldMetrics,newMetrics:lastFold.newMetrics,candidate:fullCandidate,newParams,accepted,blend,validation:'expanding walk-forward',folds,walkBrierGain,walkLLGain,walkAccDelta,halfLifeDays};
 }
 function runAdaptive1X2Calibration(auditRecords){
   const rows=(auditRecords||[]).filter(r=>r?.rawPP&&r?.features&&_oneXTwoOutcome(r.actual));
@@ -2255,9 +2370,9 @@ function renderAdaptive1X2Calibration(summary){
   const col=!ready?'var(--text-muted)':g.accepted?'var(--accent-green)':g.skipped?'var(--accent-blue)':'var(--accent-gold)';
   const bias=`H ${pct(m.biasHome)} · X ${pct(m.biasDraw)} · A ${pct(m.biasAway)}`;
   return `<div style="margin-bottom:12px;background:rgba(37,99,235,.05);border:1px solid rgba(37,99,235,.18);border-radius:8px;padding:12px 14px;">
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;"><b style="color:var(--accent-blue);">🧠 Adaptive 1X2 Calibration v6.2</b><span style="font-family:var(--font-mono);font-size:.68rem;color:${col};font-weight:800;">${state}</span></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;"><b style="color:var(--accent-blue);">🧠 Adaptive 1X2 Calibration v6.7</b><span style="font-family:var(--font-mono);font-size:.68rem;color:${col};font-weight:800;">${state}</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-top:9px;font-size:.68rem;"><div>Samples<br><b>${safeNum(g.n,summary.eligibleN||0)}</b></div><div>Brier<br><b>${num(m.brier)}</b></div><div>Log Loss<br><b>${num(m.logLoss)}</b></div><div>Argmax accuracy<br><b>${pct(m.accuracy)}</b></div></div>
-    <div style="margin-top:7px;font-size:.64rem;color:var(--text-muted);">Probability bias (Predicted − Actual): ${bias}. Min global n=${ADAPTIVE_1X2_MIN_GLOBAL}, league n=${ADAPTIVE_1X2_MIN_LEAGUE}. Updates use hold-out validation + shrinkage; repeated Audit on the same fixtures does not retrain.</div>
+    <div style="margin-top:7px;font-size:.64rem;color:var(--text-muted);">Probability bias (Predicted − Actual): ${bias}. Min global n=${ADAPTIVE_1X2_MIN_GLOBAL}, league n=${ADAPTIVE_1X2_MIN_LEAGUE}. Updates use chronological walk-forward hold-out + recency-weighted fitting. Hold-out validation + shrinkage; repeated Audit on the same fixtures does not retrain.</div>
   </div>`;
 }
 window.getAdaptive1X2State=()=>_loadAdaptive1X2State();
@@ -2380,6 +2495,24 @@ function _verificationMarketObject(marketNoVig){
   return {probs,leader:ordered[0].key,gapPP:(ordered[0].prob-ordered[1].prob)*100,books:safeNum(marketNoVig.books,0)};
 }
 
+
+// ── v6.7 Adaptive 1X2 Signal Policy ────────────────────────────────────────
+// Learns the minimum V-Score needed for a published 1/X/2 signal. It optimizes
+// precision while preserving sample volume and validates the threshold on the
+// newest chronological block before applying it.
+const LS_1X2_POLICY='omega_1x2_signal_policy_v6.7';
+const POLICY_DEFAULT_MIN=60;
+let _verificationPolicyState=null;
+function _defaultVerificationPolicyState(){return {version:1,global:{},leagues:{},fingerprint:'',updatedAt:null,log:[]};}
+function _loadVerificationPolicyState(){if(_verificationPolicyState)return _verificationPolicyState;try{const x=JSON.parse(localStorage.getItem(LS_1X2_POLICY)||'null');_verificationPolicyState=x&&typeof x==='object'?{..._defaultVerificationPolicyState(),...x}:_defaultVerificationPolicyState();}catch{_verificationPolicyState=_defaultVerificationPolicyState();}_verificationPolicyState.global=_verificationPolicyState.global||{};_verificationPolicyState.leagues=_verificationPolicyState.leagues||{};return _verificationPolicyState;}
+function _saveVerificationPolicyState(){try{localStorage.setItem(LS_1X2_POLICY,JSON.stringify(_loadVerificationPolicyState()));}catch{}}
+function _effectiveVerificationPolicy(leagueId,leader){
+  const st=_loadVerificationPolicyState(),l=st.leagues?.[String(leagueId)]||{},cands=[l?.[leader],l?.ALL,st.global?.[leader],st.global?.ALL].filter(Boolean);
+  const r=cands.find(x=>safeNum(x.n,0)>=safeNum(x.minRequired,0))||null;
+  const minScore=clamp(Math.round(safeNum(r?.threshold,POLICY_DEFAULT_MIN)),55,90);
+  return {minScore,strongScore:clamp(Math.max(70,minScore+8),70,92),verifiedScore:clamp(Math.max(80,minScore+18),80,96),source:r?.source||'DEFAULT',n:safeNum(r?.n,0),validation:r?.validation||null};
+}
+
 function compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary=null,ctx=null,marketNoVig=null){
   const ordered=_verificationLeader(pp),lead=ordered[0],second=ordered[1];
   const leader=lead.key,prob=lead.prob,gap=Math.max(0,lead.prob-second.prob),xgDiff=safeNum(hXG,0)-safeNum(aXG,0);
@@ -2425,17 +2558,19 @@ function compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary=null,ctx=nu
   const winGate=(leader==='1'||leader==='2')&&prob>=VERIFY_1X2.WIN_MIN_P&&gap>=VERIFY_1X2.WIN_MIN_GAP&&xgDir>=VERIFY_1X2.WIN_MIN_XG_DIR&&consistency.score>=45&&dq>=VERIFY_1X2.MIN_DQ;
   const drawGate=leader==='X'&&prob>=VERIFY_1X2.DRAW_MIN_P&&gap>=VERIFY_1X2.DRAW_MIN_GAP&&Math.abs(xgDiff)<=VERIFY_1X2.DRAW_MAX_ABS_XG&&consistency.score>=50&&dq>=VERIFY_1X2.MIN_DQ;
   const hardGate=winGate||drawGate;
+  const policy=_effectiveVerificationPolicy(leagueId,leader);
 
   let status='NO_SIGNAL',label='NO 1X2 SIGNAL',signal=null;
   if(hardConflict){status='CONFLICT';label='CONFLICT';}
-  else if(hardGate&&score>=VERIFY_1X2.VERIFIED_SCORE){status='VERIFIED';label='VERIFIED';signal=leader;}
-  else if(hardGate&&score>=VERIFY_1X2.STRONG_SCORE){status='STRONG';label='STRONG';signal=leader;}
-  else if(hardGate&&score>=VERIFY_1X2.MIN_SIGNAL_SCORE){status='LEAN';label='LEAN';signal=leader;}
+  else if(hardGate&&score>=policy.verifiedScore){status='VERIFIED';label='VERIFIED';signal=leader;}
+  else if(hardGate&&score>=policy.strongScore){status='STRONG';label='STRONG';signal=leader;}
+  else if(hardGate&&score>=policy.minScore){status='LEAN';label='LEAN';signal=leader;}
 
   const reasons=[];
   reasons.push(`P${leader} ${(prob*100).toFixed(1)}% · gap ${(gap*100).toFixed(1)}pp`);
   reasons.push(`xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · consistency ${consistency.score.toFixed(0)}/100`);
   reasons.push(`DQ ${dq}/100 · volatility −${volatilityPenalty}`);
+  reasons.push(`learned cutoff V≥${policy.minScore} · ${policy.source}`);
   if(market)reasons.push(`no-vig P${leader} ${(market.probs[leader]*100).toFixed(1)}% · Δ ${marketGapPP>=0?'+':''}${marketGapPP.toFixed(1)}pp${marketPenalty?` · penalty −${marketPenalty.toFixed(0)}`:''}`);
   if(conflictReason)reasons.push(conflictReason);
 
@@ -2444,7 +2579,7 @@ function compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary=null,ctx=nu
     signal,status,label,score,hardGate,conflict:hardConflict,conflictReason,
     xgDiff,xgDirection:xgDir,marketConflict,marketGapPP,marketPenalty,
     components:learningComponents,
-    learning:{active:learned.active,prob:learned.prob,n:learned.n},
+    learning:{active:learned.active,prob:learned.prob,n:learned.n},policy,
     consistencyRaw:consistency.raw,market,reasons,
   };
 }
@@ -2548,8 +2683,8 @@ function runVerificationLearning(auditRecords){
   if(rows.length<VERIFY_LEARN_MIN_N)return summary;
   const fp=_verifyLearnFingerprint(rows);if(st.fingerprint===fp&&st.model){summary.ready=true;summary.skipped=true;summary.newMetrics=st.metrics;return summary;}
   const sorted=[...rows].sort((a,b)=>String(a.date||a.fixtureId).localeCompare(String(b.date||b.fixtureId)));
-  let val=sorted.filter(r=>Number(r.fixtureId||0)%5===0),train=sorted.filter(r=>Number(r.fixtureId||0)%5!==0);
-  if(val.length<8){const vn=Math.max(8,Math.ceil(sorted.length*.20));val=sorted.slice(-vn);train=sorted.slice(0,-vn);}
+  const vn=Math.max(8,Math.min(Math.ceil(sorted.length*.22),Math.max(8,sorted.length-25)));
+  let train=sorted.slice(0,Math.max(0,sorted.length-vn)),val=sorted.slice(Math.max(0,sorted.length-vn));
   if(train.length<25){train=sorted;val=sorted;}
   const hitRate=train.reduce((z,r)=>z+(r.hit?1:0),0)/Math.max(train.length,1);
   let intercept=Math.log(clamp(hitRate,0.08,0.92)/(1-clamp(hitRate,0.08,0.92)));
@@ -2580,7 +2715,35 @@ function renderVerificationLearning(summary){
   const pct2=v=>Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'N/A';
   const state=summary.n<VERIFY_LEARN_MIN_N?'WAITING':summary.skipped?'UNCHANGED':summary.accepted?'VALIDATED & APPLIED':'NO HOLD-OUT IMPROVEMENT';
   const col=summary.accepted?'var(--accent-green)':summary.n<VERIFY_LEARN_MIN_N?'var(--text-muted)':'var(--accent-gold)';
-  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.6</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
+  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.7</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Chronological hold-out. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
+}
+
+
+function _policyEval(rows,threshold){const a=(rows||[]).filter(r=>safeNum(r.score,0)>=threshold),h=a.filter(r=>r.hit).length;return {n:a.length,h,acc:a.length?h/a.length:null,lb:a.length?_wilsonLower(h,a.length):0,coverage:rows?.length?a.length/rows.length:0};}
+function _optimizePolicyGroup(rows,minRequired,source){
+  const sorted=[...(rows||[])].sort((a,b)=>String(a.date||a.fixtureId||'').localeCompare(String(b.date||b.fixtureId||'')));if(sorted.length<minRequired)return {ready:false,n:sorted.length,minRequired};
+  const vn=Math.max(8,Math.ceil(sorted.length*.25)),train=sorted.slice(0,-vn),val=sorted.slice(-vn);if(train.length<12)return {ready:false,n:sorted.length,minRequired};
+  let best=null;for(let t=55;t<=90;t+=5){const e=_policyEval(train,t);if(e.n<Math.max(8,Math.ceil(train.length*.12)))continue;const objective=e.lb+0.035*Math.sqrt(e.coverage);if(!best||objective>best.objective)best={threshold:t,...e,objective};}
+  if(!best)return {ready:false,n:sorted.length,minRequired};
+  const cand=_policyEval(val,best.threshold),base=_policyEval(val,POLICY_DEFAULT_MIN);const enough=cand.n>=Math.max(5,Math.ceil(val.length*.12));
+  const improved=enough&&Number.isFinite(cand.acc)&&((cand.lb>=base.lb+0.012)||(Number.isFinite(base.acc)&&cand.acc>=base.acc+0.03))&&cand.acc>=0.50;
+  return {ready:true,n:sorted.length,minRequired,threshold:best.threshold,train:best,val:cand,baseline:base,accepted:improved||best.threshold===POLICY_DEFAULT_MIN,source,validation:'latest 25%'};
+}
+function runVerificationPolicyLearning(auditRecords){
+  const rows=(auditRecords||[]).map(r=>{const leader=r.verificationLeader||r.verification?.leader||null,actual=r.outcome||_oneXTwoOutcome(r.actual),score=safeNum(r.verificationScore??r.verification?.score,NaN);if(!['1','X','2'].includes(leader)||!['1','X','2'].includes(actual)||!Number.isFinite(score))return null;return {fixtureId:r.fixtureId,date:r.date,leagueId:r.leagueId||0,leader,score,hit:leader===actual};}).filter(Boolean);
+  const st=_loadVerificationPolicyState(),summary={n:rows.length,global:{},leagues:{},applied:0,skipped:false};
+  const fp=_fingerprint1X2(rows);if(st.fingerprint===fp){summary.skipped=true;return summary;}
+  const apply=(bucket,key,res)=>{if(!res.ready)return;if(res.accepted){bucket[key]={threshold:res.threshold,n:res.n,minRequired:res.minRequired,source:res.source,validation:res.val,updatedAt:Date.now()};summary.applied++;}};
+  const gAll=_optimizePolicyGroup(rows,50,'GLOBAL ALL');summary.global.ALL=gAll;apply(st.global,'ALL',gAll);
+  for(const o of ['1','X','2']){const rr=rows.filter(r=>r.leader===o),res=_optimizePolicyGroup(rr,30,`GLOBAL ${o}`);summary.global[o]=res;apply(st.global,o,res);}
+  const groups={};rows.forEach(r=>(groups[String(r.leagueId)]||(groups[String(r.leagueId)]=[])).push(r));
+  for(const [lid,rr] of Object.entries(groups)){const dest=st.leagues[lid]||(st.leagues[lid]={});const lg={};const all=_optimizePolicyGroup(rr,35,`LEAGUE ${lid} ALL`);lg.ALL=all;apply(dest,'ALL',all);for(const o of ['1','X','2']){const res=_optimizePolicyGroup(rr.filter(r=>r.leader===o),24,`LEAGUE ${lid} ${o}`);lg[o]=res;apply(dest,o,res);}summary.leagues[lid]=lg;}
+  st.fingerprint=fp;st.updatedAt=Date.now();if(summary.applied){st.log=st.log||[];st.log.unshift({ts:Date.now(),n:rows.length,applied:summary.applied});st.log=st.log.slice(0,40);}_saveVerificationPolicyState();
+  return summary;
+}
+function renderVerificationPolicyLearning(summary){
+  if(!summary)return '';const st=_loadVerificationPolicyState(),g=st.global||{};const chip=o=>{const x=g[o];return x?`<span style="font-family:var(--font-mono);font-size:.67rem;padding:3px 7px;border:1px solid rgba(34,197,94,.22);border-radius:5px;color:var(--accent-green);">${o}: V≥${x.threshold} · n=${x.n}</span>`:'';};
+  return `<div style="margin-bottom:12px;background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-green);">🎯 Adaptive Signal Policy v6.7</b><span style="font-family:var(--font-mono);font-size:.66rem;">${summary.skipped?'unchanged dataset':summary.applied?`${summary.applied} validated updates`:'no new validated cutoff'}</span></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">${chip('ALL')}${chip('1')}${chip('X')}${chip('2')}</div><div style="font-size:.61rem;color:var(--text-muted);margin-top:7px;">Το minimum V-Score μαθαίνεται με chronological train/validation. Αν η ακρίβεια 1X2 είναι χαμηλή, το σύστημα αυξάνει το cutoff αντί να δημοσιεύει αδύναμα σημεία. League/outcome policy χρησιμοποιείται μόνο με επαρκές n.</div></div>`;
 }
 
 // ================================================================
@@ -3952,6 +4115,11 @@ window.syncLiveScores=async function(silent=false){
       }else kept.push(d);
     }
     if(removed.length){
+      try{
+        const vaultNow=JSON.parse(localStorage.getItem(LS_PREDS)||'[]'),vm=new Map((Array.isArray(vaultNow)?vaultNow:[]).map(x=>[String(x.fixtureId),x]));
+        const pairs=removed.map(d=>({p:vm.get(String(d.fixId))||d,fix:persistentFTCache.get(String(d.fixId))||compactFinishedFixture(freshMap.get(String(d.fixId))||d.m)})).filter(x=>x.fix);
+        const wr=_archiveSettledBatch(pairs);if(wr.added>0)setTimeout(()=>_maybeBackgroundContinuousLearning(false),1200);
+      }catch(e){console.warn('[APEX] auto learning archive',e);}
       window.scannedMatchesData=kept;
       removed.forEach(d=>document.getElementById(`progressive-card-${d.fixId}`)?.remove());
       rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();
@@ -6748,7 +6916,7 @@ function renderSummaryTable() {
 
 
 // ================================================================
-//  v6.6 PERFORMANCE INTELLIGENCE — all settled results → best league/settings
+//  v6.7 PERFORMANCE INTELLIGENCE + CONTINUOUS LEARNING — all settled results → best league/settings
 // ================================================================
 function _wilsonLower(h,n,z=1.96){
   if(!n)return 0;const p=h/n,z2=z*z,den=1+z2/n;
@@ -6804,7 +6972,7 @@ function renderPerformanceIntelligence(rows){
  * το date range από το vault και τρέχει αμέσως.
  */
 window.runCustomAudit = async function(autoMode = false) {
-  const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
+  const store = _combinedLearningStore();
 
   if(!store.length) {
     if(!autoMode) showErr('Δεν υπάρχουν δεδομένα στο vault. Τρέξτε scan πρώτα.');
@@ -6851,6 +7019,7 @@ window.runCustomAudit = async function(autoMode = false) {
   try {
 
     const lgFilter = document.getElementById('auditLeague')?.value || 'ALL';
+    _rememberLearningWindow(s,e,lgFilter);
 
     let cands = store.filter(x => {
       const d = (x.date || '').split('T')[0];
@@ -6874,7 +7043,7 @@ window.runCustomAudit = async function(autoMode = false) {
 
     // ── Φέρνουμε αποτελέσματα για κάθε fixture ────────────────
     const stats = { games:0, outHit:0, validOut:0, verT:0,verH:0,verVerifiedT:0,verVerifiedH:0,verStrongT:0,verStrongH:0,verLeanT:0,verLeanH:0, o25T:0, o25H:0, o35T:0, o35H:0, u25T:0, u25H:0, bttsT:0, bttsH:0, exHit:0, corT:0, corH:0, bombT:0, bombH:0, bombProfit:0 };
-    const rows = [], curveData = [], calibRecs = [];
+    const rows = [], curveData = [], calibRecs = [], archivePairs=[];
     let settled = 0;
 
     // v6.3 ULTRA AUDIT: cache first, then bulk-by-date, then only missing IDs.
@@ -6889,7 +7058,7 @@ window.runCustomAudit = async function(autoMode = false) {
       const fix = auditFixtureMap.get(String(p.fixtureId));
       if(!fix || !isFinished(fix?.fixture?.status?.short)) continue;
 
-      settled++;
+      settled++;archivePairs.push({p,fix});
       const ah = safeNum(fix.goals.home), aa = safeNum(fix.goals.away);
       const aTot = ah + aa, aExact = `${ah}-${aa}`, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
       stats.games++;
@@ -6969,6 +7138,8 @@ window.runCustomAudit = async function(autoMode = false) {
       });
     }
 
+    const archiveWrite=_archiveSettledBatch(archivePairs);
+
     if(!settled) {
       document.getElementById('auditSection').innerHTML =
         `<div class="quant-panel" style="text-align:center;color:var(--text-muted);padding:30px;">Οι αγώνες δεν έχουν ολοκληρωθεί ακόμα.</div>`;
@@ -7046,7 +7217,7 @@ window.runCustomAudit = async function(autoMode = false) {
     });
 
     const html = `<div class="quant-panel">
-      <div class="panel-title">📊 Αποτελέσματα Audit — ${settled} αγώνες · ${s} → ${e}</div>
+      <div class="panel-title">📊 Αποτελέσματα Audit + Recall — ${settled} αγώνες · ${s} → ${e} · archive +${archiveWrite.added}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px;">${cardsHtml}</div>
       <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;font-family:var(--font-cond);font-weight:700;">Καμπύλη xG → Over 2.5</div>
       ${buildMiniCurve(engineConfig.tXG_O25, curveData)}
@@ -7068,6 +7239,7 @@ window.runCustomAudit = async function(autoMode = false) {
       setProgress(95, 'Grid Search calibration…');
       window._lastAuditCalibRecs = calibRecs;
       window.runAutoCalibration(calibRecs);
+      try{const cm=_loadContinuousMeta();cm.lastLearnAt=Date.now();cm.lastN=calibRecs.length;_saveContinuousMeta(cm);updateLearningArchiveBadge();}catch{}
 
       // Εφαρμόζουμε αμέσως αν βρεθεί βελτίωση — πάντα, όχι μόνο σε autoMode
       if(window._pendingAdjustments) {
@@ -7093,7 +7265,7 @@ window.runCustomAudit = async function(autoMode = false) {
     const perfHtml=renderPerformanceIntelligence(rows);
     const auditEl=document.getElementById('auditSection');if(auditEl&&perfHtml)auditEl.insertAdjacentHTML('afterbegin',perfHtml);
 
-    showOk(`✅ Audit ολοκληρώθηκε — ${settled} αγώνες αξιολογήθηκαν.`);
+    showOk(`✅ Recall & Learn ολοκληρώθηκε — ${settled} settled αγώνες αξιολογήθηκαν · Learning Archive ${archiveWrite.total}.`);
 
   } catch(e) {
     showErr(e.message);
@@ -7137,7 +7309,7 @@ function saveToVault(data){
         verificationLeader: d.verification?.leader || d.rawOutPick || null,
         verificationScore:  safeNum(d.verification?.score,0),
         verificationStatus: d.verification?.status || 'NO_SIGNAL',
-        verification: d.verification ? {signal:d.verification.signal||null,leader:d.verification.leader||null,score:safeNum(d.verification.score,0),status:d.verification.status||'NO_SIGNAL',gapPP:safeNum(d.verification.gapPP,0),xgDiff:safeNum(d.verification.xgDiff,0),components:d.verification.components||null,marketGapPP:Number.isFinite(Number(d.verification.marketGapPP))?Number(d.verification.marketGapPP):null} : null,
+        verification: d.verification ? {signal:d.verification.signal||null,leader:d.verification.leader||null,score:safeNum(d.verification.score,0),status:d.verification.status||'NO_SIGNAL',gapPP:safeNum(d.verification.gapPP,0),xgDiff:safeNum(d.verification.xgDiff,0),components:d.verification.components||null,marketGapPP:Number.isFinite(Number(d.verification.marketGapPP))?Number(d.verification.marketGapPP):null,policy:d.verification.policy||null} : null,
         strength:     d.strength || 0,
         isBomb:       !!(d.isBomb),
         hasPick:      !!(d.omegaPick && !d.omegaPick.includes('ΧΩΡΙΣ') && d.strength >= 70),
@@ -7147,9 +7319,10 @@ function saveToVault(data){
     try{_seedLiveBaselinesFromScan(data);}catch{}
   }catch(e){}
 }
-window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);localStorage.removeItem(LS_ADAPTIVE_1X2);localStorage.removeItem(LS_VERIFY_1X2_LEARNING);_adaptive1X2State=null;_verifyLearningState=null;showOk("Vault, Adaptive 1X2 & Verification Learning purged.");updateAuditLeagueFilter();}};
+window.clearVault=function(){if(confirm("Purge Vault + Learning Archive + learned 1X2 models?")){localStorage.removeItem(LS_PREDS);localStorage.removeItem(LS_ADAPTIVE_1X2);localStorage.removeItem(LS_VERIFY_1X2_LEARNING);localStorage.removeItem(LS_LEARNING_ARCHIVE);localStorage.removeItem(LS_CONTINUOUS_META);localStorage.removeItem(LS_1X2_POLICY);_adaptive1X2State=null;_verifyLearningState=null;_verificationPolicyState=null;showOk("Vault, Learning Archive και learned 1X2 models διαγράφηκαν.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter() {
-  const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
+  const store = _combinedLearningStore();
+  updateLearningArchiveBadge();
   const sel = document.getElementById('auditLeague');
   if(!sel) return;
   const known = new Set(store.map(x => x.leagueId));
@@ -8350,8 +8523,10 @@ window.runAutoCalibration = function(auditRecords) {
   const adaptive1X2Html = renderAdaptive1X2Calibration(adaptive1X2Summary);
   const verificationLearningSummary = runVerificationLearning(auditRecords);
   const verificationLearningHtml = renderVerificationLearning(verificationLearningSummary);
+  const verificationPolicySummary = runVerificationPolicyLearning(auditRecords);
+  const verificationPolicyHtml = renderVerificationPolicyLearning(verificationPolicySummary);
   // Probabilistic calibration ή verification reliability εφαρμόζονται μόνο μετά από hold-out βελτίωση.
-  if((adaptive1X2Summary?.applied>0 || verificationLearningSummary?.accepted) && window.scannedMatchesData?.length){
+  if((adaptive1X2Summary?.applied>0 || verificationLearningSummary?.accepted || verificationPolicySummary?.applied>0) && window.scannedMatchesData?.length){
     try{ window.resimulateMatches(); saveToVault(window.scannedMatchesData); }catch(e){ console.warn('[APEX] 1X2 calibrated re-simulate',e); }
   }
 
@@ -8438,6 +8613,7 @@ window.runAutoCalibration = function(auditRecords) {
   el.innerHTML = `
     ${adaptive1X2Html}
     ${verificationLearningHtml}
+    ${verificationPolicyHtml}
     ${headerHtml}
     ${rows}
     <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Adaptive 1X2: min global ${ADAPTIVE_1X2_MIN_GLOBAL} / league ${ADAPTIVE_1X2_MIN_LEAGUE} · Verification learning min ${VERIFY_LEARN_MIN_N} · Legacy grid: ${CALIB_GRID_N} τιμές/παράμετρο για totals/BTTS/corners · Pure backtest χωρίς API calls</div>`;
@@ -8795,6 +8971,7 @@ window.addEventListener('DOMContentLoaded',()=>{
       try{_renderLiveLearningStatus();}catch{}
     }
   });
+  try{updateLearningArchiveBadge();setTimeout(()=>_maybeBackgroundContinuousLearning(false),3500);}catch{}
   const today=todayISO();const ss=document.getElementById('scanStart'),se=document.getElementById('scanEnd');if(ss)ss.value=today;if(se)se.value=today;
   const d15=new Date();d15.setDate(d15.getDate()-15);const as=document.getElementById('auditStart'),ae=document.getElementById('auditEnd');if(as)as.value=d15.toISOString().split('T')[0];if(ae)ae.value=today;
 });

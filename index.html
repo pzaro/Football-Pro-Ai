@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v6.6 — PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + PROGRAM MAP + FAST CORE SCAN · UNIFIED 1X2 VERIFICATION · 60s REFRESH · AUTO-CLEAR · CYPRUS + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING</title>
+  <title>APEX OMEGA v6.7 — CONTINUOUS 1X2 LEARNING · WALK-FORWARD VALIDATION · LEARNING ARCHIVE · PERFORMANCE INTELLIGENCE · LIVE SEGREGATION · FAST CORE SCAN</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -15,7 +15,7 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <div class="brand-logo">
       APEX<span>OMEGA</span>
-      <span class="version-tag" id="versionTag">v6.6</span>
+      <span class="version-tag" id="versionTag">v6.7</span>
     </div>
     <div id="lastUpdatedBadge" style="display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.58rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:3px 9px;white-space:nowrap;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
@@ -64,7 +64,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v6.6 · PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + FAST CORE + UNIFIED 1X2 + 60s REFRESH + AUTO-CLEAR + CYPRUS</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v6.7 · CONTINUOUS 1X2 LEARNING + WALK-FORWARD + ARCHIVE + PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + FAST CORE</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -93,7 +93,7 @@
       <div class="panel-title clickable" style="color:var(--purple);" onclick="togglePanel('programMapPanel','programMapArrow')">
         <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           🧭 Program Map — Τι κάνει κάθε τμήμα
-          <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">v6.6 · λειτουργικός χάρτης του APEX OMEGA</span>
+          <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">v6.7 · λειτουργικός χάρτης του APEX OMEGA</span>
         </span>
         <span id="programMapArrow" class="arrow">▼</span>
       </div>
@@ -155,10 +155,14 @@
               <tr><td><b>🏁 Post-Match Evolution</b></td><td>Συγκρίνει prediction με actual score και διαθέσιμα actual xG/corners/cards/offsides.</td><td>Finished fixture + actual fixture statistics.</td><td>Predicted → Actual dashboard και result badges.</td><td style="text-align:center;">⚡</td></tr>
               <tr><td><b>🔬 Model Accuracy Analysis</b></td><td>Μετρά MAE, Bias και correlation ανά metric με Data Quality Guard.</td><td>Predicted vs valid actual metrics.</td><td>Accuracy diagnostics ανά xG/corners/cards/offsides/goals.</td><td style="text-align:center;">⚡</td></tr>
               <tr><td><b>🗄️ Vault</b></td><td>Κρατά immutable pre-match snapshots για ιστορικό validation και learning.</td><td>Scan records, raw/calibrated probabilities, features, picks.</td><td>Dataset για Audit, calibration και settlement.</td><td style="text-align:center;">⚡</td></tr>
+              <tr><td><b>🧠 Learning Archive</b></td><td>Μεταφέρει κάθε settled πρόβλεψη σε συμπαγές μόνιμο ιστορικό, ώστε παλιά αποτελέσματα να ανακαλούνται ξανά σε επόμενο επιλεγμένο διάστημα χωρίς νέο pre-match scan.</td><td>Frozen raw/calibrated P(1/X/2), features, V-Score + τελικό σκορ.</td><td>Μακροχρόνιο training set έως 3.500 settled fixtures.</td><td style="text-align:center;">⚡ + 🧠</td></tr>
+              <tr><td><b>↻ Recall &amp; Learn</b></td><td>Χρησιμοποιεί τις ημερομηνίες Audit ως training window και συνδυάζει Vault + Learning Archive. Ανακαλεί μόνο αγώνες με frozen pre-match snapshot.</td><td>Selected date range + archived settled predictions.</td><td>Historical calibration records χωρίς post-match leakage.</td><td style="text-align:center;">🖱️ + 🧠</td></tr>
+              <tr><td><b>🧪 Walk-Forward Validation</b></td><td>Ελέγχει τις νέες 1X2 παραμέτρους σε διαδοχικά μελλοντικά blocks που δεν χρησιμοποιήθηκαν για fitting. Τα πρόσφατα training records λαμβάνουν μεγαλύτερο βάρος.</td><td>Chronologically ordered settled records.</td><td>Validated Adaptive 1X2 update μόνο όταν Brier/Log Loss βελτιώνεται εκτός training.</td><td style="text-align:center;">🧠</td></tr>
               <tr><td><b>📊 Smart Audit & AI Advisor</b></td><td>Φέρνει/χρησιμοποιεί FT results, αξιολογεί picks/markets και δημιουργεί calibration records.</td><td>Vault + persistent FT cache + final outcomes.</td><td>Hit rates, Bomb ROI, calibration dataset, diagnostics.</td><td style="text-align:center;">🖱️ + ⚡</td></tr>
               <tr><td><b>🏆 Performance Intelligence</b></td><td>Κατατάσσει πρωταθλήματα με βάση πραγματική 1X2 ακρίβεια, Verified hit rate, Brier και Wilson confidence, και συνοψίζει validated προτεινόμενες ρυθμίσεις.</td><td>Όλα τα settled Audit records + Auto-Calibration output.</td><td>Best league, league ranking, recommended V-Score cutoff και parameter changes.</td><td style="text-align:center;">⚡ + 🧠</td></tr>
               <tr><td><b>🎯 Auto-Calibration</b></td><td>Grid-searches league/market parameters σε settled records και εφαρμόζει validated improvements.</td><td>Audit calibration records.</td><td>Updated league thresholds/multipliers.</td><td style="text-align:center;">🧠</td></tr>
               <tr><td><b>🛡️ Verification Learning</b></td><td>Μαθαίνει reliability layer για το V-Score και εφαρμόζεται μόνο όταν βελτιώνει hold-out Brier.</td><td>Settled 1X2 samples + verification components.</td><td>Καλύτερη πιθανότητα ότι ένα VERIFIED/STRONG signal είναι αξιόπιστο.</td><td style="text-align:center;">🧠</td></tr>
+              <tr><td><b>🎯 Adaptive Signal Policy</b></td><td>Μαθαίνει πόσο υψηλό πρέπει να είναι το V-Score για να δημοσιεύεται 1/X/2. Αν τα χαμηλά σημεία αποτυγχάνουν, ανεβάζει αυτόματα το cutoff, με ξεχωριστή πολιτική ανά league/outcome όταν υπάρχει αρκετό δείγμα.</td><td>Historical V-Scores + actual 1/X/2 + chronological validation.</td><td>Dynamic minimum V-Score για 1, X, 2 και ανά πρωτάθλημα.</td><td style="text-align:center;">🧠</td></tr>
 
               <tr><td colspan="5" style="padding:7px 10px;background:rgba(255,255,255,.035);color:var(--text-sub);font-weight:900;letter-spacing:.08em;text-transform:uppercase;">F. Utilities</td></tr>
               <tr><td><b>💰 Bankroll Manager</b></td><td>Αποθηκεύει κεφάλαιο και ιστορικό μεταβολών για Kelly staking.</td><td>Bankroll input.</td><td>Current bankroll + stake context.</td><td style="text-align:center;">🖱️</td></tr>
@@ -168,7 +172,7 @@
           </table>
         </div>
         <div style="margin-top:9px;font-size:0.62rem;color:var(--text-muted);line-height:1.5;">
-          <b style="color:var(--purple);">Αρχή λειτουργίας:</b> Data → Team Intel → Poisson/Dixon–Coles → Adaptive 1X2 → Verification → Pick/RADAR → Market layers → Live/Post-Match → Audit → Learning.
+          <b style="color:var(--purple);">Αρχή λειτουργίας:</b> Data → Team Intel → Poisson/Dixon–Coles → Adaptive 1X2 → Verification → Pick/RADAR → Live/Post-Match → Learning Archive → Recall & Learn → Walk-Forward Validation → Adaptive Signal Policy.
         </div>
       </div>
     </div>
@@ -350,12 +354,23 @@
         </div>
         <div class="input-group" style="flex:0;">
           <label class="input-label">&nbsp;</label>
-          <button class="btn btn-purple" onclick="runCustomAudit()">Run Audit</button>
+          <button class="btn btn-purple" onclick="runCustomAudit()">↻ Recall &amp; Learn</button>
+        </div>
+        <div class="input-group" style="flex:0;">
+          <label class="input-label">&nbsp;</label>
+          <button class="btn btn-outline" onclick="forceContinuousLearning()" title="Επανεκπαίδευση 1X2 από το αποθηκευμένο Learning Archive στο rolling window που προκύπτει από το τελευταίο επιλεγμένο Audit διάστημα">🧠 Learn Archive</button>
         </div>
         <div class="input-group" style="flex:0;">
           <label class="input-label">&nbsp;</label>
           <button class="btn btn-danger" onclick="clearVault()">Purge</button>
         </div>
+      </div>
+      <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(168,85,247,.18);background:rgba(168,85,247,.045);border-radius:8px;display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:.72rem;font-weight:900;color:var(--accent-purple);">🧠 Continuous Learning Window</div>
+          <div style="font-size:.62rem;color:var(--text-muted);margin-top:2px;line-height:1.5;">Οι ημερομηνίες Audit είναι και το training window. Ανακαλούνται παλιά <b>frozen pre-match</b> snapshots από το Learning Archive και επανεκτιμώνται με chronological hold-out. Αποτελέσματα χωρίς παλιά pre-match snapshot δεν χρησιμοποιούνται για να αποφεύγεται leakage.</div>
+        </div>
+        <span id="learningArchiveBadge" style="font-family:var(--font-mono);font-size:.64rem;color:var(--accent-purple);white-space:nowrap;">Archive —</span>
       </div>
     </div>
 
