@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.3.1 — MASTER ENGINE · ULTRA PIPELINE + ADAPTIVE 1X2 CALIBRATION + NO-VIG VERIFIED BOMBS + DATA QUALITY GUARD + LIVE LEARNING
+// APEX OMEGA v6.3.2 — MASTER ENGINE · KICKOFF GROUPS + AUTO-CLEAR FINISHED + ULTRA PIPELINE + ADAPTIVE 1X2 + VERIFIED BOMBS + LIVE LEARNING
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -403,9 +403,9 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.3.1';
+const APP_VERSION   = 'v6.3.2';
 const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'ULTRA PIPELINE · SKIP FINISHED';
+const BUILD_TIME    = 'KICKOFF GROUPS · AUTO-CLEAR FINISHED';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -616,6 +616,23 @@ const isLive     = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
 const esc = s => String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const todayISO = () => new Date().toISOString().split('T')[0];
+const ATHENS_TZ = 'Europe/Athens';
+function kickoffEpoch(x){
+  const raw=x?.m?.fixture?.date||x?.fixture?.date||x?.date||null;
+  if(!raw)return Infinity;
+  const ms=Date.parse(raw);return Number.isFinite(ms)?ms:Infinity;
+}
+function kickoffTimeLabel(x){
+  const ms=kickoffEpoch(x);if(!Number.isFinite(ms))return '—';
+  return new Date(ms).toLocaleTimeString('el-GR',{timeZone:ATHENS_TZ,hour:'2-digit',minute:'2-digit',hour12:false});
+}
+function kickoffGroupLabel(x){
+  const ms=kickoffEpoch(x);if(!Number.isFinite(ms))return 'Ώρα άγνωστη';
+  const d=new Date(ms);
+  const day=d.toLocaleDateString('el-GR',{timeZone:ATHENS_TZ,weekday:'short',day:'2-digit',month:'2-digit'});
+  return `${day} · ${kickoffTimeLabel(x)}`;
+}
+function sortByKickoff(arr){return (arr||[]).sort((a,b)=>kickoffEpoch(a)-kickoffEpoch(b));}
 const pct = v => (v*100).toFixed(1)+'%';
 
 function getDatesInRange(s,e){const d=[];let c=new Date(s),end=new Date(e);while(c<=end){d.push(c.toISOString().split('T')[0]);c.setDate(c.getDate()+1);}return d;}
@@ -690,11 +707,12 @@ function appendProgressiveMatch(rec,failed=false){
   const signal=failed?'Analysis error':(x.omegaPick||'NO SIGNAL');
   const card=document.createElement('div');
   card.id=`progressive-card-${x.fixId}`;
+  card.dataset.kickoff=String(kickoffEpoch(x));
   card.style.cssText='border:1px solid var(--border-light);border-radius:10px;background:var(--bg-panel);overflow:hidden;';
   card.innerHTML=`<div style="padding:11px 12px;display:grid;grid-template-columns:minmax(170px,1.35fr) minmax(120px,.9fr) auto;gap:10px;align-items:center;">
       <div style="min-width:0;">
         <div style="font-size:.88rem;font-weight:800;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht||'')} <span style="color:var(--text-dim);">–</span> ${esc(x.at||'')}</div>
-        <div style="font-size:.64rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.lg||'')} · #${done} ολοκληρώθηκε</div>
+        <div style="font-size:.64rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🕒 <b style="color:var(--accent-teal);">${kickoffTimeLabel(x)}</b> · ${esc(x.lg||'')} · #${done} ολοκληρώθηκε</div>
       </div>
       <div style="min-width:0;">
         <div style="font-size:.76rem;font-weight:800;color:${failed?'var(--accent-red)':confCol};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(signal)}</div>
@@ -718,6 +736,9 @@ function appendProgressiveMatch(rec,failed=false){
     </div>
     <div id="progressive-details-${x.fixId}" style="display:none;border-top:1px solid var(--border-light);"></div>`;
   list.appendChild(card);
+  // v6.3.2: η progressive ροή παραμένει ταξινομημένη με βάση την ώρα έναρξης,
+  // όχι με βάση το ποιο API request τελείωσε πρώτο.
+  [...list.children].sort((a,b)=>Number(a.dataset.kickoff||Infinity)-Number(b.dataset.kickoff||Infinity)).forEach(el=>list.appendChild(el));
 }
 
 window.toggleProgressiveMatch=function(fixId){
@@ -2496,6 +2517,8 @@ window.runScan=async function(){
       showErr(msg);return;
     }
     if(all.length>350) all=all.slice(0,350);
+    // v6.3.2: πρώτα οι νωρίτεροι αγώνες — η ώρα έναρξης είναι πλέον primary ordering.
+    all.sort((a,b)=>kickoffEpoch(a)-kickoffEpoch(b));
     initProgressiveScan(all.length);
 
     // PROGRESSIVE v5.7: shared league data φορτώνουν on-demand.
@@ -3376,17 +3399,21 @@ function _renderLiveAlerts(){
   el.innerHTML=liveAlerts.map(a=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:0.7rem;flex-wrap:wrap;"><span style="color:var(--text-muted);font-family:var(--font-mono);min-width:55px;">${a.time}</span><span style="font-weight:700;color:var(--text-main);">${esc(a.ht)} vs ${esc(a.at)}</span><span style="color:var(--text-muted);">${a.elapsed}' · ${a.score}</span><span style="color:var(--accent-red);">${esc(a.from)}</span><span style="color:var(--text-muted);">→</span><span style="color:var(--accent-green);">${esc(a.to)}</span></div>`).join('');
 }
 
-window.syncLiveScores=async function(){
-  if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
+window.syncLiveScores=async function(silent=false){
+  if(isRunning)return;
+  const btn=document.getElementById('btnSyncLive');
+  if(btn&&!silent){btn.innerText='Syncing…';btn.disabled=true;}
   try{
-    const res=await apiReq('fixtures?live=all');const liveArr=res.response||[];
-    if(!liveArr.length){showOk('Δεν υπάρχουν live αγώνες.');return;}
-    const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));
+    const data=window.scannedMatchesData||[];
+    if(!data.length)return;
 
-    // 1. Score + events (1 credit)
+    // 1) Live index: ανακαλύπτει και αγώνες που ήταν NS στο αρχικό scan αλλά μόλις ξεκίνησαν.
+    const res=await apiReq('fixtures?live=all',{priority:'high',cacheMs:15*1000});
+    const liveArr=res.response||[];
+    const liveMap=new Map(liveArr.map(f=>[String(f.fixture.id),f]));
     let n=0;
-    window.scannedMatchesData.forEach(d=>{
-      if(!liveMap.has(d.fixId))return;const ld=liveMap.get(d.fixId);
+    data.forEach(d=>{
+      const ld=liveMap.get(String(d.fixId));if(!ld)return;
       d.m.goals=ld.goals;d.m.fixture.status=ld.fixture.status;
       const evts=ld.events||[];let cor=0,yel=0,red=0;
       evts.forEach(ev=>{const t=(ev.type||'').toLowerCase(),det=(ev.detail||'').toLowerCase();
@@ -3396,10 +3423,60 @@ window.syncLiveScores=async function(){
       if(evts.length>0){d.liveCorners=cor;d.liveYellows=yel;d.liveReds=red;}n++;
     });
 
-    const liveTracked=window.scannedMatchesData.filter(d=>liveMap.has(d.fixId));
-    if(!liveTracked.length){renderSummaryTable();tickerRefresh();showOk(`✅ 1 Credit · Synced ${n} αγώνες`);return;}
+    // 2) Lifecycle refresh για αγώνες των οποίων η ώρα έναρξης έχει φτάσει.
+    // Μία κλήση ανά ημερομηνία ενημερώνει πολλά fixtures μαζί και επιτρέπει
+    // αυτόματη μετάβαση NS→LIVE αλλά και άμεση ανίχνευση FT/AET/PEN.
+    const now=Date.now();
+    const due=data.filter(d=>{
+      if(isFinished(d.m?.fixture?.status?.short))return true;
+      const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
+    });
+    const dueIds=new Set(due.map(d=>String(d.fixId)));
+    const dates=[...new Set(due.map(d=>(d.m?.fixture?.date||'').split('T')[0]).filter(Boolean))];
+    const freshMap=new Map();
+    await Promise.all(dates.map(async date=>{
+      try{
+        const fr=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:45*1000});
+        (fr?.response||[]).forEach(f=>{const id=String(f?.fixture?.id||'');if(dueIds.has(id))freshMap.set(id,f);});
+      }catch(e){console.warn('[APEX] lifecycle date refresh',date,e?.message||e);}
+    }));
 
-    // 2. Live Stats + Lineups (parallel per match)
+    // Update statuses/scores from the lifecycle response.
+    data.forEach(d=>{
+      const f=freshMap.get(String(d.fixId));if(!f)return;
+      d.m.goals=f.goals||d.m.goals;
+      d.m.fixture.status=f.fixture?.status||d.m.fixture.status;
+    });
+
+    // 3) AUTO-CLEAR: τελειωμένοι αγώνες αποθηκεύονται για Audit και αφαιρούνται
+    // από το ενεργό Smart Scan/Dashboard. Δεν χάνονται οι pre-match προβλέψεις στο Vault.
+    const removed=[];
+    const kept=[];
+    for(const d of data){
+      const fresh=freshMap.get(String(d.fixId));
+      const st=String((fresh?.fixture?.status?.short||d.m?.fixture?.status?.short||'')).toUpperCase();
+      if(isFinished(st)){
+        const compact=compactFinishedFixture(fresh||d.m);
+        if(compact)persistentFTCache.set(String(d.fixId),compact);
+        try{ if(fresh&&typeof _settleLiveLearningFixture==='function') _settleLiveLearningFixture(fresh).catch(()=>{}); }catch{}
+        removed.push(d);
+      }else kept.push(d);
+    }
+    if(removed.length){
+      window.scannedMatchesData=kept;
+      removed.forEach(d=>document.getElementById(`progressive-card-${d.fixId}`)?.remove());
+      rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();
+      showOk(`🧹 ${removed.length} τελειωμένοι αγώνες αφαιρέθηκαν αυτόματα.`);
+    }
+
+    const liveTracked=(window.scannedMatchesData||[]).filter(d=>liveMap.has(String(d.fixId)));
+    if(!liveTracked.length){
+      renderSummaryTable();tickerRefresh();
+      if(!silent&&!removed.length)showOk(`✅ Lifecycle sync · ${dates.length} ημερομηνίες · κανένας live αγώνας.`);
+      return;
+    }
+
+    // 4) Live Stats + Lineups (parallel per live match)
     let subCount=0, liveIntelCount=0;
     await Promise.all(liveTracked.map(async d=>{
       try{
@@ -3407,33 +3484,27 @@ window.syncLiveScores=async function(){
           apiReq(`fixtures/statistics?fixture=${d.fixId}`),
           apiReq(`fixtures/lineups?fixture=${d.fixId}`)
         ]);
-        // Live stats → liveIntel
         if(srStats.response?.length>=2){
           const elapsed=d.m?.fixture?.status?.elapsed||45;
           d.liveIntel=computeLiveIntelligence(srStats.response[0].statistics, srStats.response[1].statistics, elapsed);
           liveStatsCache.set(String(d.fixId),{h:srStats.response[0].statistics,a:srStats.response[1].statistics,ts:Date.now()});
           liveIntelCount++;
         }
-        // Lineups → substitution detection & recalculation
         const newLineup = parseLineup(srLineup?.response||[]);
         if(newLineup.available){
           const subResult = applySubstitution(d, newLineup);
-          if(subResult){
-            subCount++;
-            flashMatchUpdate(d.fixId, subResult);
-          } else {
-            // Ακόμα και χωρίς sub, store νέο lineup
-            d.lineupData = newLineup;
-          }
+          if(subResult){subCount++;flashMatchUpdate(d.fixId, subResult);} else d.lineupData = newLineup;
         }
       }catch(e){ console.warn('[APEX] live sync error fix',d.fixId,e.message); }
     }));
 
     renderSummaryTable();tickerRefresh();
-    const credits = 1 + liveTracked.length * 2;
-    showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}`);
-  }catch(e){showErr('Sync error: '+e.message);}
-  finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
+    if(!silent){
+      const credits=1+dates.length+liveTracked.length*2;
+      showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}${removed.length?` · Auto-clear: ${removed.length}`:''}`);
+    }
+  }catch(e){if(!silent)showErr('Sync error: '+e.message);else console.warn('[APEX] auto lifecycle sync',e.message);}
+  finally{if(btn&&!silent){btn.innerText='Live Sync';btn.disabled=false;}}
 };
 
 /**
@@ -3548,7 +3619,22 @@ window.fetchLineupForMatch = async function(fixId) {
 };
 
 let _autoSyncTimer=null;
-function startAutoSync(){if(_autoSyncTimer)clearInterval(_autoSyncTimer);_autoSyncTimer=setInterval(()=>{const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));if(hasLive&&!isRunning)syncLiveScores();},90000);}
+function startAutoSync(){
+  if(_autoSyncTimer)clearInterval(_autoSyncTimer);
+  const tick=()=>{
+    if(isRunning)return;
+    const now=Date.now();
+    const shouldCheck=(window.scannedMatchesData||[]).some(d=>{
+      const st=d.m?.fixture?.status?.short;
+      if(isFinished(st)||isLive(st))return true;
+      const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
+    });
+    if(shouldCheck)window.syncLiveScores(true);
+  };
+  _autoSyncTimer=setInterval(tick,90000);
+  // Αν υπάρχουν ήδη live/ληγμένοι αγώνες, η πρώτη εκκαθάριση δεν περιμένει 90 sec.
+  setTimeout(tick,1500);
+}
 
 let _tickerRaf=null,_tickerPx=45;
 function tickerRefresh(){
@@ -5891,17 +5977,24 @@ function renderSummaryTable() {
   const sec = document.getElementById('summarySection'); if(!sec) return;
   const sd = window.scannedMatchesData || []; if(!sd.length) { sec.innerHTML=''; return; }
   
-  const activeMatches = sd.filter(d => !isFinished(d.m?.fixture?.status?.short));
+  const activeMatches = sortByKickoff(sd.filter(d => !isFinished(d.m?.fixture?.status?.short)));
   const finishedMatches = sd.filter(d => isFinished(d.m?.fixture?.status?.short));
 
   let finalHtml = '';
 
   // 1. ACTIVE MATCHES
   if (activeMatches.length > 0) {
-    const grouped={}; activeMatches.forEach(d=>{ if(!grouped[d.lg]) grouped[d.lg]=[]; grouped[d.lg].push(d); });
+    // v6.3.2: global ordering πρώτα από ώρα έναρξης και μετά από πρωτάθλημα.
+    // Έτσι όλα τα 19:00 εμφανίζονται μαζί, μετά 19:30, 20:00 κ.ο.κ.
+    const grouped=new Map();
+    activeMatches.forEach(d=>{
+      const timeKey=`${kickoffEpoch(d)}|${d.lg||''}`;
+      if(!grouped.has(timeKey))grouped.set(timeKey,{lg:d.lg||'',kickoff:d,matches:[]});
+      grouped.get(timeKey).matches.push(d);
+    });
     let rows='';
-    for(const[lg,matches] of Object.entries(grouped)){
-      rows+=`<div style="background:rgba(56,189,248,0.05);padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;">${esc(lg)}</div>
+    for(const {lg,kickoff,matches} of grouped.values()){
+      rows+=`<div style="background:linear-gradient(90deg,rgba(45,212,191,.09),rgba(56,189,248,.04));padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span style="font-family:var(--font-mono);color:var(--accent-teal);font-size:.9rem;">🕒 ${esc(kickoffGroupLabel(kickoff))}</span><span style="color:var(--text-dim);">·</span><span>${esc(lg)}</span></div>
       <div class="data-table-wrapper" style="border:none;border-radius:0;margin-bottom:0;"><table class="summary-table">
       <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">${acr('1X2')}</th><th class="col-o25">${acr('O2.5')}</th><th class="col-u25">${acr('U2.5')}</th><th class="col-btts">${acr('BTTS')}</th><th class="col-exact">FT / ${acr('HT')}</th><th class="col-conf">${acr('Conf%')}</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
       matches.forEach(x=>{
@@ -5971,6 +6064,7 @@ function renderSummaryTable() {
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               ${live ? `<span class="live-dot" style="width:7px;height:7px;flex-shrink:0;display:inline-block;"></span>` : ''}
               ${live && elapsed ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);font-family:var(--font-mono);font-size:0.72rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(74,222,128,0.3);flex-shrink:0;">${elapsed}'</span>` : ''}
+              <span style="background:rgba(45,212,191,.10);color:var(--accent-teal);font-family:var(--font-mono);font-size:.68rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(45,212,191,.22);flex-shrink:0;" title="Ώρα έναρξης Ελλάδας">🕒 ${kickoffTimeLabel(x)}</span>
               <span style="font-size:0.95rem;">${esc(x.ht)}</span>
               <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
               <span style="font-size:0.95rem;">${esc(x.at)}</span>
