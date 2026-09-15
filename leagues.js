@@ -17,7 +17,8 @@ const LEAGUES_DATA = [
   { id:39,  name:"Premier League (EN)"     },   // TIGHT
   { id:40,  name:"Championship (EN)"       },   // TRAP
   { id:41,  name:"League One (EN)"         },   // TRAP
-  { id:45,  name:"EFL Cup (EN)"            },   // TRAP — knock-out, B teams
+  { id:45,  name:"FA Cup (EN)"              },   // TRAP — knock-out
+  { id:48,  name:"EFL Cup / Carabao Cup (EN)"},   // TRAP — knock-out, rotation squads
 
   // ── Spain ─────────────────────────────────────────────────
   { id:140, name:"La Liga (ES)"            },   // TIGHT
@@ -140,7 +141,8 @@ const LEAGUE_AVG_GOALS = {
   113: 2.85,  // Allsvenskan
   144: 2.70,  // Jupiler Pro
   39:  2.72,  // Premier League
-  45:  2.85,  // EFL Cup — rotation squads, more open
+  45:  2.68,  // FA Cup
+  48:  2.85,  // EFL Cup / Carabao Cup — rotation squads, more open
   203: 2.65,  // Süper Lig
   71:  2.65,  // Brasileirao
   244: 2.58,  // Veikkausliiga
@@ -171,7 +173,7 @@ const LEAGUE_AVG_GOALS = {
 // TRAP: υψηλή διακύμανση, πολλές εκπλήξεις → mult × 0.90
 // Απαραίτητο: να μην υπάρχουν IDs που δεν ανήκουν στο LEAGUES_DATA
 const TRAP_LEAGUES = new Set([
-  40, 41, 45,    // Championship, League One, EFL Cup (EN)
+  40, 41, 45, 48, // Championship, League One, FA Cup, EFL Cup (EN)
   136, 137, 141, // Serie B, Coppa Italia (IT), La Liga 2 (ES)
   79, 62,        // 2. Bundesliga (DE), Ligue 2 (FR)
   357, 395,      // Premier Division IE, NIFL Premiership NIR
@@ -213,7 +215,7 @@ const LEAGUES_HT_FACTORS = {
   // Germany
   78:  0.420, 79:  0.425,
   // England
-  39:  0.440, 40:  0.435, 41:  0.435, 45:  0.448, // EFL Cup — goals early (rotation)
+  39:  0.440, 40:  0.435, 41:  0.435, 45:  0.442, 48:  0.448, // FA Cup / EFL Cup
   // Italy
   135: 0.440, 136: 0.435, 137: 0.445, // Coppa Italia — αρκετά γκολ 1ου ημ.
   // Spain
