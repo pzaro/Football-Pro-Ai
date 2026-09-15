@@ -169,13 +169,6 @@ const SETTINGS_MAP = {
 };
 
 const _apiQueue = []; let _apiActive = 0;
-// SPEED: deduplicate identical requests while they are still in-flight.
-// This is critical because buildIntel() runs overlapping batchCalc() calls
-// (general form / venue split / recent-6) that can ask for the same fixture stats
-// before fixStatsCache has had time to store the first response.
-const _apiInflight = new Map();
-let _scanApiNetworkCalls = 0;
-let _scanApiDedupHits = 0;
 // 🚀 Paid Plan (30 req/sec limit)
 // Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
 // Ultra Plan: 75.000 req/day → ~52 req/sec max
@@ -190,7 +183,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '15/09/2026';
-const BUILD_TIME    = '15:46 EET · SPEED';
+const BUILD_TIME    = '16:00 EET · SAFE SPEED';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -616,24 +609,7 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 // ================================================================
 //  API FETCHING & CACHING
 // ================================================================
-function apiReq(path){
-  // If exactly the same endpoint is already being fetched, share that Promise.
-  // Prevents duplicate credits + duplicate network latency without changing data.
-  if(_apiInflight.has(path)) {
-    _scanApiDedupHits++;
-    return _apiInflight.get(path);
-  }
-
-  const raw = new Promise(resolve=>{
-    _apiQueue.push({path,resolve});
-    _drainQueue();
-  });
-  const shared = raw.finally(()=>{
-    if(_apiInflight.get(path) === shared) _apiInflight.delete(path);
-  });
-  _apiInflight.set(path, shared);
-  return shared;
-}
+async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
 async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
 async function _executeRequest(path,resolve){
   // Jitter 0-20ms
@@ -643,7 +619,6 @@ async function _executeRequest(path,resolve){
   try{
     for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
       try{
-        _scanApiNetworkCalls++;
         const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
         if(r.ok){
           const data=await r.json();
@@ -820,14 +795,28 @@ function stdDev(arr){const v=variance(arr);return v!==null?Math.sqrt(v):null;}
 
 // Cache for fixture statistics (corners/cards/shots per game)
 let fixStatsCache = new BoundedCache(200);
+// SAFE SPEED: deduplicate ONLY identical fixture-statistics requests that are
+// currently in flight. This leaves the global API queue and scan flow untouched.
+const _fixStatsInflight = new Map();
 
 async function getFixStats(fixtureId){
   const k=String(fixtureId);
   if(fixStatsCache.has(k))return fixStatsCache.get(k);
-  const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`);
-  const r=d?.response||[];
-  fixStatsCache.set(k,r);
-  return r;
+  if(_fixStatsInflight.has(k))return _fixStatsInflight.get(k);
+
+  const pending = (async()=>{
+    const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`);
+    const r=d?.response||[];
+    fixStatsCache.set(k,r);
+    return r;
+  })();
+
+  _fixStatsInflight.set(k,pending);
+  try {
+    return await pending;
+  } finally {
+    if(_fixStatsInflight.get(k)===pending) _fixStatsInflight.delete(k);
+  }
 }
 
 function extractFixStatFor(statsArr,teamId,statType){
@@ -1741,8 +1730,7 @@ async function analyzeMatchSafe(m,index,total){
 
     let actStats = null;
     if (isFinished(m.fixture.status.short)) {
-      // Reuse the same fixture-statistics cache used by batchCalc().
-      // Historical scans previously paid/fetched this endpoint a second time.
+      // SAFE SPEED: reuse fixture statistics already loaded by buildIntel/batchCalc.
       const sr = await getFixStats(m.fixture.id);
       if(sr && sr.length === 2) {
         const hs = sr[0].statistics; const as = sr[1].statistics;
@@ -1788,27 +1776,8 @@ async function analyzeMatchSafe(m,index,total){
   }
 }
 
-// Continuous worker pool: unlike fixed batches, a slow match no longer blocks
-// the start of the entire next batch. The API queue still enforces MAX_CONCURRENT.
-async function processWithConcurrency(items, limit, worker){
-  if(!items?.length) return;
-  let nextIndex = 0;
-  const workerCount = Math.min(Math.max(1, limit|0), items.length);
-  const runners = Array.from({length: workerCount}, async()=>{
-    while(true){
-      const i = nextIndex++;
-      if(i >= items.length) return;
-      await worker(items[i], i);
-    }
-  });
-  await Promise.all(runners);
-}
-
 window.runScan=async function(){
   if(isRunning)return;
-  const scanStartedAt = performance.now();
-  _scanApiNetworkCalls = 0;
-  _scanApiDedupHits = 0;
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
   isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
@@ -1818,45 +1787,33 @@ window.runScan=async function(){
   window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();scorersCache.clear();assistsCache.clear();cardsCache.clear();injuryCache.clear();
   try{
     const selLg=document.getElementById('leagueFilter').value;let all=[];
-    const scanDates = getDatesInRange(startD,endD);
-    // Fetch up to 7 scan-days in parallel; preserves the 350-match cap while
-    // removing unnecessary date-by-date network waiting on multi-day scans.
-    const DATE_BATCH = 7;
-    for(let di=0; di<scanDates.length && all.length<=350; di+=DATE_BATCH){
-      const dateBatch = scanDates.slice(di, di+DATE_BATCH);
-      setProgress(5,`Fetching ${dateBatch[0]}${dateBatch.length>1?' → '+dateBatch[dateBatch.length-1]:''}...`);
-      const results = await Promise.all(dateBatch.map(date=>apiReq(`fixtures?date=${date}`)));
-      for(const res of results){
-        const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
-        all.push(...dm);
-        if(all.length>350) break;
-      }
+    for(const date of getDatesInRange(startD,endD)){
+      setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
+      const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
+      all.push(...dm);if(all.length>350)break;
     }
     if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
     if(all.length>350) all=all.slice(0,350);
 
     // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
-    // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα.
-    // Keep the correct season for each league instead of reusing all[0].season.
-    const leagueSeason = new Map();
-    all.forEach(m=>{ if(!leagueSeason.has(m.league.id)) leagueSeason.set(m.league.id, m.league.season); });
-    const leagueIds = [...leagueSeason.keys()];
+    // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
+    const leagueIds = [...new Set(all.map(m=>m.league.id))];
+    const season    = all[0]?.league?.season;
     setProgress(8, `Pre-fetching ${leagueIds.length} leagues…`);
-    await Promise.all(leagueIds.map(lid => {
-      const season = leagueSeason.get(lid);
-      return Promise.all([
-        getStand(lid, season),
-        getLeagueTopScorers(lid, season),
-        getLeagueTopAssists(lid, season),
-        getLeagueTopCards(lid, season),
-      ]);
-    }));
+    await Promise.all(leagueIds.map(lid => Promise.all([
+      getStand(lid, season),
+      getLeagueTopScorers(lid, season),
+      getLeagueTopAssists(lid, season),
+      getLeagueTopCards(lid, season),
+    ])));
 
-    // ── Continuous parallel processing ─────────────────────────────
-    // No batch barrier: as soon as one match finishes, the next starts.
-    // Network concurrency remains protected by MAX_CONCURRENT in apiReq().
-    const SCAN_WORKERS = 10;
-    await processWithConcurrency(all, SCAN_WORKERS, (m,i)=>analyzeMatchSafe(m, i, all.length));
+    // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
+    // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
+    const SCAN_BATCH = 8; // Original working value
+    for(let i=0; i<all.length; i+=SCAN_BATCH){
+      const batch = all.slice(i, i+SCAN_BATCH);
+      await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
+    }
     
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
@@ -1869,13 +1826,11 @@ window.runScan=async function(){
       d.hXGfinal && Math.abs(Number(d.hXGfinal) - 1.10) < 0.02 &&
       Math.abs(Number(d.aXGfinal) - 1.10) < 0.02
     ).length;
-    const scanSecs = ((performance.now() - scanStartedAt) / 1000).toFixed(1);
-    const speedMeta = `${scanSecs}s · API ${_scanApiNetworkCalls} · dedup ${_scanApiDedupHits}`;
     if(fallbackCount > 0) {
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
-      showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — ${speedMeta}. Δοκίμασε ξανά.`);
+      showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες · ${speedMeta}`);
+      showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
     }
     window.fetchAllOdds().catch(()=>{});
 
