@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v6.7 — MASTER ENGINE · CONTINUOUS 1X2 LEARNING + WALK-FORWARD VALIDATION + LEARNING ARCHIVE + PERFORMANCE INTELLIGENCE + LIVE SEGREGATION + FAST CORE SCAN
+// APEX OMEGA v5.0 — MASTER ENGINE (ULTIMATE EDITION)
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -54,7 +54,6 @@ const ACRONYM_DICT = {
   'EV%':      'Expected Value % (Αναμενόμενη Αξία) — (Πιθανότητα μοντέλου × Απόδοση book) − 1.\nΠ.χ. μοντέλο δίνει 60%, book δίνει 1.90 → EV% = (0.60×1.90)−1 = +14%.\nΠαίζουμε ΜΟΝΟ θετικό EV (πράσινο). Μακροπρόθεσμα κερδοφόρο.',
   'Kelly':    'Kelly Criterion (Κριτήριο Kelly) — Μαθηματικός τύπος: ποντάρεις ακριβώς το σωστό ποσό βάσει bankroll & EV%.\nΤο APEX χρησιμοποιεί Fractional Kelly 25% — χρυσή τομή: μεγιστοποιείς κέρδη χωρίς χρεοκοπία σε κακό σερί.',
   'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit & Auto-Calibration',
-  'V-Score':  '1X2 Verification Score — Ενιαίος δείκτης επαλήθευσης 0–100. Συνδυάζει calibrated πιθανότητα, gap από το 2ο outcome, xG κατεύθυνση, ανεξάρτητη συνέπεια Form/Split/Defense, ποιότητα δεδομένων, league reliability και penalties για volatility / model-market conflict.',
 
   // ── Engine παράμετροι ─────────────────────────────────────────
   'xG Mult':  'xG Multiplier (Πολλαπλασιαστής) — Συντελεστής ανά πρωτάθλημα που βαθμονομεί τα "ωμά" xG.\n• Mult >1.0 (π.χ. Bundesliga 1.12): επιθετικό πρωτάθλημα, τα xG υποεκτιμούν\n• Mult <1.0 (π.χ. Serie A 0.95): αμυντικό, τα xG υπερεκτιμούν\nΡυθμίζεται αυτόματα από το Grid Search Auto-Calibration.',
@@ -77,90 +76,27 @@ function acr(term) {
 // Όταν γεμίσει, διαγράφει το παλαιότερο entry (FIFO approximation)
 // ----------------------------------------------------------------
 class BoundedCache {
-  constructor(maxSize=120, defaultTtlMs=Infinity){
-    this._map=new Map(); this._max=maxSize; this._ttl=defaultTtlMs;
-  }
-  _isExpired(entry){return !!entry && Number.isFinite(entry.expiresAt) && Date.now()>=entry.expiresAt;}
-  has(k){
-    const e=this._map.get(k);
-    if(!e)return false;
-    if(this._isExpired(e)){this._map.delete(k);return false;}
-    return true;
-  }
-  get(k){
-    const e=this._map.get(k);
-    if(!e)return undefined;
-    if(this._isExpired(e)){this._map.delete(k);return undefined;}
-    this._map.delete(k); this._map.set(k,e); // LRU touch
-    return e.value;
-  }
-  set(k,v,ttlMs=this._ttl){
-    if(this._map.has(k))this._map.delete(k);
-    else if(this._map.size>=this._max)this._map.delete(this._map.keys().next().value);
-    const expiresAt=Number.isFinite(ttlMs)?Date.now()+Math.max(0,ttlMs):Infinity;
-    this._map.set(k,{value:v,expiresAt});
-    return v;
-  }
-  delete(k){this._map.delete(k);}
+  constructor(maxSize=120){this._map=new Map();this._max=maxSize;}
+  has(k){return this._map.has(k);}
+  get(k){if(!this._map.has(k))return undefined;const v=this._map.get(k);this._map.delete(k);this._map.set(k,v);return v;}
+  set(k,v){if(this._map.has(k))this._map.delete(k);else if(this._map.size>=this._max)this._map.delete(this._map.keys().next().value);this._map.set(k,v);}
   clear(){this._map.clear();}
-  get size(){
-    for(const [k,e] of this._map){if(this._isExpired(e))this._map.delete(k);}
-    return this._map.size;
-  }
+  get size(){return this._map.size;}
 }
 
-const CACHE_TTL = Object.freeze({
-  TEAM_STATS:      6*60*60*1000,   // team statistics: αργή μεταβολή
-  LAST_FIXTURES:   15*60*1000,     // πρόσφατα FT fixtures
-  STANDINGS:       60*60*1000,     // standings ~ hourly
-  H2H:             12*60*60*1000,  // historical
-  LEAGUE_PLAYERS:  60*60*1000,     // scorers / assists / cards
-  INJURIES:        2*60*60*1000,
-  LIVE_STATS:      45*1000,
-  LINEUPS:         5*60*1000,
-  FIXTURE_STATS:   12*60*60*1000,  // χρησιμοποιείται κυρίως σε finished recent matches
-  ODDS:            30*1000,
-  FIXTURE_DAY:     45*1000
-});
-
-// ── SMART SCAN TURBO profile ────────────────────────────────────────
-// Κρατά 8 scorelines για form/variance, αλλά κατεβάζει detailed fixture
-// statistics μόνο για τα 5 πιο πρόσφατα παιχνίδια κάθε ομάδας. Αυτό
-// διατηρεί το μεγαλύτερο μέρος του recent signal με πολύ λιγότερα API calls.
-const SMART_SCAN = Object.freeze({
-  DETAIL_FIXTURES: 5,
-  LINEUP_WINDOW_MIN: 90,   // αυτόματο lineup fetch μόνο κοντά στο kickoff
-  MIN_BATCH: 5,
-  MAX_BATCH: 10,
-  RATE_UTILIZATION: 0.95   // 5% safety margin αφού ανιχνευθεί το plan
-});
-
-let teamStatsCache = new BoundedCache(180, CACHE_TTL.TEAM_STATS),
-    lastFixCache   = new BoundedCache(180, CACHE_TTL.LAST_FIXTURES),
-    standCache     = new BoundedCache(80,  CACHE_TTL.STANDINGS),
-    h2hCache       = new BoundedCache(240, CACHE_TTL.H2H),
-    scorersCache   = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
-    assistsCache   = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
-    cardsCache     = new BoundedCache(80,  CACHE_TTL.LEAGUE_PLAYERS),
-    injuryCache    = new BoundedCache(240, CACHE_TTL.INJURIES),
-    fixtureInjuryCache = new BoundedCache(320, CACHE_TTL.INJURIES),
-    liveStatsCache = new BoundedCache(80,  CACHE_TTL.LIVE_STATS),
-    lineupsCache   = new BoundedCache(140, CACHE_TTL.LINEUPS);  // starting XI per fixture
-const _standInflight     = new Map();
-const _scorersInflight   = new Map();
-const _assistsInflight   = new Map();
-const _cardsInflight     = new Map();
-// v6.5 FAST CORE: dedup expensive team-level calls too. Multi-day scans can
-// otherwise request the same team/league payload concurrently more than once.
-const _teamStatsInflight = new Map();
-const _lastFixInflight   = new Map();
-const _h2hInflight       = new Map();
-const _injuryInflight    = new Map();
-const _fixtureInjuryInflight = new Map();
+let teamStatsCache = new BoundedCache(150),
+    lastFixCache   = new BoundedCache(150),
+    standCache     = new BoundedCache(60),
+    h2hCache       = new BoundedCache(200),
+    scorersCache   = new BoundedCache(60),
+    assistsCache   = new BoundedCache(60),
+    cardsCache     = new BoundedCache(60),
+    injuryCache    = new BoundedCache(200),
+    liveStatsCache = new BoundedCache(50),
+    lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
 let isRunning = false, currentCredits = null;
-let latestTopLists = { best4:[], radar:[], exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], offsides:[], bombs:[], players:[], valueBets:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
-let _progressiveScanState = { active:false, total:0, completed:0, failed:0, startedAt:0 };
 let bankrollData = { current: 0, history: [] };
 
 // ── Live Tracker State ──────────────────────────────────────────────────────
@@ -173,132 +109,15 @@ const LIVE_POLL_MS       = 60000;
 const LS_LIVE_ALERTS     = 'omega_live_alerts_v5.0';
 const LS_MY_LEAGUES      = 'omega_my_leagues_v5.0';
 
-// ── v5.9 Live Learning State ────────────────────────────────────────────────
-// Η μάθηση γίνεται ΜΟΝΟ αφού ολοκληρωθεί ο αγώνας.
-// Τα pre-match priors παγώνουν πριν χρησιμοποιηθούν live δεδομένα.
-const LS_LIVE_LEARNING        = 'omega_live_learning_v5.9';
-const LIVE_LEARN_MILESTONES   = [15,30,45,60,75];
-const LIVE_LEARN_MIN_N        = 8;
-const LIVE_LEARN_MAX_MATCHES  = 500;
-const LIVE_LEARN_DEFAULT_W    = {15:0.30,30:0.40,45:0.50,60:0.65,75:0.80};
-let liveLearningState         = null;
-
-
-// ── v6.7 Continuous 1X2 Learning Archive ───────────────────────────────────
-// Keeps compact, frozen pre-match snapshots together with settled outcomes.
-// This allows future Audit windows to recall old settled predictions without
-// re-analyzing those matches or contaminating training with post-match data.
-const LS_LEARNING_ARCHIVE = 'omega_learning_archive_v6.7';
-const LS_CONTINUOUS_META   = 'omega_continuous_learning_meta_v6.7';
-const LEARNING_ARCHIVE_MAX = 3500;
-const CONTINUOUS_DEFAULT_WINDOW_DAYS = 180;
-let _continuousLearnTimer=null;
-
-function _loadLearningArchive(){
-  try{const a=JSON.parse(localStorage.getItem(LS_LEARNING_ARCHIVE)||'[]');return Array.isArray(a)?a:[];}catch{return [];}
-}
-function _saveLearningArchive(rows){
-  try{
-    const arr=[...(rows||[])].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,LEARNING_ARCHIVE_MAX);
-    localStorage.setItem(LS_LEARNING_ARCHIVE,JSON.stringify(arr));
-  }catch(e){console.warn('[APEX] learning archive save failed',e?.message||e);}
-}
-function _loadContinuousMeta(){
-  let m={enabled:true,windowDays:CONTINUOUS_DEFAULT_WINDOW_DAYS,lastStart:null,lastEnd:null,lastLeague:'ALL',lastLearnAt:0,lastN:0,lastApplied:0};
-  try{const x=JSON.parse(localStorage.getItem(LS_CONTINUOUS_META)||'null');if(x&&typeof x==='object')m={...m,...x};}catch{}
-  return m;
-}
-function _saveContinuousMeta(m){try{localStorage.setItem(LS_CONTINUOUS_META,JSON.stringify(m));}catch{}}
-function _dateDaysInclusive(s,e){
-  const a=Date.parse(`${s}T00:00:00Z`),b=Date.parse(`${e}T00:00:00Z`);
-  return Number.isFinite(a)&&Number.isFinite(b)?Math.max(1,Math.round((b-a)/86400000)+1):CONTINUOUS_DEFAULT_WINDOW_DAYS;
-}
-function _rememberLearningWindow(s,e,league='ALL'){
-  if(!s||!e)return;const m=_loadContinuousMeta();m.windowDays=_dateDaysInclusive(s,e);m.lastStart=s;m.lastEnd=e;m.lastLeague=league||'ALL';_saveContinuousMeta(m);updateLearningArchiveBadge();
-}
-function _compactArchivePrediction(p,fix){
-  if(!p||!fix?.fixture?.id)return null;
-  const ah=safeNum(fix.goals?.home,0),aa=safeNum(fix.goals?.away,0),outcome=ah>aa?'1':aa>ah?'2':'X';
-  const v=p.verification||null;
-  return {
-    fixtureId:Number(p.fixtureId||p.fixId||fix.fixture.id),date:p.date||p.m?.fixture?.date||fix.fixture.date,
-    leagueId:Number(p.leagueId||p.m?.league?.id||fix.league?.id||0),league:p.league||p.lg||fix.league?.name||'',
-    homeTeam:p.homeTeam||p.ht||fix.teams?.home?.name||'',awayTeam:p.awayTeam||p.at||fix.teams?.away?.name||'',
-    rawPP:p.rawPP||p.ppRaw||null,features:p.oneXTwoFeatures||p.oneXTwo?.features||null,calibratedPP:p.calibratedPP||p.pp||null,
-    verificationLeader:p.verificationLeader||v?.leader||p.rawOutPick||null,verificationSignal:p.verificationSignal||v?.signal||null,
-    verificationScore:safeNum(p.verificationScore??v?.score,0),verificationStatus:p.verificationStatus||v?.status||'NO_SIGNAL',
-    verification:v?{leader:v.leader||null,signal:v.signal||null,score:safeNum(v.score,0),status:v.status||'NO_SIGNAL',gapPP:safeNum(v.gapPP,0),xgDiff:safeNum(v.xgDiff,0),components:v.components||null,policy:v.policy||null}:null,
-    tXG:safeNum(p.tXG,0),xgDiff:safeNum(p.xgDiff,0),omegaPick:p.omegaPick||'',strength:safeNum(p.strength,0),hasPick:!!p.hasPick,
-    actual:{home:ah,away:aa,outcome,status:String(fix.fixture?.status?.short||'FT'),date:fix.fixture?.date||p.date||null},settledAt:Date.now()
-  };
-}
-function _archiveSettledBatch(pairs){
-  if(!pairs?.length)return {added:0,total:_loadLearningArchive().length};
-  const old=_loadLearningArchive(),map=new Map(old.map(x=>[String(x.fixtureId),x]));let added=0;
-  for(const pair of pairs){const a=_compactArchivePrediction(pair?.p,pair?.fix);if(!a)continue;const k=String(a.fixtureId);if(!map.has(k))added++;map.set(k,{...(map.get(k)||{}),...a});}
-  const rows=[...map.values()];_saveLearningArchive(rows);updateLearningArchiveBadge();return {added,total:Math.min(rows.length,LEARNING_ARCHIVE_MAX)};
-}
-function _archiveToVaultRecord(a){
-  if(!a?.fixtureId)return null;const ac=a.actual||{};
-  return {
-    fixtureId:a.fixtureId,date:a.date,leagueId:a.leagueId,league:a.league,homeTeam:a.homeTeam,awayTeam:a.awayTeam,
-    rawPP:a.rawPP||null,oneXTwoFeatures:a.features||null,calibratedPP:a.calibratedPP||null,
-    verificationLeader:a.verificationLeader||a.verification?.leader||null,verificationSignal:a.verificationSignal||a.verification?.signal||null,
-    verificationScore:safeNum(a.verificationScore??a.verification?.score,0),verificationStatus:a.verificationStatus||a.verification?.status||'NO_SIGNAL',verification:a.verification||null,
-    tXG:safeNum(a.tXG,0),xgDiff:safeNum(a.xgDiff,0),omegaPick:a.omegaPick||'',strength:safeNum(a.strength,0),hasPick:!!a.hasPick,
-    _archivedFinal:{fixture:{id:a.fixtureId,date:ac.date||a.date,status:{short:ac.status||'FT'}},league:{id:a.leagueId||0,name:a.league||''},teams:{home:{name:a.homeTeam||''},away:{name:a.awayTeam||''}},goals:{home:safeNum(ac.home,0),away:safeNum(ac.away,0)}}
-  };
-}
-function _combinedLearningStore(){
-  let vault=[];try{vault=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');if(!Array.isArray(vault))vault=[];}catch{}
-  const archive=_loadLearningArchive(),map=new Map();
-  archive.forEach(a=>{const r=_archiveToVaultRecord(a);if(r)map.set(String(r.fixtureId),r);});
-  vault.forEach(v=>{const k=String(v.fixtureId);const old=map.get(k);map.set(k,{...(old||{}),...v,_archivedFinal:old?._archivedFinal||v._archivedFinal});});
-  return [...map.values()];
-}
-function updateLearningArchiveBadge(){
-  const el=document.getElementById('learningArchiveBadge');if(!el)return;const a=_loadLearningArchive(),m=_loadContinuousMeta();
-  const last=m.lastLearnAt?new Date(m.lastLearnAt).toLocaleString('el-GR',{timeZone:'Europe/Athens',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
-  el.textContent=`Archive ${a.length} · rolling ${m.windowDays}d · last learn ${last}`;
-}
-function _archiveRowsToCalib(rows){
-  return (rows||[]).map(a=>({fixtureId:a.fixtureId,date:a.date,leagueId:a.leagueId,predicted:a.omegaPick||'',actual:`${safeNum(a.actual?.home,0)}-${safeNum(a.actual?.away,0)}`,outcome:a.actual?.outcome||null,tXG:safeNum(a.tXG,0),xgDiff:safeNum(a.xgDiff,0),rawPP:a.rawPP||null,features:a.features||null,verification:a.verification||null,verificationLeader:a.verificationLeader||a.verification?.leader||null,verificationSignal:a.verificationSignal||a.verification?.signal||null,verificationScore:safeNum(a.verificationScore??a.verification?.score,0),correct:(a.verificationLeader||a.verification?.leader)===a.actual?.outcome})).filter(r=>r.outcome);
-}
-function _maybeBackgroundContinuousLearning(force=false){
-  const m=_loadContinuousMeta();if(!m.enabled)return null;const now=Date.now(),cooldown=15*60*1000,elapsed=now-safeNum(m.lastLearnAt,0);
-  if(!force&&elapsed<cooldown){if(!_continuousLearnTimer){_continuousLearnTimer=setTimeout(()=>{_continuousLearnTimer=null;_maybeBackgroundContinuousLearning(false);},cooldown-elapsed+1200);}return {throttled:true};}
-  const end=todayISO(),ed=Date.parse(`${end}T00:00:00Z`),sd=ed-(Math.max(20,safeNum(m.windowDays,CONTINUOUS_DEFAULT_WINDOW_DAYS))-1)*86400000,start=new Date(sd).toISOString().split('T')[0];
-  let rows=_loadLearningArchive().filter(a=>{const d=String(a.date||'').split('T')[0];return d>=start&&d<=end;});
-  const recs=_archiveRowsToCalib(rows);if(recs.length<ADAPTIVE_1X2_MIN_GLOBAL)return {n:recs.length,waiting:true};
-  const a=runAdaptive1X2Calibration(recs),v=runVerificationLearning(recs),pol=runVerificationPolicyLearning(recs);
-  m.lastLearnAt=now;m.lastN=recs.length;m.lastApplied=safeNum(a?.applied,0)+(v?.accepted?1:0)+safeNum(pol?.applied,0);_saveContinuousMeta(m);updateLearningArchiveBadge();
-  if(m.lastApplied>0&&window.scannedMatchesData?.length){try{window.resimulateMatches();saveToVault(window.scannedMatchesData);}catch(e){console.warn('[APEX] background re-simulate',e);}}
-  return {n:recs.length,adaptive:a,verification:v,policy:pol};
-}
-window.forceContinuousLearning=function(){const r=_maybeBackgroundContinuousLearning(true);if(r?.waiting)showErr(`Learning Archive: χρειάζονται τουλάχιστον ${ADAPTIVE_1X2_MIN_GLOBAL} frozen settled predictions (έχει ${r.n}).`);else if(r)showOk(`🧠 Continuous Learning: ${r.n} παλιά αποτελέσματα ανακλήθηκαν και επανεκτιμήθηκαν.`);updateLearningArchiveBadge();};
-
 // ── Dynamic My Leagues ────────────────────────────────────────────────────────
 // Επιστρέφει τα επιλεγμένα πρωταθλήματα του χρήστη.
 // Προτεραιότητα: localStorage > hardcoded default από leagues.js
-const LS_CYPRUS_MIGRATION = 'omega_my_leagues_add_cyprus_v6.3.3';
 function getUserMyLeagues() {
   try {
     const saved = JSON.parse(localStorage.getItem(LS_MY_LEAGUES));
-    if(Array.isArray(saved) && saved.length > 0) {
-      const ids=saved.map(Number);
-      // v6.3.3 one-time migration: add Cyprus 1. Division (API-Football league 318)
-      // to existing MY_LEAGUES selections. After migration the user can deselect it normally.
-      if(!localStorage.getItem(LS_CYPRUS_MIGRATION)) {
-        if(!ids.includes(318)) ids.push(318);
-        localStorage.setItem(LS_MY_LEAGUES, JSON.stringify(ids));
-        localStorage.setItem(LS_CYPRUS_MIGRATION, '1');
-      }
-      return ids;
-    }
+    if(Array.isArray(saved) && saved.length > 0) return saved.map(Number);
   } catch {}
-  const defaults = typeof MY_LEAGUES_IDS !== 'undefined' ? [...MY_LEAGUES_IDS] : [78,88,218,119,103,144,253,262,140,135,197,318];
-  try { localStorage.setItem(LS_CYPRUS_MIGRATION, '1'); } catch {}
-  return defaults;
+  return typeof MY_LEAGUES_IDS !== 'undefined' ? [...MY_LEAGUES_IDS] : [78,88,218,119,103,144,253,262,140,135,197];
 }
 function saveUserMyLeagues(ids) {
   try { localStorage.setItem(LS_MY_LEAGUES, JSON.stringify(ids.map(Number))); } catch {}
@@ -319,7 +138,7 @@ const HT_LEAGUE_FACTORS = (typeof LEAGUES_HT_FACTORS !== 'undefined')
       135:0.440,136:0.435,140:0.430,141:0.430,
       61:0.430, 62:0.435, 88:0.440, 144:0.435,
       94:0.432, 218:0.442,207:0.435,179:0.438,
-      203:0.438,197:0.435,318:0.435,
+      203:0.438,197:0.435,
       113:0.430,103:0.440,119:0.438,244:0.435,164:0.445,
       357:0.438,395:0.435,
       106:0.435,345:0.435,283:0.432,271:0.437,
@@ -350,187 +169,21 @@ const SETTINGS_MAP = {
 };
 
 const _apiQueue = []; let _apiActive = 0;
-const _apiInflight = new Map();
-const _apiResponseCache = new BoundedCache(300, 30*1000);
-
-// ── v6.3 ULTRA PIPELINE: persistent immutable-result caches ──────────────────
-// Finished fixtures and historical fixture statistics do not need to be
-// downloaded again on every Audit / reload. Values are compacted before
-// localStorage so the cache stays small and safe.
-function createPersistentTTLCache(lsKey,{maxEntries=300,ttlMs=30*24*60*60*1000}={}){
-  let loaded=false, rows={}, saveTimer=null;
-  const load=()=>{
-    if(loaded)return; loaded=true;
-    try{const raw=JSON.parse(localStorage.getItem(lsKey)||'{}'); rows=raw&&typeof raw==='object'?raw:{};}catch{rows={};}
-  };
-  const prune=()=>{
-    load(); const now=Date.now();
-    Object.keys(rows).forEach(k=>{const e=rows[k];if(!e||!Number.isFinite(e.ts)||now-e.ts>ttlMs)delete rows[k];});
-    const keys=Object.keys(rows);
-    if(keys.length>maxEntries){keys.sort((a,b)=>(rows[b]?.ts||0)-(rows[a]?.ts||0));keys.slice(maxEntries).forEach(k=>delete rows[k]);}
-  };
-  const flush=()=>{saveTimer=null;prune();try{localStorage.setItem(lsKey,JSON.stringify(rows));}catch(e){console.warn('[APEX] persistent cache save failed',lsKey,e?.message||e);}};
-  const schedule=()=>{if(saveTimer!==null)return;saveTimer=setTimeout(flush,700);};
-  return {
-    get(key){load();const e=rows[String(key)];if(!e)return undefined;if(Date.now()-e.ts>ttlMs){delete rows[String(key)];schedule();return undefined;}return e.value;},
-    set(key,value){load();rows[String(key)]={ts:Date.now(),value};prune();schedule();return value;},
-    flush,
-    clear(){rows={};loaded=true;try{localStorage.removeItem(lsKey);}catch{}},
-    get size(){prune();return Object.keys(rows).length;}
-  };
-}
-
-const persistentFTCache = createPersistentTTLCache('omega_ft_results_v6.3',{maxEntries:1200,ttlMs:365*24*60*60*1000});
-const persistentFixStatsCache = createPersistentTTLCache('omega_fixstats_v6.3',{maxEntries:260,ttlMs:120*24*60*60*1000});
-// v6.5: compact computed team intelligence survives page reloads / JSON imports.
-// It is deliberately short-lived: form is stable intraday, but we never keep a
-// stale pre-match team profile for hours after the underlying context can move.
-const persistentTeamIntelCache = createPersistentTTLCache('omega_team_intel_v6.5',{maxEntries:320,ttlMs:30*60*1000});
-const persistentStandCache = createPersistentTTLCache('omega_standings_v6.5',{maxEntries:100,ttlMs:30*60*1000});
-const persistentH2HCache = createPersistentTTLCache('omega_h2h_v6.5',{maxEntries:650,ttlMs:30*24*60*60*1000});
-const persistentFixtureInjuryCache = createPersistentTTLCache('omega_fixture_inj_v6.5',{maxEntries:700,ttlMs:4*60*60*1000});
-const AUDIT_FETCH_WORKERS = 8;
-
-function compactFinishedFixture(f){
-  if(!f||!f.fixture?.id)return null;
-  return {
-    fixture:{id:f.fixture.id,date:f.fixture.date,status:{short:f.fixture.status?.short||'FT'}},
-    league:{id:f.league?.id||0,name:f.league?.name||'',season:f.league?.season||null},
-    teams:{home:{id:f.teams?.home?.id||0,name:f.teams?.home?.name||''},away:{id:f.teams?.away?.id||0,name:f.teams?.away?.name||''}},
-    goals:{home:safeNum(f.goals?.home,0),away:safeNum(f.goals?.away,0)}
-  };
-}
-// v6.3.1: Smart Scan never re-analyzes settled fixtures.
-// A finished fixture is also copied into the persistent FT cache so Audit can
-// reuse the final score without another fixture request.
-function shouldSkipFinishedSmartScan(m){
-  const id=String(m?.fixture?.id||'');
-  const st=String(m?.fixture?.status?.short||'').toUpperCase();
-  if(isFinished(st)){
-    const compact=compactFinishedFixture(m);
-    if(id&&compact)persistentFTCache.set(id,compact);
-    return true;
-  }
-  // Audit may already have settled this fixture even if a short-lived day-cache
-  // still contains an older status. In that case, the immutable FT cache wins.
-  return !!(id&&persistentFTCache.get(id));
-}
-
-function slimFixtureStats(rows){
-  const keep=new Set(['Corner Kicks','Yellow Cards','Red Cards','Shots on Goal','Shots off Goal','Offsides','expected_goals','Ball Possession']);
-  return (rows||[]).map(t=>({team:{id:t?.team?.id||0,name:t?.team?.name||''},statistics:(t?.statistics||[]).filter(x=>keep.has(x?.type)).map(x=>({type:x.type,value:x.value}))}));
-}
-async function runWorkerPool(items,workerCount,fn){
-  let cursor=0; const n=Math.max(1,Math.min(workerCount||1,items.length||1));
-  const workers=Array.from({length:n},async()=>{while(true){const i=cursor++;if(i>=items.length)return;await fn(items[i],i);}});
-  await Promise.all(workers);
-}
-async function preloadAuditFixtures(cands){
-  const out=new Map(), wanted=new Map();
-  (cands||[]).forEach(p=>wanted.set(String(p.fixtureId),p));
-  // 0) settled outcomes already recalled from the v6.7 Learning Archive
-  for(const [id,p] of wanted){if(p?._archivedFinal){out.set(id,p._archivedFinal);persistentFTCache.set(id,p._archivedFinal);}}
-  // 1) instant hits from persistent FT cache
-  for(const [id] of wanted){if(out.has(id))continue;const hit=persistentFTCache.get(id);if(hit)out.set(id,hit);}
-  const unresolved=()=>[...wanted.keys()].filter(id=>!out.has(id));
-  // 2) bulk-by-date: usually 1 API call settles many fixtures
-  const dates=[...new Set(unresolved().map(id=>(wanted.get(id)?.date||'').split('T')[0]).filter(Boolean))];
-  let completedDates=0;
-  await runWorkerPool(dates,Math.min(AUDIT_FETCH_WORKERS,6),async date=>{
-    const fr=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:6*60*60*1000});
-    for(const f of (fr?.response||[])){
-      const id=String(f?.fixture?.id||''); if(!wanted.has(id)||!isFinished(f?.fixture?.status?.short))continue;
-      const compact=compactFinishedFixture(f);if(compact){out.set(id,compact);persistentFTCache.set(id,compact);}
-    }
-    completedDates++; setProgress(5+Math.round((completedDates/Math.max(dates.length,1))*45),`Audit bulk fetch: ${completedDates}/${dates.length} ημέρες`);
-  });
-  // 3) fallback only for fixtures absent from their date response
-  const missing=unresolved(); let done=0;
-  await runWorkerPool(missing,AUDIT_FETCH_WORKERS,async id=>{
-    const fr=await apiReq(`fixtures?id=${id}`,{priority:'high',cacheMs:6*60*60*1000});
-    const f=fr?.response?.[0];
-    if(f&&isFinished(f?.fixture?.status?.short)){const compact=compactFinishedFixture(f);if(compact){out.set(id,compact);persistentFTCache.set(id,compact);}}
-    done++; setProgress(50+Math.round((done/Math.max(missing.length,1))*20),`Audit fallback: ${done}/${missing.length}`);
-  });
-  return out;
-}
-let _apiDrainTimer = null;
-let _nextRequestAt = 0;
-let _globalBackoffUntil = 0;
-
-// Adaptive limiter: ξεκινά με ασφαλές Pro-like pace και αυτορυθμίζεται
-// από τα X-RateLimit-* headers κάθε πραγματικής API απόκρισης.
-const API_RATE = {
-  minuteLimit: null,
-  minuteRemaining: null,
-  dailyLimit: null,
-  dailyRemaining: null,
-  baseRps: 4.5,
-  penalty: 1.0,
-  maxConcurrent: 4,
-  detected: false,
-  last429At: 0,
-  lastLatencyMs: null
-};
-
-const sleep = ms => new Promise(r=>setTimeout(r,Math.max(0,ms||0)));
-const apiClamp = (v,min,max)=>Math.max(min,Math.min(max,v));
-function _headerNum(headers,name){
-  const raw=headers?.get?.(name);
-  if(raw===null||raw===undefined||raw==='')return null;
-  const n=Number(raw); return Number.isFinite(n)?n:null;
-}
-function _effectiveRps(){return apiClamp(API_RATE.baseRps*API_RATE.penalty,0.12,18);}
-function _effectiveGapMs(){
-  let gap=1000/_effectiveRps();
-  if(API_RATE.minuteLimit && API_RATE.minuteRemaining!==null){
-    const ratio=API_RATE.minuteRemaining/Math.max(1,API_RATE.minuteLimit);
-    if(ratio<0.03)gap*=4;
-    else if(ratio<0.08)gap*=2.2;
-    else if(ratio<0.15)gap*=1.4;
-  }
-  return Math.ceil(gap);
-}
-function _updateApiRateFromHeaders(headers){
-  const mLimit=_headerNum(headers,'X-RateLimit-Limit');
-  const mRemain=_headerNum(headers,'X-RateLimit-Remaining');
-  const dLimit=_headerNum(headers,'x-ratelimit-requests-limit');
-  const dRemain=_headerNum(headers,'x-ratelimit-requests-remaining');
-  if(mLimit && mLimit>0){
-    API_RATE.minuteLimit=mLimit;
-    API_RATE.baseRps=apiClamp((mLimit/60)*SMART_SCAN.RATE_UTILIZATION,0.12,18); // adaptive safety margin
-    API_RATE.maxConcurrent=API_RATE.baseRps<1 ? 1 : apiClamp(Math.ceil(API_RATE.baseRps*0.75),2,10);
-    API_RATE.detected=true;
-  }
-  if(mRemain!==null)API_RATE.minuteRemaining=mRemain;
-  if(dLimit!==null)API_RATE.dailyLimit=dLimit;
-  if(dRemain!==null){
-    API_RATE.dailyRemaining=dRemain; currentCredits=dRemain;
-    const el=document.getElementById('creditDisplay');
-    if(el){
-      el.textContent=dRemain;
-      el.className='credit-value'+(dRemain<50?' low':'');
-      const lim=API_RATE.minuteLimit?`${API_RATE.minuteLimit}/min`:'adaptive';
-      el.title=`API online · ${lim} · target ${_effectiveRps().toFixed(1)} req/s`;
-    }
-  }
-}
-function _scheduleDrain(delay=0){
-  if(_apiDrainTimer!==null)return;
-  _apiDrainTimer=setTimeout(()=>{_apiDrainTimer=null;_drainQueue();},Math.max(0,Math.ceil(delay)));
-}
-function _priorityValue(v){return v==='high'||v===0?0:v==='low'||v===2?2:1;}
-
-// Backward-compatible diagnostics aliases (dynamic values)
-Object.defineProperty(window,'APEX_API_RATE',{get:()=>({...API_RATE,effectiveRps:_effectiveRps(),gapMs:_effectiveGapMs(),queue:_apiQueue.length,active:_apiActive})});
+// 🚀 Paid Plan (30 req/sec limit)
+// Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
+// Ultra Plan: 75.000 req/day → ~52 req/sec max
+// 25 concurrent + 20ms gap = ~40 req/sec (ασφαλές)
+// Ultra plan: 75k req/day — original working values
+const MAX_CONCURRENT = 15;
+const REQUEST_GAP_MS = 35;
 let _errTimer = null, _okTimer = null;
 
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v6.7';
-const BUILD_DATE    = '06/09/2026';
-const BUILD_TIME    = 'CONTINUOUS 1X2 LEARNING + WALK-FORWARD';
+const APP_VERSION   = 'v5.0';
+const BUILD_DATE    = '15/09/2026';
+const BUILD_TIME    = '13:44 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -543,8 +196,8 @@ const GLOSSARY_GROUPS = [
   { label:'Αγορές & Αποτελέσματα', badge:null,   keys:['1X2','AH','BTTS','O2.5','O3.5','U2.5','HT','FT'] },
   { label:'Στατιστικοί Δείκτες', badge:null,     keys:['Conf%','D-C','GAP','H2H','INJ','Card%','Adj🟨%'] },
   { label:'Live Δείκτες', badge:'live',           keys:['SQD','MSI','Edge','Volatility'] },
-  { label:'Engine & Calibration', badge:'engine', keys:['xG Mult','Vault','V-Score','LRU'] },
-  { label:'Value & Χρήματα', badge:'money',       keys:['RADAR','EV%','Kelly'] },
+  { label:'Engine & Calibration', badge:'engine', keys:['xG Mult','Vault','LRU'] },
+  { label:'Value & Χρήματα', badge:'money',       keys:['EV%','Kelly'] },
 ];
 
 // ── Εννοιολογικός Πίνακας — όλοι οι δείκτες με ερμηνεία & action ──
@@ -554,8 +207,7 @@ const CONCEPT_TABLE = [
   ['xG','Ποιότητα επίθεσης (Αναμ. Γκολ)','> 1.50','Πάνω ≥1.50: ισχυρή επίθεση → Over / 1X2'],
   ['xGA','Ποιότητα άμυνας (Αναμ. Γκολ κατά)','< 1.20','Κάτω <1.20: ισχυρή άμυνα → Under / Νίκη'],
   ['tXG','Συνολικά Αναμ. Γκολ (HOME+AWAY)','2.5–3.5','<2.20 → Under 2.5 | >2.80 → Over 2.5 | >3.40 → Over 3.5'],
-  ['xG Diff','Διαφορά επιθετικής ισχύος','confirmation filter','Δεν αποφασίζει μόνο του το 1X2. Επιβεβαιώνει την κατεύθυνση του Unified Verification.'],
-  ['V-Score','Ενιαία επαλήθευση 1/X/2','≥80 VERIFIED','≥80 VERIFIED · 70–79 STRONG · 60–69 LEAN · <60 NO SIGNAL · CONFLICT όταν οι πηγές διαφωνούν έντονα'],
+  ['xG Diff','Διαφορά επιθετικής ισχύος','>0.60 ή <-0.60','|Diff|>0.60 → 1X2 σήμα | ~0 → Ισοπαλία / BTTS'],
   ['xG Mult','Πολλαπλασιαστής ανά πρωτάθλημα','1.00 (standard)','GOLD×1.12 | Standard×1.00 | TIGHT×0.95 | TRAP×0.90'],
   // ── Αγορές ──────────────────────────────────────────────────
   ['Conf%','Βεβαιότητα μοντέλου (0-99%)','≥70%','<70%: ΧΩΡΙΣ ΣΥΣΤΑΣΗ | 70-79%: Καλό | ≥80%: Ισχυρό'],
@@ -586,7 +238,6 @@ const CONCEPT_TABLE = [
   ['H2H','Ιστορικές απευθείας αναμετρήσεις','≥4 ματς','12% blend στο λ | <4 ματς: αγνοείται'],
   ['Φόρμα','Τελευταία 5-6 ματς (W/D/L)','≥3W τελευταία 5','Βάρη: W1×1.0, W2×0.82, W3×0.67, W4×0.54, W5×0.43'],
   // ── Value ────────────────────────────────────────────────────
-  ['RADAR','Composite superiority ranking — καθαρή υπεροχή σήματος','Score ≥72','1/X/2: probability gap+xG | Goals: Poisson+tXG | Corners: P>8.5 | Offsides: Poisson signal'],
   ['EV%','Expected Value = (P×Απόδοση)−1','> 0%','+5%: αξιόπιστο | +10%: εξαιρετικό | <0%: ΜΗΝ παίξεις'],
   ['Kelly','Βέλτιστο ποσό στοιχήματος','Fractional 25%','APEX χρησιμοποιεί Kelly/4 — μεγιστοποιεί χωρίς χρεοκοπία'],
   // ── Calibration ──────────────────────────────────────────────
@@ -627,13 +278,13 @@ window.openGlossary = function() {
   const renderConceptTable = () => {
     // Group rows by category
     const cats = [
-      { label:'📐 xG & Μοντέλο', rows: CONCEPT_TABLE.filter(r=>['xG','xGA','tXG','xG Diff','V-Score','xG Mult'].includes(r[0])) },
+      { label:'📐 xG & Μοντέλο', rows: CONCEPT_TABLE.filter(r=>['xG','xGA','tXG','xG Diff','xG Mult'].includes(r[0])) },
       { label:'🎯 Αγορές & Σήματα', rows: CONCEPT_TABLE.filter(r=>['Conf%','O2.5','O3.5','U2.5','BTTS','AH','HT'].includes(r[0])) },
       { label:'🚩 Κόρνερ & Κάρτες', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Κόρνερ')||r[0].includes('Κάρτες')||r[0].includes('Card%')||r[0].includes('P(>8')) },
       { label:'🚫 Οφσάιντ', rows: CONCEPT_TABLE.filter(r=>r[0].includes('Offside')||r[0].includes('off')||r[0].includes('αμφ')) },
       { label:'📡 Live', rows: CONCEPT_TABLE.filter(r=>['SQD','Edge','SoT Ratio','GK Saves'].includes(r[0])) },
       { label:'📉 Volatility & Φόρμα', rows: CONCEPT_TABLE.filter(r=>['σ (sigma)','ΔΕ₉₅','H2H','Φόρμα'].includes(r[0])) },
-      { label:'💰 Value & Calibration', rows: CONCEPT_TABLE.filter(r=>['RADAR','EV%','Kelly','GOLD','TIGHT','TRAP','CL/EL Cal.'].includes(r[0])) },
+      { label:'💰 Value & Calibration', rows: CONCEPT_TABLE.filter(r=>['EV%','Kelly','GOLD','TIGHT','TRAP','CL/EL Cal.'].includes(r[0])) },
     ];
 
     return cats.map(cat => `
@@ -707,91 +358,12 @@ const statVal  = (arr,type) => {
   if(v===null||v===undefined) return 0;
   return parseFloat(String(v).replace('%',''))||0;
 };
-
-// ── v6.0 DATA QUALITY GUARD ────────────────────────────────────────────────
-// statVal() παραμένει για operational/live calculations. Στο post-match
-// validation, missing/null δεν επιτρέπεται να γίνει ψεύτικο πραγματικό 0.
-const statValNullable = (arr,type,{nullAsZero=false}={}) => {
-  if(!Array.isArray(arr)) return null;
-  const item = arr.find(x=>x?.type===type);
-  if(!item) return null;
-  const v = item.value;
-  if(v===null||v===undefined||v==='') return nullAsZero ? 0 : null;
-  const n = parseFloat(String(v).replace('%',''));
-  return Number.isFinite(n) ? n : null;
-};
-const sumStatsNullable = (arr,types) => {
-  if(!Array.isArray(arr)) return null;
-  let found=false,total=0;
-  for(const type of types){
-    const item=arr.find(x=>x?.type===type);
-    if(!item) continue;
-    found=true;
-    const v=item.value;
-    if(v===null||v===undefined||v==='') continue;
-    const n=parseFloat(String(v).replace('%',''));
-    if(Number.isFinite(n)) total+=n;
-  }
-  return found ? total : null;
-};
-const isFiniteMetric = v => v!==null && v!==undefined && v!=='' && Number.isFinite(Number(v));
-const sumFinitePair = (a,b) => (isFiniteMetric(a)&&isFiniteMetric(b)) ? Number(a)+Number(b) : null;
 const getTeamGoals = (f,t) => f?.teams?.home?.id===t?(f?.goals?.home??0):(f?.goals?.away??0);
 const getOppGoals  = (f,t) => f?.teams?.home?.id===t?(f?.goals?.away??0):(f?.goals?.home??0);
 const isLive     = s => ["1H","2H","HT","LIVE","ET","BT","P"].includes(s);
 const isFinished = s => ["FT","AET","PEN"].includes(s);
-
-// ================================================================
-//  v6.6 LIVE SEGREGATION — live fixtures never enter Progressive Scan
-// ================================================================
-window.scanLiveFixtures = window.scanLiveFixtures || [];
-
-function _dedupeFixturesById(fixtures){
-  const m=new Map();
-  (fixtures||[]).forEach(f=>{const id=String(f?.fixture?.id||'');if(id)m.set(id,f);});
-  return [...m.values()];
-}
-
-function renderDetachedLiveFixtures(fixtures=window.scanLiveFixtures){
-  const sec=document.getElementById('liveNowSection');if(!sec)return;
-  const live=_dedupeFixturesById(fixtures).filter(f=>isLive(String(f?.fixture?.status?.short||'').toUpperCase()))
-    .sort((a,b)=>kickoffEpoch(a)-kickoffEpoch(b));
-  window.scanLiveFixtures=live;
-  if(!live.length){sec.innerHTML='';return;}
-  sec.innerHTML=`<div class="quant-panel" style="padding:0;overflow:hidden;border-color:rgba(34,197,94,.32);">
-    <div style="padding:12px 16px;background:rgba(34,197,94,.07);border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-      <div><b style="color:var(--accent-green);letter-spacing:.06em;">🔴 LIVE NOW</b><div style="font-size:.65rem;color:var(--text-muted);margin-top:2px;">Ενεργοί αγώνες · εξαιρούνται από το PROGRESSIVE SMART SCAN · refresh κάθε 60s</div></div>
-      <span style="font-family:var(--font-mono);font-size:.75rem;font-weight:900;color:var(--accent-green);">${live.length} LIVE</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;padding:10px;">
-      ${live.map(f=>{const st=f.fixture?.status||{},gh=f.goals?.home??0,ga=f.goals?.away??0,el=st.elapsed?`${st.elapsed}'`:'LIVE';return `<div style="border:1px solid rgba(34,197,94,.22);border-radius:9px;background:var(--bg-base);padding:10px 12px;">
-        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:5px;"><span class="live-dot" style="width:7px;height:7px;"></span><span style="background:rgba(34,197,94,.14);color:var(--accent-green);border:1px solid rgba(34,197,94,.28);border-radius:5px;padding:2px 7px;font-size:.65rem;font-weight:900;">LIVE</span><span style="font-family:var(--font-mono);font-size:.72rem;color:var(--accent-green);font-weight:900;">${esc(el)}</span><span style="margin-left:auto;font-family:var(--font-mono);font-size:.68rem;color:var(--accent-teal);">🕒 ${kickoffTimeLabel(f)}</span></div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div style="font-weight:800;font-size:.84rem;min-width:0;">${esc(f.teams?.home?.name||'HOME')} <span style="color:var(--text-dim);">–</span> ${esc(f.teams?.away?.name||'AWAY')}</div><div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--accent-green);white-space:nowrap;">${gh}-${ga}</div></div>
-        <div style="font-size:.62rem;color:var(--text-muted);margin-top:4px;">${esc(f.league?.name||'')}</div>
-      </div>`;}).join('')}
-    </div>
-  </div>`;
-}
-
 const esc = s => String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const todayISO = () => new Date().toISOString().split('T')[0];
-const ATHENS_TZ = 'Europe/Athens';
-function kickoffEpoch(x){
-  const raw=x?.m?.fixture?.date||x?.fixture?.date||x?.date||null;
-  if(!raw)return Infinity;
-  const ms=Date.parse(raw);return Number.isFinite(ms)?ms:Infinity;
-}
-function kickoffTimeLabel(x){
-  const ms=kickoffEpoch(x);if(!Number.isFinite(ms))return '—';
-  return new Date(ms).toLocaleTimeString('el-GR',{timeZone:ATHENS_TZ,hour:'2-digit',minute:'2-digit',hour12:false});
-}
-function kickoffGroupLabel(x){
-  const ms=kickoffEpoch(x);if(!Number.isFinite(ms))return 'Ώρα άγνωστη';
-  const d=new Date(ms);
-  const day=d.toLocaleDateString('el-GR',{timeZone:ATHENS_TZ,weekday:'short',day:'2-digit',month:'2-digit'});
-  return `${day} · ${kickoffTimeLabel(x)}`;
-}
-function sortByKickoff(arr){return (arr||[]).sort((a,b)=>kickoffEpoch(a)-kickoffEpoch(b));}
 const pct = v => (v*100).toFixed(1)+'%';
 
 function getDatesInRange(s,e){const d=[];let c=new Date(s),end=new Date(e);while(c<=end){d.push(c.toISOString().split('T')[0]);c.setDate(c.getDate()+1);}return d;}
@@ -809,122 +381,6 @@ function setProgress(p,text=''){
   const b=document.getElementById('bar'),s=document.getElementById('status');
   if(b)b.style.width=Math.round(clamp(p,0,100))+'%';
   if(s)s.textContent=text+(_apiActive>0?` [${_apiActive} req]`:'');
-}
-
-function _progressiveElapsed(){
-  if(!_progressiveScanState.startedAt) return '0s';
-  const sec=Math.max(0,Math.round((Date.now()-_progressiveScanState.startedAt)/1000));
-  return sec<60?`${sec}s`:`${Math.floor(sec/60)}m ${sec%60}s`;
-}
-
-function initProgressiveScan(total){
-  _progressiveScanState={active:true,total:Number(total)||0,completed:0,failed:0,startedAt:Date.now()};
-  const sec=document.getElementById('progressiveSection'); if(!sec)return;
-  sec.innerHTML=`<div class="quant-panel" id="progressiveScanPanel" style="padding:0;overflow:hidden;border-color:rgba(37,99,235,0.25);">
-    <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-      <div style="min-width:0;">
-        <div style="font-size:0.95rem;font-weight:900;color:var(--accent-blue);letter-spacing:.04em;">⚡ PROGRESSIVE SMART SCAN</div>
-        <div id="progressiveScanStatus" style="font-size:0.72rem;color:var(--text-muted);margin-top:3px;">Προετοιμασία · 0/${Number(total)||0} αναλύσεις ολοκληρωμένες</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <span id="progressiveScanCounter" style="font-family:var(--font-mono);font-size:0.8rem;font-weight:900;color:var(--accent-blue);background:rgba(37,99,235,.08);border:1px solid rgba(37,99,235,.18);padding:6px 10px;border-radius:8px;">0/${Number(total)||0}</span>
-        <button type="button" class="btn btn-outline" style="font-size:.72rem;padding:6px 10px;" onclick="window.toggleProgressiveStream()">Ροή ▲</button>
-      </div>
-    </div>
-    <div id="progressiveStreamBody" style="display:block;">
-      <div style="padding:10px 18px;font-size:.7rem;color:var(--text-muted);border-bottom:1px solid var(--border-light);">Κάθε αγώνας εμφανίζεται μόλις ολοκληρωθεί. Πάτησε <b>Στατιστικά</b> χωρίς να περιμένεις να τελειώσει το scan.</div>
-      <div id="progressiveStreamList" style="display:flex;flex-direction:column;gap:8px;padding:12px;"></div>
-    </div>
-  </div>`;
-}
-
-window.toggleProgressiveStream=function(){
-  const body=document.getElementById('progressiveStreamBody'); if(!body)return;
-  body.style.display=body.style.display==='none'?'block':'none';
-  const btn=body.parentElement?.querySelector('button'); if(btn)btn.textContent=body.style.display==='none'?'Ροή ▼':'Ροή ▲';
-};
-
-function _progressiveProbChip(label,val){
-  const n=Number(val); if(!Number.isFinite(n)) return '';
-  return `<span style="font-family:var(--font-mono);font-size:.67rem;padding:3px 6px;border-radius:6px;background:var(--bg-surface);border:1px solid var(--border-light);color:var(--text-sub);">${label} ${(n*100).toFixed(0)}%</span>`;
-}
-
-function appendProgressiveMatch(rec,failed=false){
-  if(!_progressiveScanState.active||!rec)return;
-  _progressiveScanState.completed++;
-  if(failed)_progressiveScanState.failed++;
-  const done=_progressiveScanState.completed,total=_progressiveScanState.total||done;
-  const ctr=document.getElementById('progressiveScanCounter'); if(ctr)ctr.textContent=`${done}/${total}`;
-  const stat=document.getElementById('progressiveScanStatus');
-  if(stat)stat.textContent=`${done}/${total} αναλύσεις ολοκληρωμένες · ${_progressiveElapsed()}${_progressiveScanState.failed?` · ${_progressiveScanState.failed} σφάλματα`:''}`;
-  setProgress(10+(done/Math.max(total,1))*88,`Αναλύθηκαν ${done}/${total}`);
-
-  // v6.6: αν ο αγώνας ξεκίνησε όσο αναλυόταν, δεν επιτρέπεται να εμφανιστεί στο Progressive Scan.
-  if(isLive(String(rec.m?.fixture?.status?.short||'').toUpperCase())){
-    document.getElementById(`progressive-card-${rec.fixId}`)?.remove();
-    return;
-  }
-
-  const list=document.getElementById('progressiveStreamList'); if(!list)return;
-  const x=rec, conf=clamp(safeNum(x.strength),0,100);
-  const confCol=conf>=75?'var(--accent-green)':conf>=60?'var(--accent-gold)':'var(--text-muted)';
-  const pp=x.pp||{};
-  const signal=failed?'Analysis error':(x.omegaPick||'NO SIGNAL');
-  const card=document.createElement('div');
-  card.id=`progressive-card-${x.fixId}`;
-  card.dataset.kickoff=String(kickoffEpoch(x));
-  card.style.cssText='border:1px solid var(--border-light);border-radius:10px;background:var(--bg-panel);overflow:hidden;';
-  card.innerHTML=`<div style="padding:11px 12px;display:grid;grid-template-columns:minmax(170px,1.35fr) minmax(120px,.9fr) auto;gap:10px;align-items:center;">
-      <div style="min-width:0;">
-        <div style="font-size:.88rem;font-weight:800;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht||'')} <span style="color:var(--text-dim);">–</span> ${esc(x.at||'')}</div>
-        <div style="font-size:.64rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🕒 <b style="color:var(--accent-teal);">${kickoffTimeLabel(x)}</b> · ${esc(x.lg||'')} · #${done} ολοκληρώθηκε</div>
-      </div>
-      <div style="min-width:0;">
-        <div style="font-size:.76rem;font-weight:800;color:${failed?'var(--accent-red)':confCol};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(signal)}</div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-          ${_progressiveProbChip('1',pp.pHome)}${_progressiveProbChip('X',pp.pDraw)}${_progressiveProbChip('2',pp.pAway)}${rec.verification?`<span style="font-family:var(--font-mono);font-size:.67rem;padding:3px 6px;border-radius:6px;background:var(--bg-surface);border:1px solid var(--border-light);color:${rec.verification.status==='VERIFIED'?'var(--accent-green)':rec.verification.status==='STRONG'?'var(--accent-blue)':rec.verification.status==='LEAN'?'var(--accent-gold)':'var(--text-muted)'};">V ${rec.verification.score} ${rec.verification.signal||'—'}</span>`:''}
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end;flex-wrap:wrap;">
-        <div style="text-align:right;min-width:54px;">
-          <div style="font-family:var(--font-mono);font-size:1.05rem;font-weight:900;color:${confCol};">${conf.toFixed(0)}%</div>
-          <div style="font-size:.55rem;color:var(--text-muted);">CONF</div>
-        </div>
-        <button type="button" class="btn btn-outline" style="font-size:.72rem;padding:7px 10px;" onclick="event.stopPropagation();window.toggleProgressiveMatch('${x.fixId}')">📊 Στατιστικά</button>
-      </div>
-    </div>
-    <div style="padding:0 12px 10px;display:flex;gap:6px;flex-wrap:wrap;font-size:.67rem;color:var(--text-muted);">
-      <span>${acr('xG')}: <b style="color:var(--text-main);">${Number(x.hXGfinal||0).toFixed(2)}–${Number(x.aXGfinal||0).toFixed(2)}</b></span>
-      <span>·</span><span>${acr('O2.5')}: <b style="color:var(--text-main);">${Number(pp.pO25||0)*100?((Number(pp.pO25||0)*100).toFixed(0)+'%'):'—'}</b></span>
-      <span>·</span><span>Κόρνερ: <b style="color:var(--text-main);">${Number(x.expCor||0).toFixed(1)}</b></span>
-      <span>·</span><span>Οφσάιντ λ: <b style="color:var(--text-main);">${Number(x.offside?.totLambda||((x.offside?.hLambda||0)+(x.offside?.aLambda||0))||0).toFixed(1)}</b></span>
-    </div>
-    <div id="progressive-details-${x.fixId}" style="display:none;border-top:1px solid var(--border-light);"></div>`;
-  list.appendChild(card);
-  // v6.3.2: η progressive ροή παραμένει ταξινομημένη με βάση την ώρα έναρξης,
-  // όχι με βάση το ποιο API request τελείωσε πρώτο.
-  [...list.children].sort((a,b)=>Number(a.dataset.kickoff||Infinity)-Number(b.dataset.kickoff||Infinity)).forEach(el=>list.appendChild(el));
-}
-
-window.toggleProgressiveMatch=function(fixId){
-  const box=document.getElementById('progressive-details-'+fixId); if(!box)return;
-  if(box.style.display==='none'||box.style.display===''){
-    const rec=(window.scannedMatchesData||[]).find(r=>String(r.fixId)===String(fixId));
-    if(!rec)return;
-    if(!box.dataset.loaded){
-      box.innerHTML=`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><tbody><tr>${buildAccordionHTML(rec)}</tr></tbody></table></div>`;
-      box.dataset.loaded='1';
-    }
-    box.style.display='block';
-  }else box.style.display='none';
-};
-
-function finalizeProgressiveScan(){
-  _progressiveScanState.active=false;
-  const stat=document.getElementById('progressiveScanStatus');
-  if(stat)stat.textContent=`Ολοκληρώθηκε · ${_progressiveScanState.completed}/${_progressiveScanState.total} αγώνες · ${_progressiveElapsed()}${_progressiveScanState.failed?` · ${_progressiveScanState.failed} σφάλματα`:''}`;
-  const panel=document.getElementById('progressiveScanPanel');
-  if(panel)panel.style.borderColor='rgba(22,163,74,.28)';
 }
 function setBtnsDisabled(d){['btnPre','leagueFilter','btnSyncLive'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;});}
 function showErr(msg){clearTimeout(_errTimer);const box=document.getElementById('errorBox');if(!box)return;box.innerHTML=`<div>⚠️ ${esc(msg)}</div>`;_errTimer=setTimeout(()=>box.innerHTML='',6000);}
@@ -1009,13 +465,6 @@ window.exportExcel = function() {
       'Οφσάιντ HOME (avg)': o.hLambda,
       'Οφσάιντ AWAY (avg)': o.aLambda,
       'Οφσάιντ Σύνολο':     o.totLambda,
-      'P HOME ≥2 Οφσάιντ':  o.hPOff2,
-      'P AWAY ≥2 Οφσάιντ':  o.aPOff2,
-      'P Σύνολο ≥3':        d.offside?.pTotOff25 ?? '',
-      'P Σύνολο ≥4':        d.offside?.pTotOff35 ?? '',
-      'P Αμφότερες ≥1':     d.offside?.pBothOff1 ?? '',
-      'Offside Signal':      d.offside?.bestSignal ?? '',
-      'Offside Conf %':      d.offside?.bestProb ?? '',
       'P(HOME ≥2 Off)':     o.hPOff2,
       'P(AWAY ≥2 Off)':     o.aPOff2,
       'P(Αμφότερες ≥2 Off)':o.pBothOff2,
@@ -1081,13 +530,11 @@ window.importData=function(ev){
   const file=ev.target.files[0];
   if(!file)return;
   const reader=new FileReader();
-  reader.onload=async e=>{
+  reader.onload=e=>{
     try{
       const imported=JSON.parse(e.target.result);
       if(!Array.isArray(imported))throw new Error("Invalid format");
       window.scannedMatchesData=imported;
-      // v6.4: legacy JSON χωρίς verification αναβαθμίζεται τοπικά από τα frozen inputs.
-      imported.forEach(r=>{try{_ensure1X2Verification(r);}catch{}});
 
       // Αποθήκευση στο vault + ενημέρωση UI
       saveToVault(imported);
@@ -1103,13 +550,7 @@ window.importData=function(ev){
       const endD   = dates[dates.length-1] || todayISO();
 
       syncAuditFromScan(imported, startD, endD);
-
-      // v6.3.3: JSON imports μπαίνουν αμέσως στο ίδιο 60s lifecycle loop με το Smart Scan.
-      // Έτσι stale NS/LIVE statuses ανανεώνονται από το API και FT/AET/PEN αφαιρούνται
-      // αυτόματα χωρίς να χρειάζεται νέο Smart Scan ή manual Live Sync.
-      startAutoSync();
-
-      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν · Auto-refresh/Auto-clear κάθε 60s ενεργό.`);
+      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν. Vault ενημερώθηκε.`);
     }catch(err){
       showErr("Σφάλμα αρχείου: " + err.message);
     }
@@ -1168,241 +609,72 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 // ================================================================
 //  API FETCHING & CACHING
 // ================================================================
-function getApiErrorMessage(data){
-  const e=data?.errors;
-  if(Array.isArray(e) && e.length) return e.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' | ');
-  if(e && typeof e==='object' && Object.keys(e).length) return Object.entries(e).map(([k,v])=>`${k}: ${typeof v==='string'?v:JSON.stringify(v)}`).join(' | ');
-  if(typeof e==='string' && e.trim()) return e.trim();
-  return '';
-}
-async function apiReq(path,opts={}){
-  const priority=_priorityValue(opts.priority);
-  const cacheMs=Number(opts.cacheMs)||0;
-  if(cacheMs>0){
-    const cached=_apiResponseCache.get(path);
-    if(cached!==undefined)return cached;
-  }
-  if(_apiInflight.has(path))return _apiInflight.get(path);
-
-  let wrapped;
-  const core=new Promise(resolve=>{
-    _apiQueue.push({path,resolve,priority,cacheMs});
-    _apiQueue.sort((a,b)=>a.priority-b.priority);
-    _scheduleDrain(0);
-  });
-  wrapped=core.finally(()=>{if(_apiInflight.get(path)===wrapped)_apiInflight.delete(path);});
-  _apiInflight.set(path,wrapped);
-  return wrapped;
-}
-
-function _drainQueue(){
-  if(!_apiQueue.length)return;
-  const now=Date.now();
-  const blockedUntil=Math.max(_nextRequestAt,_globalBackoffUntil);
-  if(now<blockedUntil){_scheduleDrain(blockedUntil-now);return;}
-  if(_apiActive>=API_RATE.maxConcurrent)return;
-
-  const item=_apiQueue.shift();
-  _apiActive++;
-  _nextRequestAt=Date.now()+_effectiveGapMs();
-  _executeRequest(item.path,item.resolve,item.cacheMs);
-
-  // Launch επόμενο request μόνο όταν ανοίξει το επόμενο rate slot.
-  if(_apiQueue.length && _apiActive<API_RATE.maxConcurrent)_scheduleDrain(_effectiveGapMs());
-}
-
-async function _executeRequest(path,resolve,cacheMs=0){
+async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
+async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
+async function _executeRequest(path,resolve){
+  // Jitter 0-20ms
+  await new Promise(r=>setTimeout(r,Math.random()*20));
   const MAX_RETRIES=3;
   let resolved=false;
   try{
     for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
-      const globalWait=_globalBackoffUntil-Date.now();
-      if(globalWait>0)await sleep(globalWait);
-
-      const ctrl=new AbortController();
-      const timeout=setTimeout(()=>ctrl.abort(),15000);
-      const started=performance?.now?.() ?? Date.now();
       try{
-        const r=await fetch(`${API_BASE}/${path}`,{
-          headers:{'x-apisports-key':API_KEY,'Accept':'application/json'},
-          signal:ctrl.signal
-        });
-        clearTimeout(timeout);
-        API_RATE.lastLatencyMs=Math.round((performance?.now?.() ?? Date.now())-started);
-        _updateApiRateFromHeaders(r.headers);
-
+        const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
         if(r.ok){
           const data=await r.json();
-          const apiErr=getApiErrorMessage(data);
-          if(apiErr){
-            console.error(`[APEX] API error on ${path}:`,apiErr);
-            const out={...data,response:data?.response||[],__apiError:apiErr};
-            resolve(out); resolved=true; return;
+          // Έλεγχος αν το response έχει πραγματικά δεδομένα (όχι κενό array)
+          if(data.response&&typeof currentCredits==='number'){
+            currentCredits--;
+            const el=document.getElementById('creditDisplay');
+            if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
           }
-          API_RATE.penalty=Math.min(1,API_RATE.penalty+0.03); // gradual recovery
-          if(cacheMs>0)_apiResponseCache.set(path,data,cacheMs);
           resolve(data); resolved=true; return;
         }
-
-        let body=null;
-        try{body=await r.json();}catch{}
-        const apiErr=getApiErrorMessage(body)||`HTTP ${r.status}`;
-
+        // 429 Rate limit → aggressive backoff + log
         if(r.status===429){
-          API_RATE.last429At=Date.now();
-          API_RATE.penalty=Math.max(0.45,API_RATE.penalty*0.72);
-          const retryAfter=Number(r.headers.get('Retry-After'));
-          const wait=Number.isFinite(retryAfter)&&retryAfter>0
-            ? retryAfter*1000
-            : Math.min(12000,1500*(2**attempt)+Math.random()*500);
-          _globalBackoffUntil=Math.max(_globalBackoffUntil,Date.now()+wait);
-          console.warn(`[APEX] 429 on ${path} — adaptive backoff ${Math.round(wait)}ms; target ${_effectiveRps().toFixed(1)} req/s`);
-          if(attempt<MAX_RETRIES){await sleep(wait);continue;}
-        }else if([499,500,502,503,504].includes(r.status) && attempt<MAX_RETRIES){
-          const wait=600*(2**attempt)+Math.random()*300;
-          await sleep(wait); continue;
+          const wait=2000*(attempt+1);
+          console.warn(`[APEX] 429 Rate limit on: ${path} — waiting ${wait}ms`);
+          await new Promise(r=>setTimeout(r,wait));
+          continue;
         }
-
-        resolve({...(body||{}),response:body?.response||[],__apiError:apiErr,__httpStatus:r.status});
-        resolved=true; return;
+        // Άλλα errors (500, 503 κλπ)
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,800*(attempt+1)));continue;}
       }catch(err){
-        clearTimeout(timeout);
-        const retryable=err?.name==='AbortError'||err instanceof TypeError;
-        if(retryable && attempt<MAX_RETRIES){
-          const wait=500*(2**attempt)+Math.random()*350;
-          await sleep(wait); continue;
-        }
-        console.warn(`[APEX] Network error: ${path}`,err?.message||err);
-        resolve({response:[],__apiError:`Network: ${err?.message||err}`}); resolved=true; return;
+        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,600*(attempt+1)));continue;}
+        console.warn(`[APEX] Network error: ${path}`,err.message);
       }
     }
     if(!resolved){
       console.warn(`[APEX] Failed after ${MAX_RETRIES} retries: ${path}`);
-      resolve({response:[],__apiError:'Request failed after retries'});
+      resolve({response:[]});
     }
   }finally{
-    _apiActive=Math.max(0,_apiActive-1);
-    _scheduleDrain(Math.max(0,Math.max(_nextRequestAt,_globalBackoffUntil)-Date.now()));
+    await new Promise(r=>setTimeout(r,REQUEST_GAP_MS));
+    _apiActive--;_drainQueue();
   }
 }
-window.initCredits=async function(){
-  const el=document.getElementById('creditDisplay');
-  if(el){el.textContent='SYNC…';el.className='credit-value';el.title='Έλεγχος API status…';}
-  try{
-    const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),7000);
-    const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'},signal:ctrl.signal});
-    clearTimeout(timer);
-    _updateApiRateFromHeaders(r.headers);
-    if(!r.ok){
-      if(el && currentCredits===null){el.textContent='STATUS ?';el.className='credit-value';el.title=`/status HTTP ${r.status} · το κύριο API θα ελεγχθεί στο scan`;}
-      console.warn('[APEX] /status unavailable, main API may still work:',r.status);
-      return false;
-    }
-    const d=await r.json();
-    const apiErr=getApiErrorMessage(d);
-    if(apiErr){
-      if(el && currentCredits===null){el.textContent='STATUS ?';el.className='credit-value';el.title='Το /status επέστρεψε error · το scan θα ελέγξει το κύριο API';}
-      console.warn('[APEX] API /status error:',apiErr);
-      return false;
-    }
-    const lim=d.response?.requests?.limit_day;
-    const cur=d.response?.requests?.current;
-    if(Number.isFinite(Number(lim))&&Number.isFinite(Number(cur))){
-      currentCredits=Number(lim)-Number(cur);
-      if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');el.title='API online';}
-    }
-    return true;
-  }catch(err){
-    // Το /status μπορεί να αποτύχει ενώ τα κανονικά endpoints λειτουργούν.
-    // Δεν εμφανίζουμε πλέον παραπλανητικό OFFLINE.
-    if(el && currentCredits===null){el.textContent='STATUS ?';el.className='credit-value';el.title='Το /status δεν απάντησε · το κύριο API θα ελεγχθεί στο πρώτο scan';}
-    console.warn('[APEX] API /status unavailable:',err?.message||err);
-    return false;
-  }
-};
+window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
 
-async function getTStats(t,lg,s){
-  const k=`${t}_${lg}_${s}`;
-  if(teamStatsCache.has(k))return teamStatsCache.get(k);
-  if(_teamStatsInflight.has(k))return _teamStatsInflight.get(k);
-  const p=apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`,{priority:'high',cacheMs:CACHE_TTL.TEAM_STATS}).then(d=>{
-    const res=d?.response||{}; teamStatsCache.set(k,res); return res;
-  }).finally(()=>_teamStatsInflight.delete(k));
-  _teamStatsInflight.set(k,p); return p;
-}
-
-async function getLFix(t,lg,s){
-  const k=`${t}_${lg}_${s}`;
-  if(lastFixCache.has(k))return lastFixCache.get(k);
-  if(_lastFixInflight.has(k))return _lastFixInflight.get(k);
-
-  // SMART SCAN TURBO: ένα cross-season request αντί για current-season + fallback.
-  const p=apiReq(`fixtures?team=${t}&last=20&status=FT`,{priority:'high',cacheMs:CACHE_TTL.LAST_FIXTURES}).then(d=>{
-    const all=d?.response||[];
-    const sameLeague=all.filter(f=>String(f?.league?.id)===String(lg));
-    const res=sameLeague.length>=6?sameLeague:all;
-    lastFixCache.set(k,res); return res;
-  }).finally(()=>_lastFixInflight.delete(k));
-  _lastFixInflight.set(k,p); return p;
-}
-function slimStandings(rows){
-  return (rows||[]).map(x=>({team:{id:x?.team?.id||0,name:x?.team?.name||''},rank:x?.rank??99,points:x?.points??0,goalsDiff:x?.goalsDiff??0,all:{win:x?.all?.win??0,played:x?.all?.played??0}}));
-}
-function slimH2HFixtures(rows){
-  return (rows||[]).slice(0,8).map(f=>({fixture:{id:f?.fixture?.id||0,date:f?.fixture?.date||''},teams:{home:{id:f?.teams?.home?.id||0},away:{id:f?.teams?.away?.id||0}},goals:{home:safeNum(f?.goals?.home,0),away:safeNum(f?.goals?.away,0)}}));
-}
+async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
+async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
 async function getStand(lg,s){
   const k=`${lg}_${s}`;
   if(standCache.has(k))return standCache.get(k);
-  const persisted=persistentStandCache.get(k);
-  if(persisted!==undefined){standCache.set(k,persisted);return persisted;}
-  if(_standInflight.has(k))return _standInflight.get(k);
-  const p=apiReq(`standings?league=${lg}&season=${s}`,{priority:'normal',cacheMs:CACHE_TTL.STANDINGS}).then(d=>{
-    const raw=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
-    const f=slimStandings(raw);standCache.set(k,f);persistentStandCache.set(k,f);return f;
-  }).finally(()=>_standInflight.delete(k));
-  _standInflight.set(k,p); return p;
+  const d=await apiReq(`standings?league=${lg}&season=${s}`);
+  const f=Array.isArray(d?.response?.[0]?.league?.standings)?d.response[0].league.standings.flat():[];
+  standCache.set(k,f);
+  return f;
 }
-async function getH2H(t1,t2){
-  const k=`${t1}_${t2}`;
-  if(h2hCache.has(k))return h2hCache.get(k);
-  const persisted=persistentH2HCache.get(k);
-  if(persisted!==undefined){h2hCache.set(k,persisted);return persisted;}
-  if(_h2hInflight.has(k))return _h2hInflight.get(k);
-  const p=apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`,{priority:'normal',cacheMs:CACHE_TTL.H2H}).then(d=>{
-    const out=slimH2HFixtures(d?.response||[]);h2hCache.set(k,out);persistentH2HCache.set(k,out);return out;
-  }).finally(()=>_h2hInflight.delete(k));
-  _h2hInflight.set(k,p);return p;
-}
+async function getH2H(t1,t2){const k=`${t1}_${t2}`;if(h2hCache.has(k))return h2hCache.get(k);const d=await apiReq(`fixtures/headtohead?h2h=${t1}-${t2}&last=8`);h2hCache.set(k,d?.response||[]);return d?.response||[];}
 
 // 📋 LINEUPS per fixture (1 credit, cached until sub detected)
 async function getFixtureLineups(fixtureId) {
   const k = String(fixtureId);
   if(lineupsCache.has(k)) return lineupsCache.get(k);
-  const d = await apiReq(`fixtures/lineups?fixture=${fixtureId}`,{priority:'high'});
+  const d = await apiReq(`fixtures/lineups?fixture=${fixtureId}`);
   const result = parseLineup(d?.response || []);
   if(result.available) lineupsCache.set(k, result);
   return result;
-}
-
-
-function shouldSmartFetchLineup(m){
-  const st=String(m?.fixture?.status?.short||'').toUpperCase();
-  // Live fixtures: lineup is highly relevant and normally available.
-  if(['1H','HT','2H','ET','P','BT','LIVE'].includes(st)) return true;
-  // Finished/postponed/cancelled: avoid look-ahead and wasted pre-match scan calls.
-  if(['FT','AET','PEN','PST','CANC','ABD','AWD','WO'].includes(st)) return false;
-  const kick=Date.parse(m?.fixture?.date||'');
-  if(!Number.isFinite(kick)) return false;
-  const mins=(kick-Date.now())/60000;
-  return mins>=-10 && mins<=SMART_SCAN.LINEUP_WINDOW_MIN;
-}
-
-async function getSmartScanLineup(m){
-  if(!shouldSmartFetchLineup(m)){
-    return {available:false,deferred:true,reason:`Turbo: lineup fetch only within ${SMART_SCAN.LINEUP_WINDOW_MIN}m of kickoff`};
-  }
-  return getFixtureLineups(m.fixture.id);
 }
 
 /**
@@ -1434,64 +706,40 @@ function parseLineup(response) {
 }
 
 // 🎯 TOP SCORERS CACHE
-async function getLeagueTopScorers(lg, s, priority='normal') {
+async function getLeagueTopScorers(lg, s) {
   const k = `${lg}_${s}`;
   if(scorersCache.has(k)) return scorersCache.get(k);
-  if(_scorersInflight.has(k)) return _scorersInflight.get(k);
-  const p=apiReq(`players/topscorers?league=${lg}&season=${s}`,{priority,cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
-    const out=d?.response||[]; scorersCache.set(k,out); return out;
-  }).finally(()=>_scorersInflight.delete(k));
-  _scorersInflight.set(k,p); return p;
+  const d = await apiReq(`players/topscorers?league=${lg}&season=${s}`);
+  const scorers = d?.response || [];
+  scorersCache.set(k, scorers);
+  return scorers;
 }
 
 // 🅰️ TOP ASSISTS (cached per league — 1 credit per league)
-async function getLeagueTopAssists(lg, s, priority='normal') {
+async function getLeagueTopAssists(lg, s) {
   const k = `${lg}_${s}`;
   if(assistsCache.has(k)) return assistsCache.get(k);
-  if(_assistsInflight.has(k)) return _assistsInflight.get(k);
-  const p=apiReq(`players/topassists?league=${lg}&season=${s}`,{priority,cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
-    const out=d?.response||[]; assistsCache.set(k,out); return out;
-  }).finally(()=>_assistsInflight.delete(k));
-  _assistsInflight.set(k,p); return p;
+  const d = await apiReq(`players/topassists?league=${lg}&season=${s}`);
+  assistsCache.set(k, d?.response || []);
+  return d?.response || [];
 }
 
 // 🟨 TOP YELLOW CARDS (cached per league — 1 credit per league)
-async function getLeagueTopCards(lg, s, priority='normal') {
+async function getLeagueTopCards(lg, s) {
   const k = `${lg}_${s}`;
   if(cardsCache.has(k)) return cardsCache.get(k);
-  if(_cardsInflight.has(k)) return _cardsInflight.get(k);
-  const p=apiReq(`players/topyellowcards?league=${lg}&season=${s}`,{priority,cacheMs:CACHE_TTL.LEAGUE_PLAYERS}).then(d=>{
-    const out=d?.response||[]; cardsCache.set(k,out); return out;
-  }).finally(()=>_cardsInflight.delete(k));
-  _cardsInflight.set(k,p); return p;
+  const d = await apiReq(`players/topyellowcards?league=${lg}&season=${s}`);
+  cardsCache.set(k, d?.response || []);
+  return d?.response || [];
 }
 
 // 🏥 INJURIES per team (cached per team+league+season — 2 credits per match, shared via cache)
 async function getTeamInjuries(teamId, lg, s) {
   const k = `${teamId}_${lg}_${s}`;
   if(injuryCache.has(k)) return injuryCache.get(k);
-  if(_injuryInflight.has(k)) return _injuryInflight.get(k);
-  const p=apiReq(`injuries?league=${lg}&season=${s}&team=${teamId}`,{priority:'normal',cacheMs:CACHE_TTL.INJURIES}).then(d=>{
-    const out=d?.response||[];injuryCache.set(k,out);return out;
-  }).finally(()=>_injuryInflight.delete(k));
-  _injuryInflight.set(k,p);return p;
-}
-
-// v6.5: API-Football supports injury lookup by fixture. One request replaces
-// two team-specific requests on the critical path, then we split locally.
-async function getFixtureInjuries(m){
-  const fixId=String(m?.fixture?.id||'');
-  if(!fixId)return {home:[],away:[]};
-  if(fixtureInjuryCache.has(fixId))return fixtureInjuryCache.get(fixId);
-  const persisted=persistentFixtureInjuryCache.get(fixId);
-  if(persisted!==undefined){fixtureInjuryCache.set(fixId,persisted);return persisted;}
-  if(_fixtureInjuryInflight.has(fixId))return _fixtureInjuryInflight.get(fixId);
-  const p=apiReq(`injuries?fixture=${fixId}`,{priority:'normal',cacheMs:CACHE_TTL.INJURIES}).then(d=>{
-    const rows=d?.response||[],hid=String(m?.teams?.home?.id||''),aid=String(m?.teams?.away?.id||'');
-    const out={home:rows.filter(x=>String(x?.team?.id||'')===hid),away:rows.filter(x=>String(x?.team?.id||'')===aid)};
-    fixtureInjuryCache.set(fixId,out);persistentFixtureInjuryCache.set(fixId,out);return out;
-  }).finally(()=>_fixtureInjuryInflight.delete(fixId));
-  _fixtureInjuryInflight.set(fixId,p);return p;
+  const d = await apiReq(`injuries?league=${lg}&season=${s}&team=${teamId}`);
+  injuryCache.set(k, d?.response || []);
+  return d?.response || [];
 }
 const getTeamRank=(st,tId)=>{const r=(st||[]).find(x=>String(x?.team?.id)===String(tId));return r?.rank??null;};
 
@@ -1503,31 +751,15 @@ function variance(arr){if(!arr||arr.length<2)return null;const mean=arr.reduce((
 function stdDev(arr){const v=variance(arr);return v!==null?Math.sqrt(v):null;}
 
 // Cache for fixture statistics (corners/cards/shots per game)
-let fixStatsCache = new BoundedCache(320, CACHE_TTL.FIXTURE_STATS);
-const _fixStatsInflight = new Map();
+let fixStatsCache = new BoundedCache(200);
 
 async function getFixStats(fixtureId){
   const k=String(fixtureId);
   if(fixStatsCache.has(k))return fixStatsCache.get(k);
-  const persisted=persistentFixStatsCache.get(k);
-  if(persisted!==undefined){fixStatsCache.set(k,persisted);return persisted;}
-  if(_fixStatsInflight.has(k))return _fixStatsInflight.get(k);
-
-  const promise=(async()=>{
-    const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`,{priority:'normal',cacheMs:CACHE_TTL.FIXTURE_STATS});
-    const r=d?.response||[];
-    if(r.length>=2){
-      const slim=slimFixtureStats(r);
-      fixStatsCache.set(k,slim);
-      persistentFixStatsCache.set(k,slim);
-      return slim;
-    }
-    fixStatsCache.set(k,r);
-    return r;
-  })().finally(()=>_fixStatsInflight.delete(k));
-
-  _fixStatsInflight.set(k,promise);
-  return promise;
+  const d=await apiReq(`fixtures/statistics?fixture=${fixtureId}`);
+  const r=d?.response||[];
+  fixStatsCache.set(k,r);
+  return r;
 }
 
 function extractFixStatFor(statsArr,teamId,statType){
@@ -1539,7 +771,7 @@ function extractFixStatFor(statsArr,teamId,statType){
   return parseFloat(String(v).replace('%',''))||0;
 }
 
-async function batchCalc(fixtures,tId,preloadedStats=null){
+async function batchCalc(fixtures,tId){
   if(!fixtures?.length)return{
     xg:'1.10',xga:'1.10',cor:5.0,corAgainst:4.5,corRatio:0.40,
     shotsCor:0.22,crd:2.0,shotsOn:4.5,shotsOff:3.5,oppShotsOn:4.0,
@@ -1551,9 +783,7 @@ async function batchCalc(fixtures,tId,preloadedStats=null){
   // Recency decay: most recent match has weight 1.0
   const DECAY=[1.00,0.82,0.67,0.54,0.43,0.35,0.27,0.20];
   const recent=fixtures.slice(0,8);
-  const statsPerFix=preloadedStats
-    ? recent.map(f=>preloadedStats.get(String(f.fixture.id))||[])
-    : await Promise.all(recent.map(f=>getFixStats(f.fixture.id)));
+  const statsPerFix=await Promise.all(recent.map(f=>getFixStats(f.fixture.id)));
 
   let tXG=0,tXGA=0,tCor=0,tCorAgainst=0,tCrd=0,tShotsOn=0,tShotsOff=0,tOppShotsOn=0,tOff=0,tw=0;
   let nCor=0,nCrd=0,nShots=0,nOff=0;
@@ -1636,19 +866,14 @@ function getFormRating(hist){if(!hist?.length)return 50;const w=[1,0.8,0.6,0.4,0
 // ── buildIntel cache — αποφεύγει duplicate calls για ίδια ομάδα ──
 // Key: `${tId}_${lg}_${s}` — αποθηκεύει το Promise (όχι το result)
 // ώστε παράλληλα requests για την ίδια ομάδα να μοιραστούν ένα call
-const _buildIntelCache = new BoundedCache(160, 10*60*1000); // v6.3: reuse computed team intel for 10m across scans
+const _buildIntelCache = new BoundedCache(80);
 const _buildIntelPromises = new Map(); // dedup in-flight requests
 
 async function buildIntel(tId,lg,s,isHome){
-  const cacheKey = `${tId}_${lg}_${s}_${isHome?'H':'A'}`;
+  const cacheKey = `${tId}_${lg}_${s}`;
 
   // Hit: έχουμε ήδη το result
   if(_buildIntelCache.has(cacheKey)) return _buildIntelCache.get(cacheKey);
-  const persistedIntel=persistentTeamIntelCache.get(cacheKey);
-  if(persistedIntel!==undefined){
-    _buildIntelCache.set(cacheKey,persistedIntel);
-    return persistedIntel;
-  }
 
   // In-flight dedup: αν τρέχει ήδη το ίδιο request, περίμενε το
   if(_buildIntelPromises.has(cacheKey)) return _buildIntelPromises.get(cacheKey);
@@ -1656,7 +881,6 @@ async function buildIntel(tId,lg,s,isHome){
   // Miss: νέο request
   const promise = _buildIntelImpl(tId, lg, s, isHome).then(result => {
     _buildIntelCache.set(cacheKey, result);
-    persistentTeamIntelCache.set(cacheKey,result);
     _buildIntelPromises.delete(cacheKey);
     return result;
   }).catch(err => {
@@ -1675,19 +899,7 @@ async function _buildIntelImpl(tId,lg,s,isHome){
     const gen=allFix.slice(0,8);
     const split=allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
     const recent6=allFix.slice(0,6);
-
-    // TURBO: detailed fixture statistics are fetched ONCE per fixture and shared
-    // across general/home-away/recent windows. Score/form still use up to 8 games.
-    const detailFixtures=gen.slice(0,SMART_SCAN.DETAIL_FIXTURES);
-    const detailEntries=await Promise.all(detailFixtures.map(async f=>[
-      String(f.fixture.id), await getFixStats(f.fixture.id)
-    ]));
-    const detailMap=new Map(detailEntries);
-    const[fData,sData,r6Data]=await Promise.all([
-      batchCalc(gen,tId,detailMap),
-      batchCalc(split,tId,detailMap),
-      batchCalc(recent6,tId,detailMap)
-    ]);
+    const[fData,sData,r6Data]=await Promise.all([batchCalc(gen,tId),batchCalc(split,tId),batchCalc(recent6,tId)]);
     const sXG=parseFloat(ss?.goals?.for?.average?.total)||1.35,sXGA=parseFloat(ss?.goals?.against?.average?.total)||1.35;
     const totalTeamGoalsSeason=parseInt(ss?.goals?.for?.total?.total)||0;
     const seaPlayed=safeNum(ss?.fixtures?.played?.total,0);
@@ -2196,570 +1408,14 @@ function adjustPlayerCardProbs(players, oppStats, matchCtx) {
 }
 
 // ================================================================
-//  ADAPTIVE 1X2 CALIBRATION ENGINE v6.2
-//  Raw Poisson/Dixon-Coles probabilities remain the prior.
-//  A learned multinomial correction adjusts P(1)/P(X)/P(2) using
-//  pre-match features, and is updated ONLY from settled Audit records.
-// ================================================================
-const LS_ADAPTIVE_1X2 = 'omega_adaptive_1x2_v6.2';
-const ADAPTIVE_1X2_MIN_GLOBAL = 20;
-const ADAPTIVE_1X2_MIN_LEAGUE = 40;
-const ADAPTIVE_1X2_DEFAULT = Object.freeze({
-  homeBias:   0.060,
-  awayBias:   0.000,
-  wXG:        0.080,
-  wForm:      0.060,
-  wSplit:     0.050,
-  wDefense:   0.050,
-  wCorners:   0.010,
-  wCards:     0.000,
-  wH2H:       0.030,
-  drawBias:   0.000,
-  drawBalance:0.080,
-});
-const ADAPTIVE_1X2_BOUNDS = {
-  homeBias:[-0.30,0.30], awayBias:[-0.30,0.30], wXG:[-0.50,0.50], wForm:[-0.35,0.35],
-  wSplit:[-0.35,0.35], wDefense:[-0.35,0.35], wCorners:[-0.20,0.20],
-  wCards:[-0.15,0.15], wH2H:[-0.25,0.25], drawBias:[-0.40,0.40],
-  drawBalance:[-0.20,0.55],
-};
-let _adaptive1X2State = null;
-
-function _clone1X2Params(p){ return Object.fromEntries(Object.keys(ADAPTIVE_1X2_DEFAULT).map(k=>[k,safeNum(p?.[k],ADAPTIVE_1X2_DEFAULT[k])])); }
-function _loadAdaptive1X2State(){
-  if(_adaptive1X2State) return _adaptive1X2State;
-  let st=null;
-  try{ st=JSON.parse(localStorage.getItem(LS_ADAPTIVE_1X2)||'null'); }catch{}
-  if(!st||typeof st!=='object') st={version:2,global:{params:_clone1X2Params(ADAPTIVE_1X2_DEFAULT),n:0,metrics:null,fingerprint:''},leagues:{},log:[]};
-  st.global=st.global||{params:_clone1X2Params(ADAPTIVE_1X2_DEFAULT),n:0,metrics:null,fingerprint:''};
-  st.global.params=_clone1X2Params(st.global.params);
-  st.leagues=st.leagues||{}; st.log=Array.isArray(st.log)?st.log:[];
-  _adaptive1X2State=st; return st;
-}
-function _saveAdaptive1X2State(){
-  try{ localStorage.setItem(LS_ADAPTIVE_1X2,JSON.stringify(_loadAdaptive1X2State())); }catch{}
-}
-function _blend1X2Params(a,b,t){ const o={}; Object.keys(ADAPTIVE_1X2_DEFAULT).forEach(k=>o[k]=safeNum(a?.[k],ADAPTIVE_1X2_DEFAULT[k])*(1-t)+safeNum(b?.[k],ADAPTIVE_1X2_DEFAULT[k])*t); return o; }
-function _effectiveAdaptive1X2Params(leagueId){
-  const st=_loadAdaptive1X2State();
-  const g=_clone1X2Params(st.global?.params);
-  const l=st.leagues?.[String(leagueId)];
-  if(!l?.params || safeNum(l.n,0)<ADAPTIVE_1X2_MIN_GLOBAL) return {params:g,source:safeNum(st.global?.n,0)>=ADAPTIVE_1X2_MIN_GLOBAL?'GLOBAL':'DEFAULT',leagueBlend:0};
-  // Shrink small league samples toward the global calibration. Max league influence 70%.
-  const alpha=clamp((safeNum(l.n,0)-ADAPTIVE_1X2_MIN_GLOBAL)/100,0,0.70);
-  return {params:_blend1X2Params(g,l.params,alpha),source:'GLOBAL+LEAGUE',leagueBlend:alpha};
-}
-function _adaptive1X2Features(hXG,aXG,hS,aS,h2hSummary=null,ppRaw=null){
-  const logRatio=(a,b)=>Math.log((Math.max(0.05,safeNum(a,0))+0.20)/(Math.max(0.05,safeNum(b,0))+0.20));
-  const h2n=safeNum(h2hSummary?.homeWins,0)+safeNum(h2hSummary?.awayWins,0)+safeNum(h2hSummary?.draws,0);
-  const xg=clamp((safeNum(hXG,1.2)-safeNum(aXG,1.2))/1.25,-1.5,1.5);
-  const rawGap=Math.abs(safeNum(ppRaw?.pHome,0.33)-safeNum(ppRaw?.pAway,0.33));
-  return {
-    xg,
-    form:clamp((safeNum(hS?.formRating,50)-safeNum(aS?.formRating,50))/50,-1.2,1.2),
-    split:clamp(logRatio(hS?.sXG,aS?.sXG),-1.2,1.2),
-    defense:clamp(logRatio(aS?.fXGA,hS?.fXGA),-1.2,1.2),
-    corners:clamp((safeNum(hS?.cor,4.8)-safeNum(aS?.cor,4.8))/4,-1,1),
-    // Positive value means the away side is more card-prone; initial weight is zero and must earn influence from outcomes.
-    cards:clamp((safeNum(aS?.crd,2)-safeNum(hS?.crd,2))/3,-1,1),
-    h2h:h2n>0?clamp((safeNum(h2hSummary?.homeWins,0)-safeNum(h2hSummary?.awayWins,0))/h2n,-1,1):0,
-    balance:clamp(1-rawGap*1.65-Math.abs(xg)*0.18,0,1),
-  };
-}
-function _applyAdaptive1X2WithParams(ppRaw,features,params){
-  const p=_clone1X2Params(params),f=features||{};
-  const dir=p.wXG*safeNum(f.xg,0) + p.wForm*safeNum(f.form,0) + p.wSplit*safeNum(f.split,0) + p.wDefense*safeNum(f.defense,0) + p.wCorners*safeNum(f.corners,0) + p.wCards*safeNum(f.cards,0) + p.wH2H*safeNum(f.h2h,0);
-  const drawAdj=p.drawBias + p.drawBalance*safeNum(f.balance,0);
-  const eps=1e-9;
-  const sh=Math.log(Math.max(eps,safeNum(ppRaw?.pHome,1/3)))+p.homeBias+dir;
-  const sd=Math.log(Math.max(eps,safeNum(ppRaw?.pDraw,1/3)))+drawAdj;
-  const sa=Math.log(Math.max(eps,safeNum(ppRaw?.pAway,1/3)))+p.awayBias-dir;
-  const mx=Math.max(sh,sd,sa),eh=Math.exp(sh-mx),ed=Math.exp(sd-mx),ea=Math.exp(sa-mx),z=eh+ed+ea||1;
-  return {pHome:eh/z,pDraw:ed/z,pAway:ea/z,dirScore:dir,drawAdj};
-}
-function applyAdaptive1X2(ppRaw,hXG,aXG,hS,aS,leagueId,h2hSummary=null){
-  const features=_adaptive1X2Features(hXG,aXG,hS,aS,h2hSummary,ppRaw);
-  const eff=_effectiveAdaptive1X2Params(leagueId);
-  const adj=_applyAdaptive1X2WithParams(ppRaw,features,eff.params);
-  const pp={...ppRaw,pHome:adj.pHome,pDraw:adj.pDraw,pAway:adj.pAway};
-  return {pp,features,params:eff.params,source:eff.source,leagueBlend:eff.leagueBlend,dirScore:adj.dirScore,drawAdj:adj.drawAdj};
-}
-function _oneXTwoOutcome(actual){
-  if(actual==='1'||actual==='X'||actual==='2') return actual;
-  const p=String(actual||'').split('-'); if(p.length<2) return null;
-  const h=parseInt(p[0]),a=parseInt(p[1]); if(!Number.isFinite(h)||!Number.isFinite(a)) return null;
-  return h>a?'1':a>h?'2':'X';
-}
-function _oneXTwoMetrics(rows,params){
-  if(!rows?.length) return {n:0,brier:null,logLoss:null,accuracy:null,biasHome:null,biasDraw:null,biasAway:null};
-  let bs=0,ll=0,hit=0,bh=0,bd=0,ba=0,n=0;
-  rows.forEach(r=>{const y=_oneXTwoOutcome(r.outcome||r.actual);if(!y||!r.rawPP||!r.features)return;const q=_applyAdaptive1X2WithParams(r.rawPP,r.features,params);const yh=y==='1'?1:0,yd=y==='X'?1:0,ya=y==='2'?1:0;bs+=((q.pHome-yh)**2+(q.pDraw-yd)**2+(q.pAway-ya)**2)/3;ll+=-Math.log(Math.max(1e-9,y==='1'?q.pHome:y==='X'?q.pDraw:q.pAway));bh+=q.pHome-yh;bd+=q.pDraw-yd;ba+=q.pAway-ya;const pred=q.pHome>=q.pDraw&&q.pHome>=q.pAway?'1':q.pAway>=q.pDraw?'2':'X';if(pred===y)hit++;n++;});
-  return n?{n,brier:bs/n,logLoss:ll/n,accuracy:hit/n,biasHome:bh/n,biasDraw:bd/n,biasAway:ba/n}:{n:0,brier:null,logLoss:null,accuracy:null,biasHome:null,biasDraw:null,biasAway:null};
-}
-function _fingerprint1X2(rows){
-  const str=(rows||[]).map(r=>`${r.fixtureId||''}:${_oneXTwoOutcome(r.outcome||r.actual)||''}`).sort().join('|');
-  let h=2166136261; for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);} return String(h>>>0);
-}
-function _trainAdaptive1X2(rows,currentParams){
-  const valid=(rows||[]).filter(r=>r?.rawPP&&r?.features&&_oneXTwoOutcome(r.outcome||r.actual));
-  if(valid.length<ADAPTIVE_1X2_MIN_GLOBAL) return {ready:false,n:valid.length};
-  const sorted=[...valid].sort((a,b)=>String(a.date||a.fixtureId||'').localeCompare(String(b.date||b.fixtureId||'')));
-  const keys=['homeBias','awayBias','wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H','drawBias','drawBalance'];
-  const featKey={wXG:'xg',wForm:'form',wSplit:'split',wDefense:'defense',wCorners:'corners',wCards:'cards',wH2H:'h2h'};
-  const lr=0.030,epochs=120,l2=0.035,halfLifeDays=90;
-  const fit=(train,base)=>{
-    let p=_clone1X2Params(base);const newest=Math.max(...train.map(r=>Date.parse(r.date||'')||0),0);
-    const rowWeight=r=>{const t=Date.parse(r.date||'')||newest,age=Math.max(0,(newest-t)/86400000);return Math.max(.18,Math.exp(-Math.log(2)*age/halfLifeDays));};
-    for(let ep=0;ep<epochs;ep++){
-      const g=Object.fromEntries(keys.map(k=>[k,0]));let sw=0;
-      train.forEach(r=>{const y=_oneXTwoOutcome(r.outcome||r.actual),q=_applyAdaptive1X2WithParams(r.rawPP,r.features,p);const yh=y==='1'?1:0,yd=y==='X'?1:0,ya=y==='2'?1:0;const eH=q.pHome-yh,eD=q.pDraw-yd,eA=q.pAway-ya,eDir=eH-eA,w=rowWeight(r);g.homeBias+=w*eH;g.awayBias+=w*eA;['wXG','wForm','wSplit','wDefense','wCorners','wCards','wH2H'].forEach(k=>g[k]+=w*eDir*safeNum(r.features?.[featKey[k]],0));g.drawBias+=w*eD;g.drawBalance+=w*eD*safeNum(r.features?.balance,0);sw+=w;});
-      if(!sw)break;
-      keys.forEach(k=>{const grad=g[k]/sw+l2*(p[k]-ADAPTIVE_1X2_DEFAULT[k]);p[k]-=lr*grad;const b=ADAPTIVE_1X2_BOUNDS[k];p[k]=clamp(p[k],b[0],b[1]);});
-    }
-    return p;
-  };
-  // True expanding-window walk-forward validation. Every validation block is
-  // strictly later than the data used to fit its candidate parameters.
-  const splitFracs=sorted.length>=60?[0.55,0.70,0.85]:[0.75];
-  const folds=[];
-  for(const frac of splitFracs){
-    const cut=Math.max(12,Math.floor(sorted.length*frac)),nextFrac=frac+(sorted.length>=60?0.15:0.25),end=Math.min(sorted.length,Math.max(cut+5,Math.floor(sorted.length*nextFrac)));
-    const train=sorted.slice(0,cut),val=sorted.slice(cut,end);if(train.length<12||val.length<5)continue;
-    const cand=fit(train,currentParams),blend=valid.length<50?0.15:valid.length<100?0.25:valid.length<200?0.35:0.45,blended=_blend1X2Params(currentParams,cand,blend);
-    const oldM=_oneXTwoMetrics(val,currentParams),newM=_oneXTwoMetrics(val,blended);
-    folds.push({trainN:train.length,valN:val.length,oldMetrics:oldM,newMetrics:newM,brierGain:(oldM.brier??0)-(newM.brier??0),logLossGain:(oldM.logLoss??0)-(newM.logLoss??0),accDelta:(newM.accuracy??0)-(oldM.accuracy??0)});
-  }
-  if(!folds.length)return {ready:false,n:valid.length};
-  const mean=k=>folds.reduce((z,f)=>z+safeNum(f[k],0),0)/folds.length;
-  const positive=folds.filter(f=>f.brierGain>=0.0002||f.logLossGain>=0.001).length;
-  const walkBrierGain=mean('brierGain'),walkLLGain=mean('logLossGain'),walkAccDelta=mean('accDelta');
-  const accepted=(positive>=Math.ceil(folds.length/2))&&(walkBrierGain>=0.00035||walkLLGain>=0.0015)&&walkAccDelta>=-0.03;
-  // After temporal validation succeeds, fit on the complete selected history;
-  // the next unseen fixtures remain the real future test.
-  const fullCandidate=fit(sorted,currentParams),blend=valid.length<50?0.15:valid.length<100?0.25:valid.length<200?0.35:0.45,newParams=_blend1X2Params(currentParams,fullCandidate,blend);
-  const lastFold=folds[folds.length-1];
-  return {ready:true,n:valid.length,trainN:lastFold.trainN,valN:lastFold.valN,oldMetrics:lastFold.oldMetrics,newMetrics:lastFold.newMetrics,candidate:fullCandidate,newParams,accepted,blend,validation:'expanding walk-forward',folds,walkBrierGain,walkLLGain,walkAccDelta,halfLifeDays};
-}
-function runAdaptive1X2Calibration(auditRecords){
-  const rows=(auditRecords||[]).filter(r=>r?.rawPP&&r?.features&&_oneXTwoOutcome(r.actual));
-  const st=_loadAdaptive1X2State(),summary={global:null,leagues:{},eligibleN:rows.length,applied:0};
-  if(rows.length<ADAPTIVE_1X2_MIN_GLOBAL){summary.global={ready:false,n:rows.length};return summary;}
-  const fp=_fingerprint1X2(rows),gcur=_clone1X2Params(st.global?.params);
-  if(st.global?.fingerprint===fp){summary.global={ready:true,n:rows.length,skipped:true,metrics:_oneXTwoMetrics(rows,gcur)};}
-  else{
-    const res=_trainAdaptive1X2(rows,gcur);summary.global=res;
-    if(res.accepted){st.global={params:res.newParams,n:rows.length,metrics:res.newMetrics,fingerprint:fp,updatedAt:Date.now()};summary.applied++;}else{st.global.n=rows.length;st.global.metrics=res.newMetrics||res.oldMetrics;st.global.fingerprint=fp;}
-  }
-  const groups={};rows.forEach(r=>{const k=String(r.leagueId||0);(groups[k]||(groups[k]=[])).push(r);});
-  Object.entries(groups).forEach(([lid,recs])=>{
-    if(recs.length<ADAPTIVE_1X2_MIN_LEAGUE){summary.leagues[lid]={ready:false,n:recs.length};return;}
-    const lfp=_fingerprint1X2(recs),old=st.leagues[lid],cur=_clone1X2Params(old?.params||st.global.params);
-    if(old?.fingerprint===lfp){summary.leagues[lid]={ready:true,n:recs.length,skipped:true,metrics:_oneXTwoMetrics(recs,cur)};return;}
-    const res=_trainAdaptive1X2(recs,cur);summary.leagues[lid]=res;
-    if(res.accepted){st.leagues[lid]={params:res.newParams,n:recs.length,metrics:res.newMetrics,fingerprint:lfp,updatedAt:Date.now()};summary.applied++;}
-    else st.leagues[lid]={...(old||{}),params:cur,n:recs.length,metrics:res.newMetrics||res.oldMetrics,fingerprint:lfp,updatedAt:Date.now()};
-  });
-  if(summary.applied>0) st.log.unshift({ts:Date.now(),n:rows.length,applied:summary.applied,global:summary.global?.accepted||false});
-  st.log=st.log.slice(0,50);_saveAdaptive1X2State();return summary;
-}
-function renderAdaptive1X2Calibration(summary){
-  if(!summary) return '';
-  const g=summary.global||{},m=g.newMetrics||g.metrics||g.oldMetrics||{},ready=g.ready!==false&&safeNum(g.n,0)>=ADAPTIVE_1X2_MIN_GLOBAL;
-  const pct=v=>Number.isFinite(v)?(v*100).toFixed(1)+'%':'N/A',num=v=>Number.isFinite(v)?v.toFixed(4):'N/A';
-  const state=!ready?'WAITING':g.skipped?'UNCHANGED':g.accepted?'IMPROVED':'NO VALIDATED IMPROVEMENT';
-  const col=!ready?'var(--text-muted)':g.accepted?'var(--accent-green)':g.skipped?'var(--accent-blue)':'var(--accent-gold)';
-  const bias=`H ${pct(m.biasHome)} · X ${pct(m.biasDraw)} · A ${pct(m.biasAway)}`;
-  return `<div style="margin-bottom:12px;background:rgba(37,99,235,.05);border:1px solid rgba(37,99,235,.18);border-radius:8px;padding:12px 14px;">
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;"><b style="color:var(--accent-blue);">🧠 Adaptive 1X2 Calibration v6.7</b><span style="font-family:var(--font-mono);font-size:.68rem;color:${col};font-weight:800;">${state}</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-top:9px;font-size:.68rem;"><div>Samples<br><b>${safeNum(g.n,summary.eligibleN||0)}</b></div><div>Brier<br><b>${num(m.brier)}</b></div><div>Log Loss<br><b>${num(m.logLoss)}</b></div><div>Argmax accuracy<br><b>${pct(m.accuracy)}</b></div></div>
-    <div style="margin-top:7px;font-size:.64rem;color:var(--text-muted);">Probability bias (Predicted − Actual): ${bias}. Min global n=${ADAPTIVE_1X2_MIN_GLOBAL}, league n=${ADAPTIVE_1X2_MIN_LEAGUE}. Updates use chronological walk-forward hold-out + recency-weighted fitting. Hold-out validation + shrinkage; repeated Audit on the same fixtures does not retrain.</div>
-  </div>`;
-}
-window.getAdaptive1X2State=()=>_loadAdaptive1X2State();
-
-// ================================================================
-//  UNIFIED 1X2 VERIFICATION ENGINE v6.4
-//
-//  ΕΝΑΣ μηχανισμός αποφασίζει το σημείο που εμφανίζεται σε:
-//  Dashboard → RADAR → BEST 4 → Bombs → Audit.
-//
-//  Το argmax P(1/X/2) παραμένει diagnostic leader, αλλά ΔΕΝ γίνεται
-//  πλέον αυτόματα «σημείο». Για να εμφανιστεί 1 / X / 2 πρέπει να
-//  περάσει probability, dominance-gap, xG-direction, consistency,
-//  data-quality και uncertainty gates. Όταν υπάρχουν no-vig odds,
-//  προστίθεται market sanity check χωρίς να αντιγράφεται η αγορά.
-// ================================================================
-const VERIFY_1X2 = Object.freeze({
-  MIN_SIGNAL_SCORE: 60,
-  STRONG_SCORE: 70,
-  VERIFIED_SCORE: 80,
-  MIN_DQ: 55,
-  // Minimum gates για 1 / 2
-  WIN_MIN_P: 0.53,
-  WIN_MIN_GAP: 0.06,
-  WIN_MIN_XG_DIR: 0.25,
-  // Minimum gates για Χ
-  DRAW_MIN_P: 0.34,
-  DRAW_MIN_GAP: 0.03,
-  DRAW_MAX_ABS_XG: 0.35,
-  // Market conflict
-  MARKET_WARN_PP: 12,
-  MARKET_HIGH_PP: 22,
-  MARKET_CONFLICT_PP: 30,
-});
-
-function _verificationLeader(pp){
-  return [
-    {key:'1',prob:safeNum(pp?.pHome,0)},
-    {key:'X',prob:safeNum(pp?.pDraw,0)},
-    {key:'2',prob:safeNum(pp?.pAway,0)},
-  ].sort((a,b)=>b.prob-a.prob);
-}
-
-function _verificationDataQuality(hXG,aXG,hS,aS,ctx=null){
-  let q=64;
-  const hn=safeNum(hS?.r6?.n,0), an=safeNum(aS?.r6?.n,0);
-  if(hn>=5)q+=5; else if(hn<3)q-=6;
-  if(an>=5)q+=5; else if(an<3)q-=6;
-  if(Number.isFinite(Number(hS?.r6?.sdGoals)))q+=3;
-  if(Number.isFinite(Number(aS?.r6?.sdGoals)))q+=3;
-  if(Number.isFinite(Number(hS?.fXGA))&&Number.isFinite(Number(aS?.fXGA)))q+=3;
-  if(Number.isFinite(Number(hS?.sXG))&&Number.isFinite(Number(aS?.sXG)))q+=3;
-  if(ctx?.lineupData?.available)q+=8;
-  if(ctx?.hInjAdj&&ctx?.aInjAdj)q+=4;
-  const fallback=Math.abs(safeNum(hXG,0)-1.10)<0.02&&Math.abs(safeNum(aXG,0)-1.10)<0.02;
-  if(fallback)q-=32;
-  return clamp(Math.round(q),0,100);
-}
-
-function _verificationVolatilityPenalty(hS,aS){
-  const vals=[hS?.r6?.sdGoals,hS?.r6?.sdGoalsAgainst,aS?.r6?.sdGoals,aS?.r6?.sdGoalsAgainst]
-    .map(Number).filter(Number.isFinite);
-  if(vals.length<2)return 5;
-  const avg=vals.reduce((a,b)=>a+b,0)/vals.length;
-  if(avg<=0.85)return 0;
-  if(avg<=1.05)return 2;
-  if(avg<=1.20)return 5;
-  if(avg<=1.40)return 9;
-  if(avg<=1.60)return 13;
-  return 17;
-}
-
-function _verificationLeagueReliability(leagueId){
-  const st=_loadAdaptive1X2State();
-  const l=st.leagues?.[String(leagueId)];
-  const ln=safeNum(l?.n,0), gn=safeNum(st.global?.n,0);
-  let score=50;
-  if(ln>0)score+=Math.min(ln,100)*0.32;
-  else score+=Math.min(gn,100)*0.18;
-  const m=l?.metrics||st.global?.metrics;
-  if(Number.isFinite(Number(m?.brier))){
-    const b=Number(m.brier);
-    score+=clamp((0.26-b)/0.12*12,-8,12);
-  }
-  return clamp(Math.round(score),35,90);
-}
-
-function _verificationConsistency(leader,hS,aS,h2hSummary=null){
-  const vals={
-    formXG:safeNum(hS?.fXG,1.2)-safeNum(aS?.fXG,1.2),
-    defense:safeNum(aS?.fXGA,1.2)-safeNum(hS?.fXGA,1.2), // + = HOME καλύτερη άμυνα
-    split:safeNum(hS?.sXG,1.2)-safeNum(aS?.sXG,1.2),
-    form:(safeNum(hS?.formRating,50)-safeNum(aS?.formRating,50))/50,
-  };
-  const h2n=safeNum(h2hSummary?.homeWins,0)+safeNum(h2hSummary?.awayWins,0)+safeNum(h2hSummary?.draws,0);
-  const h2=h2n?((safeNum(h2hSummary?.homeWins,0)-safeNum(h2hSummary?.awayWins,0))/h2n):0;
-  let parts;
-  if(leader==='X'){
-    const close=(v,scale)=>clamp(100-Math.abs(v)/scale*100,0,100);
-    parts=[close(vals.formXG,0.65),close(vals.defense,0.65),close(vals.split,0.55),close(vals.form,0.65)];
-    if(h2n>=4)parts.push(close(h2,0.65));
-  }else{
-    const dir=leader==='1'?1:-1;
-    const side=(v,scale)=>clamp(50+(dir*v/scale)*50,0,100);
-    parts=[side(vals.formXG,0.60),side(vals.defense,0.60),side(vals.split,0.50),side(vals.form,0.55)];
-    if(h2n>=4)parts.push(side(h2,0.65));
-  }
-  return {score:parts.reduce((a,b)=>a+b,0)/Math.max(parts.length,1),raw:{...vals,h2h:h2},parts};
-}
-
-function _verificationMarketObject(marketNoVig){
-  if(!marketNoVig)return null;
-  const p1=safeNum(marketNoVig['1']??marketNoVig.pHome,NaN);
-  const px=safeNum(marketNoVig['X']??marketNoVig.pDraw,NaN);
-  const p2=safeNum(marketNoVig['2']??marketNoVig.pAway,NaN);
-  if(![p1,px,p2].every(Number.isFinite))return null;
-  const z=p1+px+p2;if(!(z>0))return null;
-  const probs={'1':p1/z,'X':px/z,'2':p2/z};
-  const ordered=Object.entries(probs).map(([key,prob])=>({key,prob})).sort((a,b)=>b.prob-a.prob);
-  return {probs,leader:ordered[0].key,gapPP:(ordered[0].prob-ordered[1].prob)*100,books:safeNum(marketNoVig.books,0)};
-}
-
-
-// ── v6.7 Adaptive 1X2 Signal Policy ────────────────────────────────────────
-// Learns the minimum V-Score needed for a published 1/X/2 signal. It optimizes
-// precision while preserving sample volume and validates the threshold on the
-// newest chronological block before applying it.
-const LS_1X2_POLICY='omega_1x2_signal_policy_v6.7';
-const POLICY_DEFAULT_MIN=60;
-let _verificationPolicyState=null;
-function _defaultVerificationPolicyState(){return {version:1,global:{},leagues:{},fingerprint:'',updatedAt:null,log:[]};}
-function _loadVerificationPolicyState(){if(_verificationPolicyState)return _verificationPolicyState;try{const x=JSON.parse(localStorage.getItem(LS_1X2_POLICY)||'null');_verificationPolicyState=x&&typeof x==='object'?{..._defaultVerificationPolicyState(),...x}:_defaultVerificationPolicyState();}catch{_verificationPolicyState=_defaultVerificationPolicyState();}_verificationPolicyState.global=_verificationPolicyState.global||{};_verificationPolicyState.leagues=_verificationPolicyState.leagues||{};return _verificationPolicyState;}
-function _saveVerificationPolicyState(){try{localStorage.setItem(LS_1X2_POLICY,JSON.stringify(_loadVerificationPolicyState()));}catch{}}
-function _effectiveVerificationPolicy(leagueId,leader){
-  const st=_loadVerificationPolicyState(),l=st.leagues?.[String(leagueId)]||{},cands=[l?.[leader],l?.ALL,st.global?.[leader],st.global?.ALL].filter(Boolean);
-  const r=cands.find(x=>safeNum(x.n,0)>=safeNum(x.minRequired,0))||null;
-  const minScore=clamp(Math.round(safeNum(r?.threshold,POLICY_DEFAULT_MIN)),55,90);
-  return {minScore,strongScore:clamp(Math.max(70,minScore+8),70,92),verifiedScore:clamp(Math.max(80,minScore+18),80,96),source:r?.source||'DEFAULT',n:safeNum(r?.n,0),validation:r?.validation||null};
-}
-
-function compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary=null,ctx=null,marketNoVig=null){
-  const ordered=_verificationLeader(pp),lead=ordered[0],second=ordered[1];
-  const leader=lead.key,prob=lead.prob,gap=Math.max(0,lead.prob-second.prob),xgDiff=safeNum(hXG,0)-safeNum(aXG,0);
-  const xgDir=leader==='1'?xgDiff:leader==='2'?-xgDiff:-Math.abs(xgDiff);
-
-  const probQ=leader==='X'
-    ?clamp((prob-0.28)/(0.45-0.28)*100,0,100)
-    :clamp((prob-0.40)/(0.68-0.40)*100,0,100);
-  const gapQ=leader==='X'
-    ?clamp(gap/0.10*100,0,100)
-    :clamp(gap/0.18*100,0,100);
-  const xgQ=leader==='X'
-    ?clamp((0.45-Math.abs(xgDiff))/0.45*100,0,100)
-    :clamp(xgDir/0.80*100,0,100);
-  const consistency=_verificationConsistency(leader,hS,aS,h2hSummary);
-  const dq=_verificationDataQuality(hXG,aXG,hS,aS,ctx);
-  const leagueRel=_verificationLeagueReliability(leagueId);
-  const volatilityPenalty=_verificationVolatilityPenalty(hS,aS);
-
-  let score=probQ*0.30+gapQ*0.20+xgQ*0.20+consistency.score*0.15+dq*0.10+leagueRel*0.05-volatilityPenalty;
-  let hardConflict=false, conflictReason='';
-  if((leader==='1'||leader==='2')&&xgDir<=-0.10){hardConflict=true;conflictReason='Probability leader αντίθετο από την κατεύθυνση xG';}
-  if(leader==='X'&&Math.abs(xgDiff)>0.55){hardConflict=true;conflictReason='Draw leader με υπερβολικά μεγάλη xG ανισορροπία';}
-  if(consistency.score<25){hardConflict=true;conflictReason=conflictReason||'Οι ανεξάρτητοι δείκτες Form/Split/Defense διαφωνούν έντονα';}
-
-  const market=_verificationMarketObject(marketNoVig);
-  let marketPenalty=0,marketGapPP=null,marketConflict=false;
-  if(market){
-    const mp=safeNum(market.probs[leader],0),modelGapPP=(prob-mp)*100;marketGapPP=modelGapPP;
-    if(modelGapPP>VERIFY_1X2.MARKET_WARN_PP){
-      marketPenalty=clamp((modelGapPP-VERIFY_1X2.MARKET_WARN_PP)/(VERIFY_1X2.MARKET_CONFLICT_PP-VERIFY_1X2.MARKET_WARN_PP)*22,0,22);
-    }
-    if(modelGapPP>=VERIFY_1X2.MARKET_CONFLICT_PP || (market.leader!==leader&&market.gapPP>=10)){
-      marketConflict=true;hardConflict=true;
-      conflictReason=`Model–Market Conflict: APEX ${leader} ${(prob*100).toFixed(1)}% vs no-vig ${(mp*100).toFixed(1)}%`;
-    }
-    score-=marketPenalty;
-  }
-  const learningComponents={probability:probQ,gap:gapQ,xg:xgQ,consistency:consistency.score,dataQuality:dq,leagueReliability:leagueRel,volatilityPenalty};
-  const learned=_applyVerificationLearning(learningComponents,score);
-  score=clamp(Math.round(learned.score),0,99);
-
-  const winGate=(leader==='1'||leader==='2')&&prob>=VERIFY_1X2.WIN_MIN_P&&gap>=VERIFY_1X2.WIN_MIN_GAP&&xgDir>=VERIFY_1X2.WIN_MIN_XG_DIR&&consistency.score>=45&&dq>=VERIFY_1X2.MIN_DQ;
-  const drawGate=leader==='X'&&prob>=VERIFY_1X2.DRAW_MIN_P&&gap>=VERIFY_1X2.DRAW_MIN_GAP&&Math.abs(xgDiff)<=VERIFY_1X2.DRAW_MAX_ABS_XG&&consistency.score>=50&&dq>=VERIFY_1X2.MIN_DQ;
-  const hardGate=winGate||drawGate;
-  const policy=_effectiveVerificationPolicy(leagueId,leader);
-
-  let status='NO_SIGNAL',label='NO 1X2 SIGNAL',signal=null;
-  if(hardConflict){status='CONFLICT';label='CONFLICT';}
-  else if(hardGate&&score>=policy.verifiedScore){status='VERIFIED';label='VERIFIED';signal=leader;}
-  else if(hardGate&&score>=policy.strongScore){status='STRONG';label='STRONG';signal=leader;}
-  else if(hardGate&&score>=policy.minScore){status='LEAN';label='LEAN';signal=leader;}
-
-  const reasons=[];
-  reasons.push(`P${leader} ${(prob*100).toFixed(1)}% · gap ${(gap*100).toFixed(1)}pp`);
-  reasons.push(`xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · consistency ${consistency.score.toFixed(0)}/100`);
-  reasons.push(`DQ ${dq}/100 · volatility −${volatilityPenalty}`);
-  reasons.push(`learned cutoff V≥${policy.minScore} · ${policy.source}`);
-  if(market)reasons.push(`no-vig P${leader} ${(market.probs[leader]*100).toFixed(1)}% · Δ ${marketGapPP>=0?'+':''}${marketGapPP.toFixed(1)}pp${marketPenalty?` · penalty −${marketPenalty.toFixed(0)}`:''}`);
-  if(conflictReason)reasons.push(conflictReason);
-
-  return {
-    leader,leaderProb:prob,second:second.key,secondProb:second.prob,gapPP:gap*100,
-    signal,status,label,score,hardGate,conflict:hardConflict,conflictReason,
-    xgDiff,xgDirection:xgDir,marketConflict,marketGapPP,marketPenalty,
-    components:learningComponents,
-    learning:{active:learned.active,prob:learned.prob,n:learned.n},policy,
-    consistencyRaw:consistency.raw,market,reasons,
-  };
-}
-
-function _ensure1X2Verification(rec){
-  if(!rec?.pp||!rec?.hS||!rec?.aS)return rec?.verification||null;
-  if(rec.verification&&Number.isFinite(Number(rec.verification.score)))return rec.verification;
-  const v=compute1X2Verification(rec.pp,rec.hXGfinal??rec.hExp,rec.aXGfinal??rec.aExp,rec.hS,rec.aS,rec.leagueId,rec.h2h||null,{lineupData:rec.lineupData,hInjAdj:rec.hInjAdj,aInjAdj:rec.aInjAdj},rec.marketNoVig1X2||null);
-  rec.verification=v;rec.rawOutPick=v.leader;rec.outPick=v.signal||'-';return v;
-}
-
-function _marketNoVig1X2FromPack(markets){
-  if(!markets)return null;
-  const a={};let books=Infinity;
-  for(const k of ['1','X','2']){
-    const nv=markets?.[k]?.noVig;if(!nv||!Number.isFinite(Number(nv.prob)))return null;
-    a[k]=Number(nv.prob);books=Math.min(books,Number(nv.books||0));
-  }
-  a.books=Number.isFinite(books)?books:0;return a;
-}
-
-function _isStraight1X2Recommendation(pick){
-  const t=String(pick||'');
-  return (t.includes('ΝΙΚΗ ΓΗΠΕΔ')||t.includes('ΝΙΚΗ ΦΙΛΟΞ')||t.includes('ΙΣΟΠΑΛΙΑ'))&&!t.includes('ΗΜΙΧΡΟΝΟ')&&!t.includes('AH');
-}
-
-function _patchVaultVerification(rec){
-  try{
-    const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');
-    const row=store.find(x=>String(x.fixtureId)===String(rec.fixId));if(!row)return;
-    const v=rec.verification||{};
-    row.verificationSignal=v.signal||null;row.verificationLeader=v.leader||null;row.verificationScore=safeNum(v.score,0);row.verificationStatus=v.status||'NO_SIGNAL';
-    row.verification={signal:v.signal||null,leader:v.leader||null,score:safeNum(v.score,0),status:v.status||'NO_SIGNAL',gapPP:safeNum(v.gapPP,0),xgDiff:safeNum(v.xgDiff,0),components:v.components||null,marketGapPP:Number.isFinite(Number(v.marketGapPP))?Number(v.marketGapPP):null};
-    localStorage.setItem(LS_PREDS,JSON.stringify(store));
-  }catch{}
-}
-
-function _updateRec1X2VerificationFromMarket(rec,markets){
-  if(!rec?.pp||!rec?.hS||!rec?.aS)return null;
-  const nv=_marketNoVig1X2FromPack(markets);if(!nv)return rec.verification||null;
-  rec.marketNoVig1X2=nv;
-  const v=compute1X2Verification(rec.pp,rec.hXGfinal??rec.hExp,rec.aXGfinal??rec.aExp,rec.hS,rec.aS,rec.leagueId,rec.h2h||null,{lineupData:rec.lineupData,hInjAdj:rec.hInjAdj,aInjAdj:rec.aInjAdj},nv);
-  rec.verification=v;rec.rawOutPick=v.leader;rec.outPick=v.signal||'-';
-  if(_isStraight1X2Recommendation(rec.omegaPick)&&(v.status==='CONFLICT'||!v.signal)){
-    rec.omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ';rec.strength=0;rec.reason=`1X2 απορρίφθηκε από Verification Layer: ${v.conflictReason||v.status}.`;
-  }
-  _patchVaultVerification(rec);
-  return v;
-}
-
-// ── Verification Learning — μαθαίνει ποια gates έχουν πραγματική αξία ──
-const LS_VERIFY_1X2_LEARNING='omega_verify_1x2_learning_v6.4';
-const VERIFY_LEARN_MIN_N=40;
-let _verifyLearningState=null;
-function _defaultVerifyLearningState(){return {version:1,model:null,n:0,fingerprint:'',metrics:null,updatedAt:null,log:[]};}
-function _loadVerifyLearningState(){
-  if(_verifyLearningState)return _verifyLearningState;
-  try{const x=JSON.parse(localStorage.getItem(LS_VERIFY_1X2_LEARNING)||'null');_verifyLearningState=x&&typeof x==='object'?{..._defaultVerifyLearningState(),...x}:_defaultVerifyLearningState();}catch{_verifyLearningState=_defaultVerifyLearningState();}
-  return _verifyLearningState;
-}
-function _saveVerifyLearningState(){try{localStorage.setItem(LS_VERIFY_1X2_LEARNING,JSON.stringify(_loadVerifyLearningState()));}catch{}}
-function _verifySigmoid(z){return z>=0?1/(1+Math.exp(-z)):Math.exp(z)/(1+Math.exp(z));}
-function _verificationLearningVector(c){
-  return [
-    clamp(safeNum(c?.probability,0)/100,0,1),
-    clamp(safeNum(c?.gap,0)/100,0,1),
-    clamp(safeNum(c?.xg,0)/100,0,1),
-    clamp(safeNum(c?.consistency,0)/100,0,1),
-    clamp(safeNum(c?.dataQuality,0)/100,0,1),
-    clamp(safeNum(c?.leagueReliability,50)/100,0,1),
-    clamp(1-safeNum(c?.volatilityPenalty,8)/20,0,1),
-  ];
-}
-function _applyVerificationLearning(components,heuristicScore){
-  const st=_loadVerifyLearningState(),m=st.model;
-  if(!m||safeNum(st.n,0)<VERIFY_LEARN_MIN_N||!Array.isArray(m.weights))return {score:heuristicScore,active:false,prob:null,n:safeNum(st.n,0)};
-  const x=_verificationLearningVector(components);
-  let z=safeNum(m.intercept,0);m.weights.forEach((w,i)=>z+=safeNum(w,0)*safeNum(x[i],0));
-  const learnedP=_verifySigmoid(z);
-  // Conservative blend: το learned layer διορθώνει, δεν αντικαθιστά, το heuristic verification.
-  const blend=clamp(safeNum(m.blend,0.25),0.10,0.35);
-  const score=clamp(heuristicScore*(1-blend)+learnedP*100*blend,0,99);
-  return {score,active:true,prob:learnedP,n:safeNum(st.n,0),metrics:st.metrics||null};
-}
-function _verifyLearnFingerprint(rows){
-  const str=(rows||[]).map(r=>`${r.fixtureId||''}:${r.actualOutcome||r.outcome||''}`).sort().join('|');
-  let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return String(h>>>0);
-}
-function _verifyLearnBrier(rows,model=null,useHeuristic=false){
-  if(!rows.length)return null;let s=0,n=0;
-  rows.forEach(r=>{const y=r.hit?1:0;let p;if(useHeuristic)p=clamp(safeNum(r.score,50)/100,0.05,0.95);else{const x=_verificationLearningVector(r.components);let z=safeNum(model?.intercept,0);(model?.weights||[]).forEach((w,i)=>z+=safeNum(w,0)*safeNum(x[i],0));p=clamp(_verifySigmoid(z),0.03,0.97);}s+=(p-y)**2;n++;});
-  return n?s/n:null;
-}
-function runVerificationLearning(auditRecords){
-  const rows=(auditRecords||[]).map(r=>{
-    const v=r.verification||null,leader=r.verificationLeader||v?.leader||null,actual=r.outcome||_oneXTwoOutcome(r.actual);
-    if(!v?.components||!['1','X','2'].includes(leader)||!['1','X','2'].includes(actual))return null;
-    return {fixtureId:r.fixtureId,date:r.date,components:v.components,score:safeNum(r.verificationScore??v.score,0),leader,actualOutcome:actual,hit:leader===actual};
-  }).filter(Boolean);
-  const st=_loadVerifyLearningState(),summary={ready:false,n:rows.length,accepted:false,skipped:false,oldMetrics:st.metrics||null,newMetrics:null};
-  if(rows.length<VERIFY_LEARN_MIN_N)return summary;
-  const fp=_verifyLearnFingerprint(rows);if(st.fingerprint===fp&&st.model){summary.ready=true;summary.skipped=true;summary.newMetrics=st.metrics;return summary;}
-  const sorted=[...rows].sort((a,b)=>String(a.date||a.fixtureId).localeCompare(String(b.date||b.fixtureId)));
-  const vn=Math.max(8,Math.min(Math.ceil(sorted.length*.22),Math.max(8,sorted.length-25)));
-  let train=sorted.slice(0,Math.max(0,sorted.length-vn)),val=sorted.slice(Math.max(0,sorted.length-vn));
-  if(train.length<25){train=sorted;val=sorted;}
-  const hitRate=train.reduce((z,r)=>z+(r.hit?1:0),0)/Math.max(train.length,1);
-  let intercept=Math.log(clamp(hitRate,0.08,0.92)/(1-clamp(hitRate,0.08,0.92)));
-  let weights=[0,0,0,0,0,0,0];
-  const lr=0.12,l2=0.025,epochs=220;
-  for(let ep=0;ep<epochs;ep++){
-    let gi=0,g=new Array(weights.length).fill(0);
-    train.forEach(r=>{const x=_verificationLearningVector(r.components),pred=_verifySigmoid(intercept+x.reduce((z,v,i)=>z+v*weights[i],0)),e=pred-(r.hit?1:0);gi+=e;x.forEach((v,i)=>g[i]+=e*v);});
-    const n=Math.max(train.length,1);intercept-=lr*gi/n;weights=weights.map((w,i)=>clamp(w-lr*(g[i]/n+l2*w),-5,5));
-  }
-  const candidate={intercept,weights,blend:0.25};
-  const baselineBrier=_verifyLearnBrier(val,null,true),candidateBrier=_verifyLearnBrier(val,candidate,false);
-  const valHit=val.reduce((z,r)=>z+(r.hit?1:0),0)/Math.max(val.length,1);
-  const improves=Number.isFinite(candidateBrier)&&Number.isFinite(baselineBrier)&&candidateBrier<=baselineBrier-0.002;
-  summary.ready=true;summary.newMetrics={n:rows.length,trainN:train.length,valN:val.length,baselineBrier,candidateBrier,valLeaderAccuracy:valHit};
-  if(improves){
-    st.model=candidate;st.n=rows.length;st.fingerprint=fp;st.metrics=summary.newMetrics;st.updatedAt=Date.now();st.log=(st.log||[]);st.log.unshift({ts:Date.now(),n:rows.length,baselineBrier,candidateBrier});st.log=st.log.slice(0,30);_saveVerifyLearningState();summary.accepted=true;
-  }else{
-    // Fingerprint ενημερώνεται μόνο όταν υπάρχει ήδη accepted model, για να μη γίνεται άσκοπο retrain στο ίδιο dataset.
-    if(st.model){st.fingerprint=fp;st.n=Math.max(safeNum(st.n,0),rows.length);_saveVerifyLearningState();}
-  }
-  return summary;
-}
-function renderVerificationLearning(summary){
-  if(!summary)return '';
-  const m=summary.newMetrics||summary.oldMetrics||{};
-  const num=v=>Number.isFinite(Number(v))?Number(v).toFixed(4):'N/A';
-  const pct2=v=>Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'N/A';
-  const state=summary.n<VERIFY_LEARN_MIN_N?'WAITING':summary.skipped?'UNCHANGED':summary.accepted?'VALIDATED & APPLIED':'NO HOLD-OUT IMPROVEMENT';
-  const col=summary.accepted?'var(--accent-green)':summary.n<VERIFY_LEARN_MIN_N?'var(--text-muted)':'var(--accent-gold)';
-  return `<div style="margin-bottom:12px;background:rgba(168,85,247,.05);border:1px solid rgba(168,85,247,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-purple);">🛡️ Verification Learning v6.7</b><span style="font-family:var(--font-mono);font-size:.66rem;font-weight:900;color:${col};">${state}</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-top:8px;font-size:.68rem;"><div>Samples<br><b>${summary.n}</b></div><div>Baseline Brier<br><b>${num(m.baselineBrier)}</b></div><div>Learned Brier<br><b>${num(m.candidateBrier)}</b></div><div>Leader accuracy<br><b>${pct2(m.valLeaderAccuracy)}</b></div></div><div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Min n=${VERIFY_LEARN_MIN_N}. Chronological hold-out. Logistic reliability layer μαθαίνει από Probability / Gap / xG / Consistency / Data Quality / League Reliability / Stability και εφαρμόζεται μόνο αν βελτιώνει hold-out Brier.</div></div>`;
-}
-
-
-function _policyEval(rows,threshold){const a=(rows||[]).filter(r=>safeNum(r.score,0)>=threshold),h=a.filter(r=>r.hit).length;return {n:a.length,h,acc:a.length?h/a.length:null,lb:a.length?_wilsonLower(h,a.length):0,coverage:rows?.length?a.length/rows.length:0};}
-function _optimizePolicyGroup(rows,minRequired,source){
-  const sorted=[...(rows||[])].sort((a,b)=>String(a.date||a.fixtureId||'').localeCompare(String(b.date||b.fixtureId||'')));if(sorted.length<minRequired)return {ready:false,n:sorted.length,minRequired};
-  const vn=Math.max(8,Math.ceil(sorted.length*.25)),train=sorted.slice(0,-vn),val=sorted.slice(-vn);if(train.length<12)return {ready:false,n:sorted.length,minRequired};
-  let best=null;for(let t=55;t<=90;t+=5){const e=_policyEval(train,t);if(e.n<Math.max(8,Math.ceil(train.length*.12)))continue;const objective=e.lb+0.035*Math.sqrt(e.coverage);if(!best||objective>best.objective)best={threshold:t,...e,objective};}
-  if(!best)return {ready:false,n:sorted.length,minRequired};
-  const cand=_policyEval(val,best.threshold),base=_policyEval(val,POLICY_DEFAULT_MIN);const enough=cand.n>=Math.max(5,Math.ceil(val.length*.12));
-  const improved=enough&&Number.isFinite(cand.acc)&&((cand.lb>=base.lb+0.012)||(Number.isFinite(base.acc)&&cand.acc>=base.acc+0.03))&&cand.acc>=0.50;
-  return {ready:true,n:sorted.length,minRequired,threshold:best.threshold,train:best,val:cand,baseline:base,accepted:improved||best.threshold===POLICY_DEFAULT_MIN,source,validation:'latest 25%'};
-}
-function runVerificationPolicyLearning(auditRecords){
-  const rows=(auditRecords||[]).map(r=>{const leader=r.verificationLeader||r.verification?.leader||null,actual=r.outcome||_oneXTwoOutcome(r.actual),score=safeNum(r.verificationScore??r.verification?.score,NaN);if(!['1','X','2'].includes(leader)||!['1','X','2'].includes(actual)||!Number.isFinite(score))return null;return {fixtureId:r.fixtureId,date:r.date,leagueId:r.leagueId||0,leader,score,hit:leader===actual};}).filter(Boolean);
-  const st=_loadVerificationPolicyState(),summary={n:rows.length,global:{},leagues:{},applied:0,skipped:false};
-  const fp=_fingerprint1X2(rows);if(st.fingerprint===fp){summary.skipped=true;return summary;}
-  const apply=(bucket,key,res)=>{if(!res.ready)return;if(res.accepted){bucket[key]={threshold:res.threshold,n:res.n,minRequired:res.minRequired,source:res.source,validation:res.val,updatedAt:Date.now()};summary.applied++;}};
-  const gAll=_optimizePolicyGroup(rows,50,'GLOBAL ALL');summary.global.ALL=gAll;apply(st.global,'ALL',gAll);
-  for(const o of ['1','X','2']){const rr=rows.filter(r=>r.leader===o),res=_optimizePolicyGroup(rr,30,`GLOBAL ${o}`);summary.global[o]=res;apply(st.global,o,res);}
-  const groups={};rows.forEach(r=>(groups[String(r.leagueId)]||(groups[String(r.leagueId)]=[])).push(r));
-  for(const [lid,rr] of Object.entries(groups)){const dest=st.leagues[lid]||(st.leagues[lid]={});const lg={};const all=_optimizePolicyGroup(rr,35,`LEAGUE ${lid} ALL`);lg.ALL=all;apply(dest,'ALL',all);for(const o of ['1','X','2']){const res=_optimizePolicyGroup(rr.filter(r=>r.leader===o),24,`LEAGUE ${lid} ${o}`);lg[o]=res;apply(dest,o,res);}summary.leagues[lid]=lg;}
-  st.fingerprint=fp;st.updatedAt=Date.now();if(summary.applied){st.log=st.log||[];st.log.unshift({ts:Date.now(),n:rows.length,applied:summary.applied});st.log=st.log.slice(0,40);}_saveVerificationPolicyState();
-  return summary;
-}
-function renderVerificationPolicyLearning(summary){
-  if(!summary)return '';const st=_loadVerificationPolicyState(),g=st.global||{};const chip=o=>{const x=g[o];return x?`<span style="font-family:var(--font-mono);font-size:.67rem;padding:3px 7px;border:1px solid rgba(34,197,94,.22);border-radius:5px;color:var(--accent-green);">${o}: V≥${x.threshold} · n=${x.n}</span>`:'';};
-  return `<div style="margin-bottom:12px;background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.20);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><b style="color:var(--accent-green);">🎯 Adaptive Signal Policy v6.7</b><span style="font-family:var(--font-mono);font-size:.66rem;">${summary.skipped?'unchanged dataset':summary.applied?`${summary.applied} validated updates`:'no new validated cutoff'}</span></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">${chip('ALL')}${chip('1')}${chip('X')}${chip('2')}</div><div style="font-size:.61rem;color:var(--text-muted);margin-top:7px;">Το minimum V-Score μαθαίνεται με chronological train/validation. Αν η ακρίβεια 1X2 είναι χαμηλή, το σύστημα αυξάνει το cutoff αντί να δημοσιεύει αδύναμα σημεία. League/outcome policy χρησιμοποιείται μόνο με επαρκές n.</div></div>`;
-}
-
-// ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
-function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null,verificationCtx=null){
-  // hXG/aXG έχουν ήδη βαθμονομηθεί με lp.mult πριν φτάσουν εδώ.
-  // Raw Poisson/Dixon-Coles = prior. Adaptive 1X2 = probability calibration layer.
-  const hL=clamp(hXG,0.15,4.0),aL=clamp(aXG,0.15,4.0);
-  const ppRaw=getPoissonProbabilities(hL,aL);
-  const oneXTwo=applyAdaptive1X2(ppRaw,hXG,aXG,hS,aS,leagueId,h2hSummary);
-  const pp=oneXTwo.pp;const xgDiff=hXG-aXG;
-  // v6.4: argmax = diagnostic leader. Το εμφανιζόμενο 1/X/2 περνά Unified Verification.
-  const verification=compute1X2Verification(pp,hXG,aXG,hS,aS,leagueId,h2hSummary,verificationCtx,verificationCtx?.marketNoVig1X2||null);
-  const rawOutPick=verification.leader;
-  const outPick=verification.signal||'-';
+function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
+  const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
+  const pp=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
+  let outPick='X';
+  if(pp.pHome-pp.pAway>0.15&&xgDiff>lp.xgDiff)outPick='1';
+  else if(pp.pAway-pp.pHome>0.15&&xgDiff<-lp.xgDiff)outPick='2';
   
   // --- ASIAN HANDICAP (-1.5) CALCULATION ---
   let pAH_Home = 0, pAH_Away = 0;
@@ -2797,26 +1453,8 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null,verifi
   const aPOff1  = poissonOffGe(aOffLambda, 1);  // P(AWAY ≥1)
   const aPOff2  = poissonOffGe(aOffLambda, 2);  // P(AWAY ≥2)
   const aPOff3  = poissonOffGe(aOffLambda, 3);  // P(AWAY ≥3)
-  const pBothOff1 = hPOff1 * aPOff1;            // P(αμφότερες ≥1)
   const pBothOff2 = hPOff2 * aPOff2;            // P(αμφότερες ≥2)
-  const pTotOff25 = poissonOffGe(totOffLambda, 3); // P(σύνολο ≥3 = Over 2.5)
-  const pTotOff35 = poissonOffGe(totOffLambda, 4); // P(σύνολο ≥4 = Over 3.5)
-  const pTotOff45 = poissonOffGe(totOffLambda, 5); // P(σύνολο ≥5 = Over 4.5)
-
-  // Αυτόνομο offside market signal. Δεν αλλάζει το κύριο omegaPick.
-  // Δίνει ξεχωριστή ένδειξη μόνο όταν η Poisson πιθανότητα είναι επαρκής.
-  const offsideCandidates = [
-    { market:'ΣΥΝΟΛΟ OVER 2.5 ΟΦΣΑΪΝΤ', prob:pTotOff25 },
-    { market:'HOME OVER 1.5 ΟΦΣΑΪΝΤ',   prob:hPOff2 },
-    { market:'AWAY OVER 1.5 ΟΦΣΑΪΝΤ',   prob:aPOff2 },
-    { market:'ΑΜΦΟΤΕΡΕΣ ≥1 ΟΦΣΑΪΝΤ',    prob:pBothOff1 },
-    { market:'ΣΥΝΟΛΟ OVER 3.5 ΟΦΣΑΪΝΤ', prob:pTotOff35 },
-    { market:'ΑΜΦΟΤΕΡΕΣ ≥2 ΟΦΣΑΪΝΤ',    prob:pBothOff2 },
-  ].sort((a,b)=>b.prob-a.prob);
-  const bestOffside = offsideCandidates[0];
-  const offsideConf = bestOffside ? bestOffside.prob*100 : 0;
-  const offsideGrade = offsideConf>=82?'A+':offsideConf>=76?'A':offsideConf>=70?'B+':offsideConf>=65?'B':'C';
-
+  const pTotOff35 = poissonOffGe(totOffLambda, 4); // P(σύνολο ≥4)
   const offside = {
     hLambda:parseFloat(hOffLambda.toFixed(2)),
     aLambda:parseFloat(aOffLambda.toFixed(2)),
@@ -2827,15 +1465,8 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null,verifi
     aPOff1:parseFloat((aPOff1*100).toFixed(1)),
     aPOff2:parseFloat((aPOff2*100).toFixed(1)),
     aPOff3:parseFloat((aPOff3*100).toFixed(1)),
-    pBothOff1:parseFloat((pBothOff1*100).toFixed(1)),
     pBothOff2:parseFloat((pBothOff2*100).toFixed(1)),
-    pTotOff25:parseFloat((pTotOff25*100).toFixed(1)),
     pTotOff35:parseFloat((pTotOff35*100).toFixed(1)),
-    pTotOff45:parseFloat((pTotOff45*100).toFixed(1)),
-    bestSignal: bestOffside?.market || 'ΧΩΡΙΣ ΣΗΜΑ',
-    bestProb: parseFloat(offsideConf.toFixed(1)),
-    grade: offsideGrade,
-    reliable: offsideConf >= 70,
   };
   
   let omegaPick='ΧΩΡΙΣ ΣΥΣΤΑΣΗ',reason='Δεν υπάρχει σαφές στατιστικό πλεονέκτημα για αυτό το ματς.',pickScore=0;
@@ -2879,20 +1510,17 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null,verifi
     omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;
     reason=`Ποντάρισμα: Και οι δύο ομάδες να σκοράρουν. Αμφότερες έχουν επιθετική απειλή (🏠 ${hXG.toFixed(2)} / ✈️ ${aXG.toFixed(2)} xG) — ${pct(pp.pBTTS)} πιθανότητα.`;}
 
-  // 7. UNIFIED 1X2 — ίδιο Verification Layer με Dashboard / RADAR / BEST4 / Audit
-  else if(verification.signal==='1'||verification.signal==='2'){
-    const isHome=verification.signal==='1';
-    const outcome=isHome?'🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ':'✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
-    const outProb=isHome?pp.pHome:pp.pAway;
-    if(verification.score>=VERIFY_1X2.STRONG_SCORE){
-      omegaPick=verification.status==='VERIFIED'?`⚡ ${outcome}`:outcome;
-      pickScore=verification.score;
-      reason=`1X2 ${verification.status}: ${verification.score}/100 · P ${pct(outProb)} · gap ${verification.gapPP.toFixed(1)}pp · xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · consistency ${verification.components.consistency.toFixed(0)}/100.`;
+  // 7. STRAIGHT WIN
+  else if(outPick !== 'X' && Math.abs(xgDiff) >= lp.xgDiff){
+    const isHome   = outPick==='1';
+    const outcome  = isHome ? '🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ' : '✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
+    const outProb  = isHome ? pp.pHome : pp.pAway;
+    const formOk   = isHome ? hS.formRating >= 40 : aS.formRating >= 40;
+    if(outProb >= 0.58 && formOk){
+      omegaPick = outProb >= 0.65 ? `⚡ ${outcome}` : outcome;
+      pickScore = outProb*100;
+      reason = `Ποντάρισμα: Νίκη ${isHome?'γηπεδούχων':'φιλοξενούμενων'}. ${confLabel(outProb*100)} — υπεροχή σε xG (${isHome?'+':''}${xgDiff.toFixed(2)}) και φόρμα. Πιθανότητα νίκης: ${pct(outProb)}.`;
     }
-  }
-  else if(verification.signal==='X'&&verification.score>=75){
-    omegaPick='🤝 ΙΣΟΠΑΛΙΑ (X)';pickScore=verification.score;
-    reason=`1X2 ${verification.status}: ${verification.score}/100 · PX ${pct(pp.pDraw)} · gap ${verification.gapPP.toFixed(1)}pp · |xGΔ| ${Math.abs(xgDiff).toFixed(2)} · consistency ${verification.components.consistency.toFixed(0)}/100.`;
   }
 
   // 8. PROPS
@@ -2915,12 +1543,11 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,h2hSummary=null,verifi
   // exactConf: αθροίζει πιθανότητες Top-1 + Top-2 (Dixon-Coles adjusted) — πιο ρεαλιστικό
   const top1P=pp.bestScore.prob, top2P=pp.secondScore.prob;
   const exactConf=Math.round(clamp((top1P+top2P)*100*4.2,0,99));
-  return{omegaPick,reason,pickScore,outPick,rawOutPick,verification,
+  return{omegaPick,reason,pickScore,outPick,
     hG:pp.bestScore.h,aG:pp.bestScore.a,
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
-    hExp:hL,aExp:aL,exactConf,xgDiff,pp,ppRaw,oneXTwo,
-    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL,
-    offside};
+    hExp:hL,aExp:aL,exactConf,xgDiff,pp,
+    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL};
 }
 
 // ================================================================
@@ -2971,137 +1598,113 @@ function computeHTAnalysis(hExp, aExp, lp) {
 // ================================================================
 //  SCANNER MAIN LOOP
 // ================================================================
-// ── v6.5 FAST CORE: player intelligence is not allowed to block every match. ──
-// Top scorers / assists are fetched on the critical path ONLY when lineup or
-// injuries can actually change the xG adjustment. Full player/card enrichment
-// is completed afterwards at low API priority and updates the Players tab.
-let _playerEnrichmentQueue = [];
-let _playerEnrichmentToken = 0;
-
-function _needsBlockingPlayerIntel(lineupData,hInjuries,aInjuries){
-  return !!lineupData?.available || (Array.isArray(hInjuries)&&hInjuries.length>0) || (Array.isArray(aInjuries)&&aInjuries.length>0);
-}
-
-function queueDeferredPlayerEnrichment(rec,ctx={}){
-  if(!rec?.fixId||!rec?.m)return;
-  _playerEnrichmentQueue.push({rec,...ctx});
-}
-
-async function enrichPlayerIntelDeferred(item){
-  const rec=item?.rec;
-  if(!rec?.m)return;
-  const lg=rec.m.league.id,s=rec.m.league.season;
-  const [leagueScorers,leagueAssists,leagueCards]=await Promise.all([
-    item.coreScorers || getLeagueTopScorers(lg,s,'low'),
-    item.coreAssists || getLeagueTopAssists(lg,s,'low'),
-    getLeagueTopCards(lg,s,'low')
-  ]);
-  const hPlayers=buildPlayerProfiles(rec.m.teams.home.id,leagueScorers,leagueAssists,leagueCards,rec.hS?.totalTeamGoalsSeason||0);
-  const aPlayers=buildPlayerProfiles(rec.m.teams.away.id,leagueScorers,leagueAssists,leagueCards,rec.aS?.totalTeamGoalsSeason||0);
-  const hXI=rec.lineupData?.available?rec.lineupData.home:null;
-  const aXI=rec.lineupData?.available?rec.lineupData.away:null;
-  // Re-run only to annotate player availability/injury flags. The core xG/pick is
-  // deliberately not rewritten here: scorers+assists already supplied every GAP
-  // component that can affect the lineup/injury adjustment on the blocking path.
-  applyLineupAdjustment(rec.hXGbase,hPlayers,hXI,item.hInjuries||[]);
-  applyLineupAdjustment(rec.aXGbase,aPlayers,aXI,item.aInjuries||[]);
-  const cardCtx={xgDiff:rec.xgDiff,leagueId:rec.leagueId};
-  adjustPlayerCardProbs(hPlayers,rec.aS,cardCtx);
-  adjustPlayerCardProbs(aPlayers,rec.hS,cardCtx);
-  rec.hPlayers=hPlayers;rec.aPlayers=aPlayers;
-  rec.hScorerProb=calculateScorerProb(leagueScorers,rec.m.teams.home.id,rec.hExp,rec.hS?.totalTeamGoalsSeason||0,hPlayers);
-  rec.aScorerProb=calculateScorerProb(leagueScorers,rec.m.teams.away.id,rec.aExp,rec.aS?.totalTeamGoalsSeason||0,aPlayers);
-  rec.playerIntelReady=true;
-}
-
-function startDeferredPlayerEnrichment(){
-  const queue=_playerEnrichmentQueue.splice(0);
-  if(!queue.length)return;
-  const token=++_playerEnrichmentToken;
-  // Small pool + LOW-priority API calls: odds/live/core traffic always wins.
-  runWorkerPool(queue,3,async item=>{try{await enrichPlayerIntelDeferred(item);}catch(e){console.warn('[APEX] deferred player intel',e?.message||e);}})
-    .then(()=>{
-      if(token!==_playerEnrichmentToken)return;
-      try{rebuildTopLists();renderTopSections();}catch{}
-    }).catch(()=>{});
-}
-
 async function analyzeMatchSafe(m,index,total){
   try{
-    // FAST CORE critical path: only data that can change the actual match model.
-    // League player tables are no longer fetched unconditionally for every match.
-    const[hS,aS,stand,h2hFix,fixtureInjuries,lineupData]=await Promise.all([
-      buildIntel(m.teams.home.id,m.league.id,m.league.season,true),
-      buildIntel(m.teams.away.id,m.league.id,m.league.season,false),
-      getStand(m.league.id,m.league.season),
-      getH2H(m.teams.home.id,m.teams.away.id),
-      getFixtureInjuries(m),
-      getSmartScanLineup(m)
+    setProgress(10+((index+1)/total)*88,`Processing ${index+1}/${total}: ${m.teams.home.name}`);
+    
+    const[hS, aS, stand, h2hFix, leagueScorers, leagueAssists, leagueCards, hInjuries, aInjuries, lineupData] = await Promise.all([
+      buildIntel(m.teams.home.id, m.league.id, m.league.season, true),
+      buildIntel(m.teams.away.id, m.league.id, m.league.season, false),
+      getStand(m.league.id, m.league.season),
+      getH2H(m.teams.home.id, m.teams.away.id),
+      getLeagueTopScorers(m.league.id, m.league.season),
+      getLeagueTopAssists(m.league.id, m.league.season),
+      getLeagueTopCards(m.league.id, m.league.season),
+      getTeamInjuries(m.teams.home.id, m.league.id, m.league.season),
+      getTeamInjuries(m.teams.away.id, m.league.id, m.league.season),
+      getFixtureLineups(m.fixture.id)        // 📋 Starting XI — primary source of truth
     ]);
-    const hInjuries=fixtureInjuries?.home||[],aInjuries=fixtureInjuries?.away||[];
-
+    
     const lp=getLeagueParams(m.league.id);
-    const dcResult=computeDCLambdas(hS,aS,m.league.id);
+    
+    // ── DIXON-COLES ΛΑΜΒΔΑ — blended με form-based xG ──────────────
+    const dcResult = computeDCLambdas(hS, aS, m.league.id);
+    
+    // H2H Lambda Blend: αν υπάρχουν >= 4 H2H αγώνες, μεταθέτουμε 12% του λ προς το H2H avg goals
     const h2hSummary=summarizeH2H(h2hFix,m.teams.home.id,m.teams.away.id);
     const h2hGames=h2hSummary.homeWins+h2hSummary.awayWins+h2hSummary.draws;
-    let hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
+    let hXG=Number(hS.fXG)*lp.mult, aXG=Number(aS.fXG)*lp.mult;
     if(h2hGames>=4){
-      const h2hAvg=parseFloat(h2hSummary.h2hAvgGoals)||0,modelAvg=hXG+aXG;
-      if(modelAvg>0&&h2hAvg>0){const scale=h2hAvg/modelAvg,blend=0.12;hXG=hXG*(1-blend)+(hXG*scale)*blend;aXG=aXG*(1-blend)+(aXG*scale)*blend;}
+      const h2hAvg=parseFloat(h2hSummary.h2hAvgGoals)||0;
+      const modelAvg=hXG+aXG;
+      if(modelAvg>0&&h2hAvg>0){
+        const scale=h2hAvg/modelAvg; const blend=0.12;
+        hXG=hXG*(1-blend)+(hXG*scale)*blend;
+        aXG=aXG*(1-blend)+(aXG*scale)*blend;
+      }
     }
-    const blended=blendLambdas(hXG,aXG,dcResult.dcH,dcResult.dcA,dcResult.trust);
-    hXG=blended.blendH;aXG=blended.blendA;
-    const sitCtx=computeSituationalContext(stand,m.teams.home.id,m.teams.away.id,m.league.id);
-    hXG*=sitCtx.hMot;aXG*=sitCtx.aMot;
 
-    // Fetch scorer/assist tables on the blocking path only when their GAP shares
-    // are needed for a real injury or lineup adjustment.
-    const needPlayerAdjustment=_needsBlockingPlayerIntel(lineupData,hInjuries,aInjuries);
-    let leagueScorers=null,leagueAssists=null;
-    if(needPlayerAdjustment){
-      [leagueScorers,leagueAssists]=await Promise.all([
-        getLeagueTopScorers(m.league.id,m.league.season,'normal'),
-        getLeagueTopAssists(m.league.id,m.league.season,'normal')
-      ]);
+    // Blend DC with form-based
+    const blended = blendLambdas(hXG, aXG, dcResult.dcH, dcResult.dcA, dcResult.trust);
+    hXG = blended.blendH; aXG = blended.blendA;
+
+    // ── SITUATIONAL CONTEXT ──────────────────────────────────────────
+    const sitCtx = computeSituationalContext(stand, m.teams.home.id, m.teams.away.id, m.league.id);
+    hXG *= sitCtx.hMot;
+    aXG *= sitCtx.aMot;
+    
+    const tXG=hXG+aXG; // base, pre-injury
+
+    // 🏥 PLAYER PROFILES — xG contribution + card probability per player
+    const hPlayers = buildPlayerProfiles(m.teams.home.id, leagueScorers, leagueAssists, leagueCards, hS.totalTeamGoalsSeason);
+    const aPlayers = buildPlayerProfiles(m.teams.away.id, leagueScorers, leagueAssists, leagueCards, aS.totalTeamGoalsSeason);
+
+    // ⚠️ ADJUSTMENT — Lineup-first: αν υπάρχει XI → lineup-based, αλλιώς injury-based
+    const hXI = lineupData?.available ? lineupData.home : null;
+    const aXI = lineupData?.available ? lineupData.away  : null;
+    const hInjAdj = applyLineupAdjustment(hXG, hPlayers, hXI, hInjuries);
+    const aInjAdj = applyLineupAdjustment(aXG, aPlayers, aXI, aInjuries);
+    const hXGfinal = hInjAdj.adjXG;
+    const aXGfinal = aInjAdj.adjXG;
+    const tXGfinal = hXGfinal + aXGfinal;
+
+    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id);
+
+    // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
+    const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
+    // Καλείται ΜΕΤΑ το computePick για να έχουμε το result.xgDiff
+    // Ταξινομεί τους players κατά adjCardProb DESC
+    const cardCtx = { xgDiff: result.xgDiff, leagueId: m.league.id };
+    adjustPlayerCardProbs(hPlayers, aS, cardCtx); // home team players: opponent = away stats
+    adjustPlayerCardProbs(aPlayers, hS, cardCtx); // away team players: opponent = home stats
+    
+    const hScorerProb = calculateScorerProb(leagueScorers, m.teams.home.id, result.hExp, hS.totalTeamGoalsSeason, hPlayers);
+    const aScorerProb = calculateScorerProb(leagueScorers, m.teams.away.id, result.aExp, aS.totalTeamGoalsSeason, aPlayers);
+
+    let actStats = null;
+    if (isFinished(m.fixture.status.short)) {
+      const sr = await apiReq(`fixtures/statistics?fixture=${m.fixture.id}`);
+      if(sr.response && sr.response.length === 2) {
+        const hs = sr.response[0].statistics; const as = sr.response[1].statistics;
+        actStats = {
+          hPoss: statVal(hs, 'Ball Possession'), aPoss: statVal(as, 'Ball Possession'),
+          hCor: statVal(hs, 'Corner Kicks'), aCor: statVal(as, 'Corner Kicks'),
+          hCrd: statVal(hs, 'Yellow Cards') + statVal(hs, 'Red Cards'), aCrd: statVal(as, 'Yellow Cards') + statVal(as, 'Red Cards'),
+          hXg: statVal(hs, 'expected_goals'), aXg: statVal(as, 'expected_goals')
+        };
+      }
     }
-    const hPlayers=needPlayerAdjustment?buildPlayerProfiles(m.teams.home.id,leagueScorers,leagueAssists,[],hS.totalTeamGoalsSeason):[];
-    const aPlayers=needPlayerAdjustment?buildPlayerProfiles(m.teams.away.id,leagueScorers,leagueAssists,[],aS.totalTeamGoalsSeason):[];
 
-    const hXI=lineupData?.available?lineupData.home:null;
-    const aXI=lineupData?.available?lineupData.away:null;
-    const hInjAdj=applyLineupAdjustment(hXG,hPlayers,hXI,hInjuries);
-    const aInjAdj=applyLineupAdjustment(aXG,aPlayers,aXI,aInjuries);
-    const hXGfinal=hInjAdj.adjXG,aXGfinal=aInjAdj.adjXG,tXGfinal=hXGfinal+aXGfinal;
-
-    const bttsScore=Math.min(hXGfinal,aXGfinal);
-    const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,h2hSummary,{lineupData,hInjAdj,aInjAdj});
-    const htAnalysis=computeHTAnalysis(result.hExp,result.aExp,lp);
-
-    // If player data was already necessary for the core, scorer probability is
-    // available immediately. Card-specific player data remains deferred.
-    const hScorerProb=leagueScorers?calculateScorerProb(leagueScorers,m.teams.home.id,result.hExp,hS.totalTeamGoalsSeason,hPlayers):null;
-    const aScorerProb=leagueScorers?calculateScorerProb(leagueScorers,m.teams.away.id,result.aExp,aS.totalTeamGoalsSeason,aPlayers):null;
-
-    const rec={
+    window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
       tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
-      hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,hInjAdj,aInjAdj,
-      hPlayers,aPlayers,htAnalysis,lineupData,
+      hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,
+      hInjAdj, aInjAdj,
+      hPlayers, aPlayers,
+      htAnalysis,
+      lineupData,
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
-      omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,ppRaw:result.ppRaw,oneXTwo:result.oneXTwo,verification:result.verification,rawOutPick:result.rawOutPick,
+      omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,
       hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,
-      hS,aS,h2h:h2hSummary,actStats:null,isBomb:result.omegaPick.includes('💣'),hScorerProb,aScorerProb,
-      sitCtx,dcResult,offside:result.offside,playerIntelReady:false
-    };
-    window.scannedMatchesData.push(rec);
-    appendProgressiveMatch(rec,false);
-    queueDeferredPlayerEnrichment(rec,{hInjuries,aInjuries,coreScorers:leagueScorers,coreAssists:leagueAssists});
-    return rec;
+      hS,aS,h2h:h2hSummary,
+      actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
+      sitCtx,    // Situational context (motivation flags, derby)
+      dcResult,  // Dixon-Coles attack/defense strengths
+      offside,   // Offside projection (Poisson model)
+    });
   }catch(err){
-    console.error('[APEX] Analysis failed:',m?.teams?.home?.name,'vs',m?.teams?.away?.name,err);
-    const rec={m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:`Analysis error: ${err?.message||err}`,strength:0,tXG:0,outPick:'-',rawOutPick:'X',exact:'0-0',cornerConf:0};
-    window.scannedMatchesData.push(rec);appendProgressiveMatch(rec,true);return rec;
+    window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:'Analysis error',strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
   }
 }
 
@@ -3109,76 +1712,41 @@ window.runScan=async function(){
   if(isRunning)return;
   const startD=document.getElementById('scanStart').value||todayISO();const endD=document.getElementById('scanEnd').value||startD;
   if(new Date(endD)<new Date(startD)){showErr("Λάθος ημερομηνία.");return;}
-  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'⚡ FAST CORE Smart Scan — initializing…');
-  console.log('[APEX] FAST CORE Scan started · adaptive API', window.APEX_API_RATE);
-  _playerEnrichmentQueue=[]; _playerEnrichmentToken++; // invalidate older deferred UI refreshes
-  // Clear only in-flight registries. Memory + persistent caches are deliberately retained.
-  try { _buildIntelPromises.clear(); _fixStatsInflight.clear(); _standInflight.clear(); _scorersInflight.clear(); _assistsInflight.clear(); _cardsInflight.clear(); _teamStatsInflight.clear(); _lastFixInflight.clear(); _h2hInflight.clear(); _injuryInflight.clear(); _fixtureInjuryInflight.clear(); } catch {}
-  ['liveNowSection','progressiveSection','topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
-  window.scanLiveFixtures=[];
-  window.scannedMatchesData=[]; // TTL caches intentionally preserved between scans for speed + stability
+  isRunning=true;clearAlerts();setBtnsDisabled(true);setLoader(true,'Initializing Deep Quant...');
+  // Clear team intel cache — fresh data για κάθε scan
+  try { _buildIntelPromises.clear(); _buildIntelCache.clear(); } catch {}
+  ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
+  window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();scorersCache.clear();assistsCache.clear();cardsCache.clear();injuryCache.clear();
   try{
-    const selLg=document.getElementById('leagueFilter').value;let all=[],skippedFinished=0,liveFixtures=[];
+    const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
-      setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:CACHE_TTL.FIXTURE_DAY});
-      if(res?.__apiError) throw new Error(`API-Football: ${res.__apiError}`);
-      const dm=(res.response||[]).filter(m=>{
-        let leagueOk=false;
-        if(selLg==='WORLD')leagueOk=true;
-        else if(selLg==='ALL')leagueOk=typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);
-        else if(selLg==='MY_LEAGUES')leagueOk=getActiveMyLeagues().includes(m.league.id);
-        else leagueOk=m.league.id===parseInt(selLg);
-        if(!leagueOk)return false;
-        const st=String(m?.fixture?.status?.short||'').toUpperCase();
-        if(isLive(st)){liveFixtures.push(m);return false;}
-        if(shouldSkipFinishedSmartScan(m)){skippedFinished++;return false;}
-        return true;
-      });
+      setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
+      const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
       all.push(...dm);if(all.length>350)break;
     }
-    window.scanLiveFixtures=_dedupeFixturesById(liveFixtures);
-    renderDetachedLiveFixtures();
-    if(!all.length){
-      if(window.scanLiveFixtures.length){
-        startAutoSync();
-        showOk(`🔴 ${window.scanLiveFixtures.length} αγώνες είναι ήδη LIVE και εξαιρέθηκαν από το Progressive Smart Scan${skippedFinished?` · ${skippedFinished} FT skipped`:''}.`);
-        return;
-      }
-      const msg=skippedFinished>0
-        ? `Δεν υπάρχουν μη ολοκληρωμένοι αγώνες για ανάλυση · ${skippedFinished} τελειωμένοι παραλείφθηκαν.`
-        : 'Δεν βρέθηκαν αγώνες.';
-      showErr(msg);return;
-    }
+    if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
     if(all.length>350) all=all.slice(0,350);
-    // v6.3.2: πρώτα οι νωρίτεροι αγώνες — η ώρα έναρξης είναι πλέον primary ordering.
-    all.sort((a,b)=>kickoffEpoch(a)-kickoffEpoch(b));
-    initProgressiveScan(all.length);
 
-    // PROGRESSIVE v5.7: shared league data φορτώνουν on-demand.
-    // Τα in-flight maps παραπάνω εξασφαλίζουν ότι ακόμη κι αν πολλά matches
-    // του ίδιου league ξεκινήσουν μαζί, γίνεται μία μόνο κοινή API κλήση.
-    // Έτσι δεν υπάρχει blocking warm-up πριν εμφανιστεί το πρώτο αποτέλεσμα.
-    setProgress(8, `Progressive scan · ${all.length} pre-match · ${window.scanLiveFixtures.length} LIVE separated · ${skippedFinished} FT skipped · έναρξη ανάλυσης…`);
+    // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
+    // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
+    const leagueIds = [...new Set(all.map(m=>m.league.id))];
+    const season    = all[0]?.league?.season;
+    setProgress(8, `Pre-fetching ${leagueIds.length} leagues…`);
+    await Promise.all(leagueIds.map(lid => Promise.all([
+      getStand(lid, season),
+      getLeagueTopScorers(lid, season),
+      getLeagueTopAssists(lid, season),
+      getLeagueTopCards(lid, season),
+    ])));
 
-    // Match concurrency follows detected API capacity. The global queue still
-    // enforces the exact request-launch rate, so bigger plans scale automatically.
-    // TURBO: περισσότερα matches μπορούν να είναι in-flight, ενώ ο global API
-    // limiter εξακολουθεί να ελέγχει με ακρίβεια πόσα HTTP requests ξεκινούν.
-    const SCAN_BATCH = apiClamp(Math.max(SMART_SCAN.MIN_BATCH,API_RATE.maxConcurrent),SMART_SCAN.MIN_BATCH,SMART_SCAN.MAX_BATCH);
-    console.log(`[APEX] FAST CORE Smart Scan: ${API_RATE.minuteLimit||'?'} req/min · ${_effectiveRps().toFixed(1)} req/s · workers ${SCAN_BATCH} · detail sample ${SMART_SCAN.DETAIL_FIXTURES}`);
-    // v6.3 continuous worker pool: μόλις τελειώσει ένα match, ο worker παίρνει
-    // αμέσως το επόμενο. Καταργεί το head-of-line blocking των fixed batches.
-    let scanCursor=0;
-    const scanWorkers=Array.from({length:Math.min(SCAN_BATCH,all.length)},async()=>{
-      while(true){
-        const idx=scanCursor++;
-        if(idx>=all.length)return;
-        await analyzeMatchSafe(all[idx],idx,all.length);
-      }
-    });
-    await Promise.all(scanWorkers);
+    // ── Parallel batch processing: 15 matches ταυτόχρονα ─────────
+    // 🚀 Paid Plan: 30 req/sec → μεγάλα batches χωρίς throttle
+    const SCAN_BATCH = 8; // Original working value
+    for(let i=0; i<all.length; i+=SCAN_BATCH){
+      const batch = all.slice(i, i+SCAN_BATCH);
+      await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
+    }
     
-    finalizeProgressiveScan();
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
     renderBetJournal();
@@ -3194,16 +1762,10 @@ window.runScan=async function(){
       const pct = Math.round(fallbackCount / window.scannedMatchesData.length * 100);
       showErr(`⚠️ ${fallbackCount}/${all.length} ματς (${pct}%) φόρτωσαν default τιμές — το API δεν απάντησε εγκαίρως. Δοκίμασε ξανά.`);
     } else {
-      showOk(`⚡ FAST CORE ολοκληρώθηκε — ${all.length} pre-match σε ${_progressiveElapsed()} · ${window.scanLiveFixtures.length} LIVE separated · ${skippedFinished} FT skipped · player intel φορτώνει στο background.`);
+      showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
     }
-    // Market pricing is more decision-critical than player props, so it starts
-    // immediately; deferred player endpoints run LOW priority and cannot block it.
-    Promise.allSettled([
-      window.refreshBest4({silent:true}),
-      window.refreshBombs({silent:true})
-    ]).catch(()=>{});
-    startDeferredPlayerEnrichment();
-  }catch(e){showErr(e.message);}finally{if(_progressiveScanState.active)finalizeProgressiveScan();isRunning=false;setLoader(false);setBtnsDisabled(false);}
+    window.fetchAllOdds().catch(()=>{});
+  }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
 // ================================================================
@@ -3388,7 +1950,7 @@ function applySubstitution(d, newLineupData) {
   const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
   const tXGfinal = hXGfinal + aXGfinal;
   const btts = Math.min(hXGfinal, aXGfinal);
-  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null,{lineupData:newLineupData,hInjAdj:newHAdj,aInjAdj:newAAdj,marketNoVig1X2:d.marketNoVig1X2});
+  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
   const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
 
   // Παρακολούθηση changed fields (για flash)
@@ -3406,7 +1968,7 @@ function applySubstitution(d, newLineupData) {
     exact: `${result.hG}-${result.aG}`, exact2: `${result.hG2}-${result.aG2}`,
     exactConf: result.exactConf, omegaPick: result.omegaPick,
     strength: result.pickScore, reason: result.reason,
-    hExp: result.hExp, aExp: result.aExp, pp: result.pp, ppRaw:result.ppRaw, oneXTwo:result.oneXTwo, verification:result.verification,rawOutPick:result.rawOutPick, offside: result.offside,
+    hExp: result.hExp, aExp: result.aExp, pp: result.pp,
     lambdaTotal: result.lambdaTotal, cornerConf: result.cornerConf, expCor: result.expCor,
     lastSubEvents: subEvents,   // για accordion display
     subChanged: changed,        // για flash animation
@@ -3462,374 +2024,12 @@ function computeInPlayPick(baseRec,liveFixture){
   return{inPlayPick,inPlayConf:clamp(inPlayConf,0,99),inPlayReason,hGoals,aGoals,elapsed,status,decayed,ppAdj};
 }
 
-
-// ================================================================
-//  🧠 LIVE LEARNING ENGINE v5.9
-//  Pre-match baseline → live snapshots → FT settlement → calibration
-//
-//  Anti-leakage rule:
-//  • Training baseline only when captured before the fixture is live.
-//  • Live snapshots never rewrite the frozen pre-match baseline.
-//  • Calibration changes only after FT using settled snapshots.
-// ================================================================
-
-function _defaultLiveLearningState(){
-  return {
-    version:1,
-    matches:{},
-    weights:{...LIVE_LEARN_DEFAULT_W},
-    metrics:{},
-    settledCount:0,
-    updatedAt:null
-  };
-}
-
-function _getLiveLearningState(){
-  if(liveLearningState) return liveLearningState;
-  try{
-    const raw=JSON.parse(localStorage.getItem(LS_LIVE_LEARNING)||'null');
-    if(raw && typeof raw==='object'){
-      liveLearningState={
-        ..._defaultLiveLearningState(),
-        ...raw,
-        matches:raw.matches&&typeof raw.matches==='object'?raw.matches:{},
-        weights:{...LIVE_LEARN_DEFAULT_W,...(raw.weights||{})},
-        metrics:raw.metrics&&typeof raw.metrics==='object'?raw.metrics:{}
-      };
-      return liveLearningState;
-    }
-  }catch{}
-  liveLearningState=_defaultLiveLearningState();
-  return liveLearningState;
-}
-
-function _saveLiveLearningState(){
-  const st=_getLiveLearningState();
-  try{
-    const rows=Object.values(st.matches||{}).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0));
-    if(rows.length>LIVE_LEARN_MAX_MATCHES){
-      st.matches=Object.fromEntries(rows.slice(0,LIVE_LEARN_MAX_MATCHES).map(x=>[String(x.fixId),x]));
-    }
-    st.updatedAt=Date.now();
-    localStorage.setItem(LS_LIVE_LEARNING,JSON.stringify(st));
-  }catch(e){console.warn('[APEX] Live learning save failed',e);}
-}
-
-function _outcomeFromPP(pp){
-  if(!pp) return 'X';
-  const a=[['1',safeNum(pp.pHome,0)],['X',safeNum(pp.pDraw,0)],['2',safeNum(pp.pAway,0)]];
-  a.sort((x,y)=>y[1]-x[1]);
-  return a[0][0];
-}
-
-function _baselineFromRec(rec,lf=null,source='SMART_SCAN'){
-  if(!rec) return null;
-  const pp=rec.pp||{};
-  const status=rec.m?.fixture?.status?.short||lf?.fixture?.status?.short||'';
-  const eligible=!isLive(status)&&!isFinished(status);
-  const baseline={
-    fixId:rec.fixId||lf?.fixture?.id,
-    capturedAt:Date.now(),
-    source,
-    eligible,
-    capturedStatus:status||'UNKNOWN',
-    ht:rec.ht||lf?.teams?.home?.name||'',
-    at:rec.at||lf?.teams?.away?.name||'',
-    leagueId:rec.leagueId||lf?.league?.id||0,
-    league:rec.lg||lf?.league?.name||'',
-    pHome:safeNum(pp.pHome,0),
-    pDraw:safeNum(pp.pDraw,0),
-    pAway:safeNum(pp.pAway,0),
-    pO25:safeNum(pp.pO25,0),
-    pO35:safeNum(pp.pO35,0),
-    pBTTS:safeNum(pp.pBTTS,0),
-    hExp:safeNum(rec.hExp??rec.hXGfinal,0),
-    aExp:safeNum(rec.aExp??rec.aXGfinal,0),
-    tXG:safeNum(rec.tXG,0),
-    omegaPick:rec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ',
-    strength:safeNum(rec.strength,0)
-  };
-  baseline.outcomePick=_outcomeFromPP(baseline);
-  return baseline;
-}
-
-function _ensureLiveLearningMatch(rec,lf=null,source='SMART_SCAN'){
-  const st=_getLiveLearningState();
-  const fixId=String(rec?.fixId||lf?.fixture?.id||'');
-  if(!fixId) return null;
-  let row=st.matches[fixId];
-  if(!row){
-    const baseline=_baselineFromRec(rec,lf,source);
-    if(!baseline) return null;
-    row=st.matches[fixId]={
-      fixId:Number(fixId),
-      createdAt:Date.now(),
-      updatedAt:Date.now(),
-      baseline,
-      snapshots:{},
-      settled:false,
-      actualOutcome:null,
-      actualScore:null
-    };
-    _saveLiveLearningState();
-  }else{
-    row.updatedAt=Date.now();
-  }
-  return row;
-}
-
-function _seedLiveBaselinesFromScan(data){
-  if(!Array.isArray(data)) return;
-  let changed=false;
-  const st=_getLiveLearningState();
-  data.forEach(rec=>{
-    if(!rec?.fixId||!rec?.pp) return;
-    const key=String(rec.fixId);
-    if(st.matches[key]?.baseline) return;
-    const b=_baselineFromRec(rec,null,'SMART_SCAN');
-    if(!b) return;
-    st.matches[key]={fixId:rec.fixId,createdAt:Date.now(),updatedAt:Date.now(),baseline:b,snapshots:{},settled:false,actualOutcome:null,actualScore:null};
-    changed=true;
-  });
-  if(changed)_saveLiveLearningState();
-}
-
-function _liveFeatureSignal(intel){
-  if(!intel) return 0;
-  const edge=clamp((safeNum(intel.hLiveEdge,50)-50)/50,-1,1);
-  const xgTot=safeNum(intel.hLiveXG,0)+safeNum(intel.aLiveXG,0);
-  const xg=xgTot>0?clamp((safeNum(intel.hLiveXG,0)/xgTot-0.5)*2,-1,1):0;
-  const sot=clamp((safeNum(intel.hSoTRatio,0.5)-0.5)*2,-1,1);
-  const mom=clamp((safeNum(intel.hMomentum,50)-50)/50,-1,1);
-  return clamp(edge*0.40+xg*0.25+sot*0.25+mom*0.10,-1,1);
-}
-
-function _learnBucket(elapsed){
-  const e=safeNum(elapsed,0);
-  let best=15,dist=Infinity;
-  LIVE_LEARN_MILESTONES.forEach(m=>{const d=Math.abs(e-m);if(d<dist){best=m;dist=d;}});
-  return best;
-}
-
-function _adjust1X2ByLiveSignal(pp,signal,weight){
-  if(!pp) return {pHome:0,pDraw:0,pAway:0};
-  const s=clamp(safeNum(signal,0),-1,1)*clamp(safeNum(weight,0),0,1.5);
-  let h=Math.max(1e-6,safeNum(pp.pHome,0))*Math.exp(s);
-  let a=Math.max(1e-6,safeNum(pp.pAway,0))*Math.exp(-s);
-  let d=Math.max(1e-6,safeNum(pp.pDraw,0))*Math.exp(-Math.abs(s)*0.18);
-  const z=h+d+a||1;
-  return {pHome:h/z,pDraw:d/z,pAway:a/z};
-}
-
-function _liveLearnWeight(elapsed){
-  const st=_getLiveLearningState();
-  const b=_learnBucket(elapsed);
-  return safeNum(st.weights?.[b],LIVE_LEARN_DEFAULT_W[b]??0.5);
-}
-
-function _computeLiveValidation(baseline,inPlay,intel,lf){
-  if(!baseline||!inPlay) return null;
-  const rawPP=inPlay.ppAdj||{pHome:baseline.pHome,pDraw:baseline.pDraw,pAway:baseline.pAway};
-  const signal=_liveFeatureSignal(intel);
-  const weight=_liveLearnWeight(inPlay.elapsed||lf?.fixture?.status?.elapsed||0);
-  const currentPP=_adjust1X2ByLiveSignal(rawPP,signal,weight);
-  const basePick=baseline.outcomePick||_outcomeFromPP(baseline);
-  const key=basePick==='1'?'pHome':basePick==='2'?'pAway':'pDraw';
-  const preP=safeNum(baseline[key],0);
-  const liveP=safeNum(currentPP[key],0);
-  const driftPP=(liveP-preP)*100;
-  const hG=safeNum(lf?.goals?.home,0),aG=safeNum(lf?.goals?.away,0);
-
-  let support=0;
-  if(basePick==='1') support=signal;
-  else if(basePick==='2') support=-signal;
-  else {
-    support=1-Math.min(1,Math.abs(signal)*1.4);
-    if(hG===aG) support=clamp(support+0.15,-1,1);
-    else support=clamp(support-0.35,-1,1);
-  }
-
-  const confirmation=clamp(50+driftPP*1.15+support*24,0,100);
-  let label='WEAKENING',icon='🟠';
-  if(confirmation>=70){label='CONFIRMED';icon='🟢';}
-  else if(confirmation<40){label='INVALIDATED';icon='🔴';}
-  else if(Math.abs(driftPP)<4){label='STABLE';icon='🟡';}
-
-  return {baselinePick:basePick,preP,liveP,driftPP,signal,weight,currentPP,confirmation,label,icon};
-}
-
-async function _fetchTrackerLiveIntel(lf){
-  const fixId=String(lf?.fixture?.id||'');
-  if(!fixId) return null;
-  const elapsed=lf?.fixture?.status?.elapsed||1;
-  const cached=liveStatsCache.get(fixId);
-  if(cached?.h&&cached?.a) return computeLiveIntelligence(cached.h,cached.a,elapsed);
-  try{
-    const sr=await apiReq(`fixtures/statistics?fixture=${fixId}`,{priority:'high'});
-    if(sr.response?.length>=2){
-      const h=sr.response[0].statistics||[],a=sr.response[1].statistics||[];
-      liveStatsCache.set(fixId,{h,a,ts:Date.now()});
-      return computeLiveIntelligence(h,a,elapsed);
-    }
-  }catch(e){console.warn('[APEX] tracker live stats',fixId,e.message);}
-  return null;
-}
-
-function _maybeRecordLiveSnapshot(row,lf,inPlay,intel,validation){
-  if(!row||!lf||!inPlay) return false;
-  const elapsed=safeNum(lf.fixture?.status?.elapsed,0);
-  const status=lf.fixture?.status?.short||'';
-  let milestone=null;
-  if(status==='HT') milestone=45;
-  else{
-    for(const m of LIVE_LEARN_MILESTONES){
-      if(Math.abs(elapsed-m)<=3){milestone=m;break;}
-    }
-  }
-  if(!milestone||row.snapshots?.[milestone]) return false;
-  row.snapshots=row.snapshots||{};
-  row.snapshots[milestone]={
-    minute:milestone,
-    capturedMinute:elapsed,
-    capturedAt:Date.now(),
-    scoreHome:safeNum(lf.goals?.home,0),
-    scoreAway:safeNum(lf.goals?.away,0),
-    rawPP:{
-      pHome:safeNum(inPlay.ppAdj?.pHome,0),
-      pDraw:safeNum(inPlay.ppAdj?.pDraw,0),
-      pAway:safeNum(inPlay.ppAdj?.pAway,0)
-    },
-    liveSignal:safeNum(validation?.signal,_liveFeatureSignal(intel)),
-    liveEdge:safeNum(intel?.hLiveEdge,50),
-    liveXGHome:safeNum(intel?.hLiveXG,0),
-    liveXGAway:safeNum(intel?.aLiveXG,0),
-    hSoTRatio:safeNum(intel?.hSoTRatio,0.5),
-    hMomentum:safeNum(intel?.hMomentum,50),
-    confirmation:safeNum(validation?.confirmation,50)
-  };
-  row.updatedAt=Date.now();
-  _saveLiveLearningState();
-  return true;
-}
-
-function _brier1X2(pp,outcome){
-  const yH=outcome==='1'?1:0,yD=outcome==='X'?1:0,yA=outcome==='2'?1:0;
-  return ((safeNum(pp.pHome,0)-yH)**2+(safeNum(pp.pDraw,0)-yD)**2+(safeNum(pp.pAway,0)-yA)**2)/3;
-}
-
-function _recalibrateLiveLearning(){
-  const st=_getLiveLearningState();
-  const metrics={};
-  LIVE_LEARN_MILESTONES.forEach(minute=>{
-    const samples=[];
-    Object.values(st.matches||{}).forEach(row=>{
-      if(!row?.settled||!row?.baseline?.eligible||!row.actualOutcome) return;
-      const s=row.snapshots?.[minute];
-      if(!s?.rawPP) return;
-      samples.push({rawPP:s.rawPP,signal:s.liveSignal||0,outcome:row.actualOutcome});
-    });
-    if(samples.length<LIVE_LEARN_MIN_N){
-      metrics[minute]={n:samples.length,weight:safeNum(st.weights?.[minute],LIVE_LEARN_DEFAULT_W[minute]),ready:false};
-      return;
-    }
-    let bestW=0,bestB=Infinity;
-    for(let i=0;i<=30;i++){
-      const w=i*0.05;
-      let sum=0;
-      samples.forEach(s=>{sum+=_brier1X2(_adjust1X2ByLiveSignal(s.rawPP,s.signal,w),s.outcome);});
-      const b=sum/samples.length;
-      if(b<bestB){bestB=b;bestW=w;}
-    }
-    const baselineB=samples.reduce((z,s)=>z+_brier1X2(_adjust1X2ByLiveSignal(s.rawPP,s.signal,0),s.outcome),0)/samples.length;
-    const old=safeNum(st.weights?.[minute],LIVE_LEARN_DEFAULT_W[minute]);
-    const learned=clamp(old*0.70+bestW*0.30,0,1.5);
-    st.weights[minute]=parseFloat(learned.toFixed(3));
-    metrics[minute]={
-      n:samples.length,ready:true,weight:st.weights[minute],bestGridWeight:bestW,
-      brier:parseFloat(bestB.toFixed(4)),baselineBrier:parseFloat(baselineB.toFixed(4)),
-      improvementPct:baselineB>0?parseFloat(((baselineB-bestB)/baselineB*100).toFixed(1)):0
-    };
-  });
-  st.metrics=metrics;
-  st.settledCount=Object.values(st.matches||{}).filter(x=>x?.settled&&x?.baseline?.eligible).length;
-  st.updatedAt=Date.now();
-  _saveLiveLearningState();
-  _renderLiveLearningStatus();
-  return metrics;
-}
-
-async function _settleLiveLearningFixture(fix){
-  if(!fix?.fixture?.id||!isFinished(fix.fixture.status?.short)) return false;
-  const st=_getLiveLearningState(),key=String(fix.fixture.id),row=st.matches[key];
-  if(!row||row.settled) return false;
-  const h=safeNum(fix.goals?.home,0),a=safeNum(fix.goals?.away,0);
-  row.actualOutcome=h>a?'1':a>h?'2':'X';
-  row.actualScore=`${h}-${a}`;
-  row.settled=true;
-  row.settledAt=Date.now();
-  row.updatedAt=Date.now();
-  _saveLiveLearningState();
-  _recalibrateLiveLearning();
-  return true;
-}
-
-async function _settleDisappearedLiveMatches(activeIds){
-  const st=_getLiveLearningState();
-  const candidates=Object.values(st.matches||{})
-    .filter(r=>!r?.settled&&r?.lastSeenLiveAt&&!activeIds.has(Number(r.fixId)))
-    .sort((a,b)=>(a.lastSeenLiveAt||0)-(b.lastSeenLiveAt||0))
-    .slice(0,4);
-  if(!candidates.length) return;
-  await Promise.all(candidates.map(async row=>{
-    if(Date.now()-(row.lastSeenLiveAt||0)<45000) return;
-    try{
-      const fr=await apiReq(`fixtures?id=${row.fixId}`,{priority:'low',cacheMs:15000});
-      const fix=fr?.response?.[0];
-      if(fix&&isFinished(fix.fixture?.status?.short)) await _settleLiveLearningFixture(fix);
-    }catch{}
-  }));
-}
-
-function _renderLiveLearningStatus(){
-  const el=document.getElementById('liveLearningStatus'); if(!el)return;
-  const st=_getLiveLearningState();
-  const settled=Object.values(st.matches||{}).filter(x=>x?.settled&&x?.baseline?.eligible).length;
-  const eligible=Object.values(st.matches||{}).filter(x=>x?.baseline?.eligible).length;
-  const ready=LIVE_LEARN_MILESTONES.filter(m=>st.metrics?.[m]?.ready);
-  const chips=LIVE_LEARN_MILESTONES.map(m=>{
-    const mt=st.metrics?.[m]||{};
-    const n=mt.n||0,w=safeNum(st.weights?.[m],LIVE_LEARN_DEFAULT_W[m]);
-    const imp=mt.ready?` · ΔBrier ${safeNum(mt.improvementPct,0)>=0?'+':''}${safeNum(mt.improvementPct,0).toFixed(1)}%`:'';
-    return `<span style="font-family:var(--font-mono);font-size:.62rem;padding:4px 7px;border-radius:7px;background:var(--bg-surface);border:1px solid var(--border-light);">${m}' w=${w.toFixed(2)} · n=${n}${imp}</span>`;
-  }).join('');
-  el.innerHTML=`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
-      <div><div style="font-weight:900;color:var(--accent-purple);font-size:.78rem;">🧠 LIVE LEARNING ENGINE</div>
-      <div style="font-size:.66rem;color:var(--text-muted);margin-top:2px;">${settled} settled training matches · ${eligible} frozen pre-match baselines · ${ready.length}/${LIVE_LEARN_MILESTONES.length} calibrated time buckets</div></div>
-      <button type="button" class="btn btn-outline" style="font-size:.66rem;padding:5px 8px;" onclick="window.resetLiveLearning()">Reset Learning</button>
-    </div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">${chips}</div>`;
-}
-
-window.resetLiveLearning=function(){
-  if(!confirm('Διαγραφή όλων των Live Learning snapshots και calibration weights;')) return;
-  liveLearningState=_defaultLiveLearningState();
-  _saveLiveLearningState();
-  _renderLiveLearningStatus();
-  showOk('🧠 Live Learning reset.');
-};
-
-window.recalibrateLiveLearning=function(){
-  const m=_recalibrateLiveLearning();
-  showOk('🧠 Live calibration updated from settled snapshots.');
-  return m;
-};
-
-
 // ── Live Tracker Engine ───────────────────────────────────────────────────────
 window.startLiveTracker=async function(){
   if(isLiveTracking)return;
   const lgEl=document.getElementById('liveTrackerLeague');
   liveTrackerLeagues=lgEl?.value||'MY_LEAGUES';
-  isLiveTracking=true;_updateLiveTrackerUI();_renderLiveLearningStatus();
+  isLiveTracking=true;_updateLiveTrackerUI();
   await _liveTrackerTick();
   liveTrackerInterval=setInterval(_liveTrackerTick,LIVE_POLL_MS);
 };
@@ -3841,50 +2041,30 @@ window.stopLiveTracker=function(){
 
 async function _liveTrackerTick(){
   const statusEl=document.getElementById('liveTrackerStatus'),lastEl=document.getElementById('liveTrackerLastPoll'),countEl=document.getElementById('liveMatchCount');
-  if(statusEl)statusEl.textContent='Polling live fixtures + stats...';
+  if(statusEl)statusEl.textContent='Polling live fixtures...';
   try{
-    const res=await apiReq('fixtures?live=all',{priority:'high'});
+    const res=await apiReq('fixtures?live=all');
     const all=(res.response||[]).filter(m=>{
       if(liveTrackerLeagues==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);
       if(liveTrackerLeagues==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);
       return m.league.id===parseInt(liveTrackerLeagues);
     });
     if(countEl)countEl.textContent=all.length;
-    const activeIds=new Set(all.map(x=>Number(x.fixture.id)));
-
-    const liveRecs=(await Promise.all(all.map(async lf=>{
+    const liveRecs=[];
+    for(const lf of all){
       const fixId=lf.fixture.id;
-      let preMatch=(window.scannedMatchesData||[]).find(r=>r.fixId===fixId);
-      let baseRec=preMatch;
-      let baselineSource='SMART_SCAN';
-
-      if(!baseRec){
+      const preMatch=(window.scannedMatchesData||[]).find(r=>r.fixId===fixId);
+      let inPlay=null;
+      if(preMatch){inPlay=computeInPlayPick(preMatch,lf);}
+      else{
         try{
-          const[hS,aS]=await Promise.all([
-            buildIntel(lf.teams.home.id,lf.league.id,lf.league.season,true),
-            buildIntel(lf.teams.away.id,lf.league.id,lf.league.season,false)
-          ]);
-          const lp=getLeagueParams(lf.league.id);
-          const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
-          const tXG=hXG+aXG;
-          const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS,lf.league.id);
-          baseRec={
-            fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,
-            hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS,
-            pp:res2.pp,ppRaw:res2.ppRaw,oneXTwo:res2.oneXTwo,verification:res2.verification,rawOutPick:res2.rawOutPick,m:{fixture:{status:{short:lf.fixture.status.short}}}
-          };
-          baselineSource='LIVE-START SYNTHETIC';
-        }catch{return null;}
+          const[hS,aS]=await Promise.all([buildIntel(lf.teams.home.id,lf.league.id,lf.league.season,true),buildIntel(lf.teams.away.id,lf.league.id,lf.league.season,false)]);
+          const lp=getLeagueParams(lf.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
+          const tXG=hXG+aXG;const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS,lf.league.id);
+          const syn={fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS};
+          inPlay=computeInPlayPick(syn,lf);
+        }catch{}
       }
-
-      const row=_ensureLiveLearningMatch(baseRec,lf,baselineSource);
-      if(row) row.lastSeenLiveAt=Date.now();
-      const baseline=row?.baseline||_baselineFromRec(baseRec,lf,baselineSource);
-      const inPlay=computeInPlayPick(baseRec,lf);
-      const liveIntel=await _fetchTrackerLiveIntel(lf);
-      const validation=_computeLiveValidation(baseline,inPlay,liveIntel,lf);
-      if(row){_maybeRecordLiveSnapshot(row,lf,inPlay,liveIntel,validation);row.updatedAt=Date.now();}
-
       const prev=liveMatchesState[fixId];
       if(prev&&inPlay&&prev.inPlayPick!==inPlay.inPlayPick){
         const alert={time:new Date().toLocaleTimeString('el-GR'),fixId,ht:lf.teams.home.name,at:lf.teams.away.name,elapsed:lf.fixture.status.elapsed,from:prev.inPlayPick,to:inPlay.inPlayPick,score:`${lf.goals.home}-${lf.goals.away}`};
@@ -3892,16 +2072,10 @@ async function _liveTrackerTick(){
         _flashSignalAlert(alert);
         try{localStorage.setItem(LS_LIVE_ALERTS,JSON.stringify(liveAlerts.slice(0,20)));}catch{}
       }
-
-      liveMatchesState[fixId]={...inPlay,lf,liveIntel,validation,baseline,lastSeenAt:Date.now()};
-      return {lf,inPlay,preMatch:baseRec,baseline,liveIntel,validation,learningEligible:!!baseline?.eligible};
-    }))).filter(Boolean);
-
-    _renderLiveDashboard(liveRecs);_renderLiveAlerts();_renderLiveLearningStatus();
-    _settleDisappearedLiveMatches(activeIds).catch(()=>{});
-    _saveLiveLearningState();
-
-    if(statusEl)statusEl.textContent=`Ενεργό — ${all.length} live · poll σε ${LIVE_POLL_MS/1000}s`;
+      liveMatchesState[fixId]={...inPlay,lf};liveRecs.push({lf,inPlay,preMatch});
+    }
+    _renderLiveDashboard(liveRecs);_renderLiveAlerts();
+    if(statusEl)statusEl.textContent=`Ενεργό — poll σε ${LIVE_POLL_MS/1000}s`;
     if(lastEl)lastEl.textContent=new Date().toLocaleTimeString('el-GR');
   }catch(e){if(statusEl)statusEl.textContent=`Poll error: ${e.message}`;}
 }
@@ -3928,102 +2102,55 @@ function _renderLiveDashboard(liveRecs){
   const el=document.getElementById('liveDashboard');if(!el)return;
   if(!liveRecs.length){el.innerHTML=`<div style="text-align:center;color:var(--text-muted);padding:32px 0;font-size:0.8rem;">Δεν υπάρχουν live αγώνες για τα επιλεγμένα πρωταθλήματα.</div>`;return;}
   liveRecs.sort((a,b)=>{
-    const ac=safeNum(a.validation?.confirmation,50),bc=safeNum(b.validation?.confirmation,50);
-    const aAlert=ac<40?1:0,bAlert=bc<40?1:0;
-    if(bAlert!==aAlert)return bAlert-aAlert;
+    const aF=a.inPlay&&liveMatchesState[a.lf.fixture.id]?.inPlayPick!==a.preMatch?.omegaPick?1:0;
+    const bF=b.inPlay&&liveMatchesState[b.lf.fixture.id]?.inPlayPick!==b.preMatch?.omegaPick?1:0;
+    if(bF!==aF)return bF-aF;
     return(b.lf.fixture.status.elapsed||0)-(a.lf.fixture.status.elapsed||0);
   });
-
-  el.innerHTML=liveRecs.map(({lf,inPlay,preMatch,baseline,liveIntel,validation,learningEligible})=>{
+  el.innerHTML=liveRecs.map(({lf,inPlay,preMatch})=>{
     const hG=lf.goals?.home??0,aG=lf.goals?.away??0,el_min=lf.fixture.status.elapsed||0,status=lf.fixture.status.short;
     const conf=inPlay?clamp(inPlay.inPlayConf,0,99):0;
     const confColor=conf>=70?'var(--accent-green)':conf>=45?'var(--accent-gold)':'var(--accent-red)';
     const pick=inPlay?.inPlayPick||'NO BET ⏱',reason=inPlay?.inPlayReason||'';
     const isNoBet=pick.includes('ΧΩΡΙΣ ΣΥΣΤΑΣΗ');
     const pickColor=isNoBet?'var(--text-muted)':pick.includes('ΚΑΤΩ')?'var(--accent-teal)':pick.includes('ΠΑΝΩ ΑΠΟ 3.5')?'var(--accent-purple)':pick.includes('ΓΚΟΛ/ΓΚΟΛ')?'var(--accent-gold)':'var(--accent-green)';
-    const preMatchPick=baseline?.omegaPick||preMatch?.omegaPick||'';
+    const preMatchPick=preMatch?.omegaPick||'';
     const isFlip=inPlay&&!isNoBet&&preMatchPick&&preMatchPick!==pick&&!preMatchPick.includes('ΧΩΡΙΣ ΣΥΣΤΑΣΗ');
     const flipBadge=isFlip?`<span style="font-size:0.6rem;background:rgba(251,191,36,0.2);color:var(--accent-gold);border:1px solid var(--accent-gold);border-radius:4px;padding:1px 6px;font-weight:700;margin-left:6px;">ΑΛΛΑΓΗ</span>`:'';
     const timeProgress=status==='HT'?50:clamp(el_min/90*100,0,100);
     const d=inPlay?.decayed;
-    const isStrong=!isNoBet&&conf>=75;
-    const cardBorder=validation?.confirmation<40?'var(--accent-red)':isFlip?'var(--accent-gold)':isStrong?'var(--accent-green)':'var(--border-light)';
-    const cur=validation?.currentPP||inPlay?.ppAdj||{};
-    const vCol=validation?.confirmation>=70?'var(--accent-green)':validation?.confirmation<40?'var(--accent-red)':'var(--accent-gold)';
-    const drift=safeNum(validation?.driftPP,0);
-    const driftTxt=`${drift>=0?'+':''}${drift.toFixed(1)}pp`;
-    const rowExists=(window.scannedMatchesData||[]).some(r=>r.fixId===lf.fixture.id);
-    const st=_getLiveLearningState().matches?.[String(lf.fixture.id)];
-    const snaps=LIVE_LEARN_MILESTONES.map(m=>`<span style="font-family:var(--font-mono);font-size:.58rem;padding:2px 5px;border-radius:5px;border:1px solid ${st?.snapshots?.[m]?'rgba(124,58,237,.35)':'var(--border-light)'};color:${st?.snapshots?.[m]?'var(--accent-purple)':'var(--text-dim)'};">${m}'${st?.snapshots?.[m]?' ✓':''}</span>`).join('');
-
+    // Ισχυρή σύσταση: conf >= 75 και όχι ΧΩΡΙΣ ΣΥΣΤΑΣΗ
+    const isStrong = !isNoBet && conf >= 75;
+    const cardBorder = isFlip ? 'var(--accent-gold)' : isStrong ? 'var(--accent-green)' : isNoBet ? 'var(--border-light)' : 'rgba(16,185,129,0.25)';
     return`<div class="match-card${isStrong?' live-strong-signal':''}" id="live-card-${lf.fixture.id}" style="border-color:${cardBorder};${isStrong?'border-width:2px;':''}">
-      <div style="display:grid;grid-template-columns:minmax(190px,1fr) auto minmax(220px,1.2fr);gap:14px;align-items:start;">
-        <div style="min-width:0;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:160px;">
           <div class="match-league"><span class="live-dot"></span><span class="league-badge">${esc(status)}</span><span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span></div>
-          <div style="font-weight:800;font-size:1rem;margin:6px 0 2px;">${esc(lf.teams.home.name)}</div>
-          <div style="font-weight:700;font-size:.88rem;color:var(--text-muted);">${esc(lf.teams.away.name)}</div>
-          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;">${snaps}</div>
+          <div style="font-weight:700;font-size:0.95rem;margin:6px 0 2px;">${esc(lf.teams.home.name)}</div>
+          <div style="font-weight:600;font-size:0.85rem;color:var(--text-muted);">${esc(lf.teams.away.name)}</div>
         </div>
-
-        <div style="text-align:center;min-width:88px;">
-          <div style="font-size:2.05rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-green);line-height:1;">${hG} - ${aG}</div>
+        <div style="text-align:center;min-width:80px;">
+          <div style="font-size:2rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-green);line-height:1;">${hG} - ${aG}</div>
           <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">${status==='HT'?'ΗΜ/ΝΙΟ':`${el_min}'`}</div>
           <div style="margin-top:6px;background:var(--bg-base);border-radius:4px;overflow:hidden;height:4px;"><div style="height:4px;width:${timeProgress}%;background:var(--accent-green);border-radius:4px;"></div></div>
         </div>
-
-        <div style="min-width:0;text-align:right;">
+        <div style="flex:1;min-width:160px;text-align:right;">
           <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Σήμα Live${flipBadge}</div>
-          <div class="${isStrong?'live-pick-pulse':''}" style="font-size:0.86rem;font-weight:900;color:${pickColor};">${esc(pick)}</div>
+          <div class="${isStrong?'live-pick-pulse':''}" style="font-size:0.85rem;font-weight:800;color:${pickColor};">${esc(pick)}</div>
           <div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px;">${esc(reason)}</div>
-          <div style="display:flex;justify-content:flex-end;align-items:center;gap:7px;margin-top:7px;flex-wrap:wrap;">
-            <span style="font-size:.66rem;color:var(--text-muted);">Live conf <b style="font-family:var(--font-mono);color:${confColor};">${conf.toFixed(0)}%</b></span>
-            ${validation?`<span style="font-size:.66rem;padding:3px 7px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--border-light);color:${vCol};font-weight:900;">${validation.icon} ${validation.label} ${validation.confirmation.toFixed(0)}/100</span>`:''}
+          <div style="margin-top:6px;">
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:0.65rem;"><span style="color:var(--text-muted);">Βεβαιότητα</span><span style="font-family:var(--font-mono);color:${confColor};font-weight:700;">${conf.toFixed(0)}%</span></div>
+            <div style="background:var(--bg-base);border-radius:3px;height:5px;margin-top:3px;"><div style="height:5px;width:${conf}%;background:${confColor};border-radius:3px;"></div></div>
           </div>
+          ${isStrong?`<div class="live-strong-badge">🔔 ΙΣΧΥΡΗ ΣΥΣΤΑΣΗ</div>`:''}
         </div>
       </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
-        <div style="background:rgba(37,99,235,.045);border:1px solid rgba(37,99,235,.15);border-radius:8px;padding:9px 10px;">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-            <div style="font-size:.62rem;color:var(--accent-blue);font-weight:900;letter-spacing:.07em;">PRE-MATCH BASELINE</div>
-            <span style="font-size:.56rem;color:${learningEligible?'var(--accent-green)':'var(--text-dim)'};">${learningEligible?'TRAINING ELIGIBLE':'OBSERVATION ONLY'}</span>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:7px;">
-            ${[['1',baseline?.pHome],['X',baseline?.pDraw],['2',baseline?.pAway]].map(([l,p])=>`<div style="text-align:center;background:var(--bg-base);border-radius:6px;padding:5px;"><div style="font-size:.56rem;color:var(--text-dim);">${l}</div><b style="font-family:var(--font-mono);font-size:.82rem;">${Number(p||0)*100?((Number(p||0)*100).toFixed(1)+'%'):'—'}</b></div>`).join('')}
-          </div>
-          <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;">${esc(preMatchPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ')} · xG ${safeNum(baseline?.hExp,0).toFixed(2)}–${safeNum(baseline?.aExp,0).toFixed(2)}</div>
-        </div>
-
-        <div style="background:rgba(124,58,237,.045);border:1px solid rgba(124,58,237,.15);border-radius:8px;padding:9px 10px;">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-            <div style="font-size:.62rem;color:var(--accent-purple);font-weight:900;letter-spacing:.07em;">LIVE NOW · LEARNED CALIBRATION</div>
-            ${validation?`<span style="font-size:.58rem;color:var(--text-muted);">w=${validation.weight.toFixed(2)}</span>`:''}
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:7px;">
-            ${[['1',cur.pHome],['X',cur.pDraw],['2',cur.pAway]].map(([l,p])=>`<div style="text-align:center;background:var(--bg-base);border-radius:6px;padding:5px;"><div style="font-size:.56rem;color:var(--text-dim);">${l}</div><b style="font-family:var(--font-mono);font-size:.82rem;">${Number(p||0)*100?((Number(p||0)*100).toFixed(1)+'%'):'—'}</b></div>`).join('')}
-          </div>
-          <div style="display:flex;justify-content:space-between;gap:6px;align-items:center;margin-top:6px;font-size:.66rem;color:var(--text-muted);">
-            <span>Prediction Drift (${validation?.baselinePick||'—'}): <b style="font-family:var(--font-mono);color:${drift>=0?'var(--accent-green)':'var(--accent-red)'};">${driftTxt}</b></span>
-            ${liveIntel?`<span>Live Edge 🏠 <b style="font-family:var(--font-mono);">${safeNum(liveIntel.hLiveEdge,50).toFixed(0)}</b></span>`:''}
-          </div>
-        </div>
-      </div>
-
-      ${liveIntel?`<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">Live xG <b>${safeNum(liveIntel.hLiveXG,0).toFixed(2)}–${safeNum(liveIntel.aLiveXG,0).toFixed(2)}</b></span>
-        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">SoT <b>${safeNum(liveIntel.hSoT,0)}–${safeNum(liveIntel.aSoT,0)}</b></span>
-        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">Momentum <b>${safeNum(liveIntel.hMomentum,50)}–${safeNum(liveIntel.aMomentum,50)}</b></span>
-        <span style="font-size:.63rem;padding:4px 7px;background:var(--bg-surface);border-radius:6px;">Corners <b>${safeNum(liveIntel.hCor,0)}–${safeNum(liveIntel.aCor,0)}</b></span>
-      </div>`:''}
-
-      ${d?`<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-        ${[{lbl:'O2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'O3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'U2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'BTTS',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
+      ${d?`<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
+        ${[{lbl:'Πάνω 2.5',v:d.pO25,c:'var(--accent-green)'},{lbl:'Πάνω 3.5',v:d.pO35,c:'var(--accent-purple)'},{lbl:'Κάτω 2.5',v:d.pU25,c:'var(--accent-teal)'},{lbl:'ΓΓ',v:d.pBTTS,c:'var(--accent-gold)'}].map(m=>{
           const p=Math.round(m.v*100);
-          return`<div style="min-width:70px;background:var(--bg-base);border-radius:6px;padding:5px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-muted);font-weight:700;">${m.lbl}</div><div style="font-size:0.82rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
+          return`<div style="flex:1;min-width:55px;background:var(--bg-base);border-radius:6px;padding:6px 8px;text-align:center;"><div style="font-size:0.66rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;">${m.lbl}</div><div style="font-size:0.9rem;font-weight:900;font-family:var(--font-mono);color:${p>=65?m.c:'var(--text-muted)'};">${p}%</div></div>`;
         }).join('')}
-        <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">
-          ${rowExists?`<button type="button" class="btn btn-outline" style="font-size:.68rem;padding:6px 9px;" onclick="scrollToMatchAndOpen('row-${lf.fixture.id}')">📊 Πλήρη Στατιστικά</button>`:''}
-        </div>
+        ${preMatchPick&&!isNoBet?`<div style="flex:2;min-width:120px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;padding:6px 10px;"><div style="font-size:0.66rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px;">Πρό-αγώνα</div><div style="font-size:0.72rem;font-weight:700;color:var(--accent-blue);">${esc(preMatchPick)}</div></div>`:''}
       </div>`:''}
     </div>`;
   }).join('');
@@ -4034,22 +2161,17 @@ function _renderLiveAlerts(){
   el.innerHTML=liveAlerts.map(a=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:0.7rem;flex-wrap:wrap;"><span style="color:var(--text-muted);font-family:var(--font-mono);min-width:55px;">${a.time}</span><span style="font-weight:700;color:var(--text-main);">${esc(a.ht)} vs ${esc(a.at)}</span><span style="color:var(--text-muted);">${a.elapsed}' · ${a.score}</span><span style="color:var(--accent-red);">${esc(a.from)}</span><span style="color:var(--text-muted);">→</span><span style="color:var(--accent-green);">${esc(a.to)}</span></div>`).join('');
 }
 
-window.syncLiveScores=async function(silent=false){
-  if(isRunning)return;
-  const btn=document.getElementById('btnSyncLive');
-  if(btn&&!silent){btn.innerText='Syncing…';btn.disabled=true;}
+window.syncLiveScores=async function(){
+  if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
   try{
-    const data=window.scannedMatchesData||[];
-    const detached=window.scanLiveFixtures||[];
-    if(!data.length&&!detached.length)return;
+    const res=await apiReq('fixtures?live=all');const liveArr=res.response||[];
+    if(!liveArr.length){showOk('Δεν υπάρχουν live αγώνες.');return;}
+    const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));
 
-    // 1) Live index: ανακαλύπτει και αγώνες που ήταν NS στο αρχικό scan αλλά μόλις ξεκίνησαν.
-    const res=await apiReq('fixtures?live=all',{priority:'high',cacheMs:15*1000});
-    const liveArr=res.response||[];
-    const liveMap=new Map(liveArr.map(f=>[String(f.fixture.id),f]));
+    // 1. Score + events (1 credit)
     let n=0;
-    data.forEach(d=>{
-      const ld=liveMap.get(String(d.fixId));if(!ld)return;
+    window.scannedMatchesData.forEach(d=>{
+      if(!liveMap.has(d.fixId))return;const ld=liveMap.get(d.fixId);
       d.m.goals=ld.goals;d.m.fixture.status=ld.fixture.status;
       const evts=ld.events||[];let cor=0,yel=0,red=0;
       evts.forEach(ev=>{const t=(ev.type||'').toLowerCase(),det=(ev.detail||'').toLowerCase();
@@ -4059,81 +2181,10 @@ window.syncLiveScores=async function(silent=false){
       if(evts.length>0){d.liveCorners=cor;d.liveYellows=yel;d.liveReds=red;}n++;
     });
 
-    // 2) Lifecycle refresh για αγώνες των οποίων η ώρα έναρξης έχει φτάσει.
-    // Μία κλήση ανά ημερομηνία ενημερώνει πολλά fixtures μαζί και επιτρέπει
-    // αυτόματη μετάβαση NS→LIVE αλλά και άμεση ανίχνευση FT/AET/PEN.
-    const now=Date.now();
-    const due=data.filter(d=>{
-      if(isFinished(d.m?.fixture?.status?.short))return true;
-      const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
-    });
-    const detachedDue=detached.filter(f=>{const st=String(f?.fixture?.status?.short||'').toUpperCase();if(isFinished(st)||isLive(st))return true;const k=kickoffEpoch(f);return Number.isFinite(k)&&k<=now+10*60*1000;});
-    const dueIds=new Set([...due.map(d=>String(d.fixId)),...detachedDue.map(f=>String(f?.fixture?.id||''))].filter(Boolean));
-    const dates=[...new Set([...due.map(d=>(d.m?.fixture?.date||'').split('T')[0]),...detachedDue.map(f=>(f?.fixture?.date||'').split('T')[0])].filter(Boolean))];
-    const freshMap=new Map();
-    await Promise.all(dates.map(async date=>{
-      try{
-        const fr=await apiReq(`fixtures?date=${date}`,{priority:'high',cacheMs:45*1000});
-        (fr?.response||[]).forEach(f=>{const id=String(f?.fixture?.id||'');if(dueIds.has(id))freshMap.set(id,f);});
-      }catch(e){console.warn('[APEX] lifecycle date refresh',date,e?.message||e);}
-    }));
+    const liveTracked=window.scannedMatchesData.filter(d=>liveMap.has(d.fixId));
+    if(!liveTracked.length){renderSummaryTable();tickerRefresh();showOk(`✅ 1 Credit · Synced ${n} αγώνες`);return;}
 
-    // Update statuses/scores from the lifecycle response.
-    data.forEach(d=>{
-      const f=freshMap.get(String(d.fixId));if(!f)return;
-      d.m.goals=f.goals||d.m.goals;
-      d.m.fixture.status=f.fixture?.status||d.m.fixture.status;
-    });
-
-    // v6.6: μόλις pre-match record γίνει LIVE, φεύγει αμέσως από το Progressive panel.
-    data.filter(d=>isLive(String(d.m?.fixture?.status?.short||'').toUpperCase())).forEach(d=>document.getElementById(`progressive-card-${d.fixId}`)?.remove());
-
-    // Refresh του ξεχωριστού LIVE NOW set. Finished fixtures αφαιρούνται και μπαίνουν FT cache.
-    const nextDetached=[];
-    for(const old of detached){
-      const id=String(old?.fixture?.id||'');
-      const fresh=freshMap.get(id)||liveMap.get(id)||old;
-      const st=String(fresh?.fixture?.status?.short||'').toUpperCase();
-      if(isFinished(st)){const compact=compactFinishedFixture(fresh);if(compact)persistentFTCache.set(id,compact);continue;}
-      if(isLive(st))nextDetached.push(fresh);
-    }
-    window.scanLiveFixtures=_dedupeFixturesById(nextDetached);
-    renderDetachedLiveFixtures();
-
-    // 3) AUTO-CLEAR: τελειωμένοι αγώνες αποθηκεύονται για Audit και αφαιρούνται
-    // από το ενεργό Smart Scan/Dashboard. Δεν χάνονται οι pre-match προβλέψεις στο Vault.
-    const removed=[];
-    const kept=[];
-    for(const d of data){
-      const fresh=freshMap.get(String(d.fixId));
-      const st=String((fresh?.fixture?.status?.short||d.m?.fixture?.status?.short||'')).toUpperCase();
-      if(isFinished(st)){
-        const compact=compactFinishedFixture(fresh||d.m);
-        if(compact)persistentFTCache.set(String(d.fixId),compact);
-        try{ if(fresh&&typeof _settleLiveLearningFixture==='function') _settleLiveLearningFixture(fresh).catch(()=>{}); }catch{}
-        removed.push(d);
-      }else kept.push(d);
-    }
-    if(removed.length){
-      try{
-        const vaultNow=JSON.parse(localStorage.getItem(LS_PREDS)||'[]'),vm=new Map((Array.isArray(vaultNow)?vaultNow:[]).map(x=>[String(x.fixtureId),x]));
-        const pairs=removed.map(d=>({p:vm.get(String(d.fixId))||d,fix:persistentFTCache.get(String(d.fixId))||compactFinishedFixture(freshMap.get(String(d.fixId))||d.m)})).filter(x=>x.fix);
-        const wr=_archiveSettledBatch(pairs);if(wr.added>0)setTimeout(()=>_maybeBackgroundContinuousLearning(false),1200);
-      }catch(e){console.warn('[APEX] auto learning archive',e);}
-      window.scannedMatchesData=kept;
-      removed.forEach(d=>document.getElementById(`progressive-card-${d.fixId}`)?.remove());
-      rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();
-      showOk(`🧹 ${removed.length} τελειωμένοι αγώνες αφαιρέθηκαν αυτόματα.`);
-    }
-
-    const liveTracked=(window.scannedMatchesData||[]).filter(d=>liveMap.has(String(d.fixId)));
-    if(!liveTracked.length){
-      renderSummaryTable();tickerRefresh();
-      if(!silent&&!removed.length)showOk(`✅ Lifecycle sync · ${dates.length} ημερομηνίες · ${window.scanLiveFixtures.length} detached LIVE.`);
-      return;
-    }
-
-    // 4) Live Stats + Lineups (parallel per live match)
+    // 2. Live Stats + Lineups (parallel per match)
     let subCount=0, liveIntelCount=0;
     await Promise.all(liveTracked.map(async d=>{
       try{
@@ -4141,27 +2192,33 @@ window.syncLiveScores=async function(silent=false){
           apiReq(`fixtures/statistics?fixture=${d.fixId}`),
           apiReq(`fixtures/lineups?fixture=${d.fixId}`)
         ]);
+        // Live stats → liveIntel
         if(srStats.response?.length>=2){
           const elapsed=d.m?.fixture?.status?.elapsed||45;
           d.liveIntel=computeLiveIntelligence(srStats.response[0].statistics, srStats.response[1].statistics, elapsed);
           liveStatsCache.set(String(d.fixId),{h:srStats.response[0].statistics,a:srStats.response[1].statistics,ts:Date.now()});
           liveIntelCount++;
         }
+        // Lineups → substitution detection & recalculation
         const newLineup = parseLineup(srLineup?.response||[]);
         if(newLineup.available){
           const subResult = applySubstitution(d, newLineup);
-          if(subResult){subCount++;flashMatchUpdate(d.fixId, subResult);} else d.lineupData = newLineup;
+          if(subResult){
+            subCount++;
+            flashMatchUpdate(d.fixId, subResult);
+          } else {
+            // Ακόμα και χωρίς sub, store νέο lineup
+            d.lineupData = newLineup;
+          }
         }
       }catch(e){ console.warn('[APEX] live sync error fix',d.fixId,e.message); }
     }));
 
     renderSummaryTable();tickerRefresh();
-    if(!silent){
-      const credits=1+dates.length+liveTracked.length*2;
-      showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}${removed.length?` · Auto-clear: ${removed.length}`:''}`);
-    }
-  }catch(e){if(!silent)showErr('Sync error: '+e.message);else console.warn('[APEX] auto lifecycle sync',e.message);}
-  finally{if(btn&&!silent){btn.innerText='Live Sync';btn.disabled=false;}}
+    const credits = 1 + liveTracked.length * 2;
+    showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}`);
+  }catch(e){showErr('Sync error: '+e.message);}
+  finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
 };
 
 /**
@@ -4215,11 +2272,11 @@ window.fetchAllLineups = async function() {
         const lp = getLeagueParams(d.leagueId);
         const hA = applyLineupAdjustment(d.hXGbase||d.hXGfinal, d.hPlayers, nl.home, []);
         const aA = applyLineupAdjustment(d.aXGbase||d.aXGfinal, d.aPlayers, nl.away, []);
-        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId, d.h2h||null,{lineupData:nl,hInjAdj:hA,aInjAdj:aA,marketNoVig1X2:d.marketNoVig1X2});
+        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId);
         Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
           outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
           exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
-          hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,verification:res.verification,rawOutPick:res.rawOutPick,offside:res.offside});
+          hExp:res.hExp,aExp:res.aExp,pp:res.pp});
         confirmed++;
       } else { unavailable++; }
     }catch(_){ unavailable++; }
@@ -4248,7 +2305,7 @@ window.fetchLineupForMatch = async function(fixId) {
     const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
     const btts = Math.min(hXGfinal, aXGfinal);
-    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId, d.h2h||null,{lineupData:newLineup,hInjAdj:newHAdj,aInjAdj:newAAdj,marketNoVig1X2:d.marketNoVig1X2});
+    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
     const cardCtx = {xgDiff: result.xgDiff, leagueId: d.leagueId};
     adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
@@ -4260,7 +2317,7 @@ window.fetchLineupForMatch = async function(fixId) {
       exact:`${result.hG}-${result.aG}`, exact2:`${result.hG2}-${result.aG2}`,
       exactConf:result.exactConf, omegaPick:result.omegaPick,
       strength:result.pickScore, reason:result.reason,
-      hExp:result.hExp, aExp:result.aExp, pp:result.pp, ppRaw:result.ppRaw, oneXTwo:result.oneXTwo, verification:result.verification,rawOutPick:result.rawOutPick, offside:result.offside,
+      hExp:result.hExp, aExp:result.aExp, pp:result.pp,
       lambdaTotal:result.lambdaTotal, cornerConf:result.cornerConf, expCor:result.expCor,
     });
     // Refresh the open accordion row
@@ -4276,29 +2333,7 @@ window.fetchLineupForMatch = async function(fixId) {
 };
 
 let _autoSyncTimer=null;
-const AUTO_REFRESH_MS = 60*1000;
-function startAutoSync(){
-  if(_autoSyncTimer)clearInterval(_autoSyncTimer);
-  const tick=()=>{
-    if(isRunning)return;
-    const data=window.scannedMatchesData||[];
-    const detached=window.scanLiveFixtures||[];
-    if(!data.length&&!detached.length)return;
-    const now=Date.now();
-    // Tick κάθε 60s. API refresh γίνεται για live/finished/stale imported fixtures και
-    // για όσα πλησιάζουν ή έχουν περάσει την ώρα έναρξης. Έτσι αποφεύγουμε άσκοπα
-    // date calls για αυριανά fixtures, αλλά η εκκαθάριση ελέγχεται ακριβώς ανά λεπτό.
-    const shouldCheck=detached.length>0||data.some(d=>{
-      const st=d.m?.fixture?.status?.short;
-      if(isFinished(st)||isLive(st))return true;
-      const k=kickoffEpoch(d);return Number.isFinite(k)&&k<=now+10*60*1000;
-    });
-    if(shouldCheck)window.syncLiveScores(true);
-  };
-  _autoSyncTimer=setInterval(tick,AUTO_REFRESH_MS);
-  // Import/scan: πρώτο status refresh σχεδόν αμέσως, όχι μετά από 1 λεπτό.
-  setTimeout(tick,300);
-}
+function startAutoSync(){if(_autoSyncTimer)clearInterval(_autoSyncTimer);_autoSyncTimer=setInterval(()=>{const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));if(hasLive&&!isRunning)syncLiveScores();},90000);}
 
 let _tickerRaf=null,_tickerPx=45;
 function tickerRefresh(){
@@ -4343,13 +2378,13 @@ function tickerRefresh(){
 const ODDS_BOOKMAKER_ID   = 8;   // Pinnacle
 const ODDS_BOOKMAKER_NAME = 'Pinnacle';
 const MIN_EV_THRESHOLD    = 0.015; // ≥1.5% EV για εμφάνιση στο Value Bets
-let oddsCache = new BoundedCache(180, CACHE_TTL.ODDS);
+let oddsCache = new BoundedCache(150);
 let _oddsLoadedFixtures = new Set(); // αποφυγή διπλής φόρτωσης
 
 async function fetchOddsForFixture(fixtureId) {
   const k = String(fixtureId);
   if(oddsCache.has(k)) return oddsCache.get(k);
-  const d = await apiReq(`odds?fixture=${fixtureId}&bookmaker=${ODDS_BOOKMAKER_ID}`,{priority:'low',cacheMs:CACHE_TTL.ODDS});
+  const d = await apiReq(`odds?fixture=${fixtureId}&bookmaker=${ODDS_BOOKMAKER_ID}`);
   const result = parseOddsResponse(d?.response || []);
   oddsCache.set(k, result);
   return result;
@@ -4542,491 +2577,6 @@ window.fetchAllOdds = async function() {
   }
 };
 
-
-// ================================================================
-//  RADAR ENGINE — σαφής υπεροχή μοντέλου, χωρίς bookmaker odds
-// ================================================================
-function buildRadarList() {
-  const matches = (window.scannedMatchesData || []).filter(rec =>
-    rec?.pp &&
-    !isFinished(rec.m?.fixture?.status?.short) &&
-    !String(rec.reason||'').startsWith('Analysis error')
-  );
-  const signals = [];
-
-  const gradeFor = score => score >= 90 ? 'A+' : score >= 84 ? 'A' : score >= 78 ? 'B+' : score >= 72 ? 'B' : 'C';
-  const add = (rec, signal) => {
-    const score = clamp(Number(signal.radarScore)||0, 0, 99);
-    if(score < 72) return; // RADAR = μόνο σαφής υπεροχή
-    signals.push({
-      fixId: rec.fixId,
-      ht: rec.ht, at: rec.at, lg: rec.lg,
-      date: rec.m?.fixture?.date?.split('T')[0] || '',
-      time: rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
-      radarScore: parseFloat(score.toFixed(1)),
-      grade: gradeFor(score),
-      ...signal,
-    });
-  };
-
-  matches.forEach(rec => {
-    const pp = rec.pp;
-    const xgDiff = Number(rec.xgDiff || ((rec.hXGfinal||0) - (rec.aXGfinal||0)) || 0);
-    const tXG = Number(rec.tXG || ((rec.hXGfinal||0) + (rec.aXGfinal||0)) || 0);
-
-    // ── 1 / X / 2: v6.4 ΕΝΙΑΙΟ Verification Layer ──
-    const v=_ensure1X2Verification(rec);
-    if(v?.signal && v.score>=VERIFY_1X2.STRONG_SCORE && v.status!=='CONFLICT'){
-      const key=v.signal;
-      const prob=key==='1'?Number(pp.pHome||0):key==='X'?Number(pp.pDraw||0):Number(pp.pAway||0);
-      const label=key==='1'?'1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ':key==='2'?'2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ':'X — ΙΣΟΠΑΛΙΑ';
-      const icon=key==='1'?'🏠':key==='2'?'✈️':'🤝';
-      add(rec,{
-        category:'1X2',market:key,label,icon,
-        probability:prob*100,dominanceGap:v.gapPP,
-        radarScore:v.score,verificationScore:v.score,verificationStatus:v.status,
-        reason:`${v.status} ${v.score}/100 · P${key} ${(prob*100).toFixed(1)}% · gap ${v.gapPP.toFixed(1)}pp · xGΔ ${v.xgDiff>=0?'+':''}${v.xgDiff.toFixed(2)} · Cons ${v.components.consistency.toFixed(0)} · DQ ${v.components.dataQuality}`,
-        metric:`V ${v.score}/100 · P ${(prob*100).toFixed(1)}% · Δ ${v.gapPP.toFixed(1)}pp`
-      });
-    }
-
-    // ── GOALS: επιλέγουμε την πιο απαιτητική γραμμή που περνά το φίλτρο ──
-    const pO35 = Number(pp.pO35||0), pO25 = Number(pp.pO25||0);
-    if(pO35 >= 0.55 && tXG >= 3.50) {
-      add(rec, {
-        category:'GOALS', market:'O3.5', label:'OVER 3.5 ΓΚΟΛ', icon:'🚀',
-        probability:pO35*100,
-        radarScore:pO35*100 + Math.min(Math.max(tXG-3.5,0)*10,12),
-        reason:`Poisson O3.5 ${pct(pO35)} · Total xG ${tXG.toFixed(2)} — ισχυρή υπεροχή high-scoring σεναρίου`,
-        metric:`P(O3.5) ${(pO35*100).toFixed(1)}% · tXG ${tXG.toFixed(2)}`
-      });
-    } else if(pO25 >= 0.66 && tXG >= 2.90) {
-      add(rec, {
-        category:'GOALS', market:'O2.5', label:'OVER 2.5 ΓΚΟΛ', icon:'🔥',
-        probability:pO25*100,
-        radarScore:pO25*100 + Math.min(Math.max(tXG-2.9,0)*8,12),
-        reason:`Poisson O2.5 ${pct(pO25)} · Total xG ${tXG.toFixed(2)} — σαφής κλίση προς ≥3 γκολ`,
-        metric:`P(O2.5) ${(pO25*100).toFixed(1)}% · tXG ${tXG.toFixed(2)}`
-      });
-    }
-
-    // ── CORNERS: η cornerConf είναι ήδη P(Over 8.5) με sample penalty ──
-    const corConf = Number(rec.cornerConf||0), expCor = Number(rec.expCor||0);
-    if(corConf >= 70 && expCor >= 9.5) {
-      add(rec, {
-        category:'CORNERS', market:'COR O8.5', label:'OVER 8.5 ΚΟΡΝΕΡ', icon:'🚩',
-        probability:corConf,
-        radarScore:corConf + Math.min(Math.max(expCor-9.5,0)*3,10),
-        reason:`P(Over 8.5 corners) ${corConf.toFixed(1)}% · προβολή ${expCor.toFixed(1)} κόρνερ`,
-        metric:`P>8.5 ${corConf.toFixed(1)}% · Exp ${expCor.toFixed(1)}`
-      });
-    }
-
-    // ── OFFSIDES: αυτόνομο Poisson market ──
-    const off = rec.offside;
-    if(off && Number(off.bestProb||0) >= 70 && off.bestSignal && !String(off.bestSignal).includes('ΧΩΡΙΣ')) {
-      const offProb = Number(off.bestProb||0), lambda = Number(off.totLambda||0);
-      add(rec, {
-        category:'OFFSIDES', market:'OFFSIDE', label:off.bestSignal, icon:'🚫',
-        probability:offProb,
-        radarScore:offProb + Math.min(Math.max(lambda-2.0,0)*2.5,8),
-        reason:`Offside Poisson ${offProb.toFixed(1)}% · λ HOME ${Number(off.hLambda||0).toFixed(2)} / AWAY ${Number(off.aLambda||0).toFixed(2)}`,
-        metric:`P ${offProb.toFixed(1)}% · λ total ${lambda.toFixed(2)}`
-      });
-    }
-  });
-
-  // Κατάταξη συνολικά, αλλά όχι πάνω από 3 signals από τον ίδιο αγώνα.
-  const sorted = signals.sort((a,b)=>b.radarScore-a.radarScore);
-  const perMatch = new Map();
-  latestTopLists.radar = sorted.filter(s => {
-    const n = perMatch.get(s.fixId) || 0;
-    if(n >= 3) return false;
-    perMatch.set(s.fixId, n+1);
-    return true;
-  }).slice(0,20);
-}
-
-function renderRadarTab(signals) {
-  if(!signals?.length) {
-    return `<div style="text-align:center;color:var(--text-muted);padding:34px 20px;">
-      <div style="font-size:2.2rem;margin-bottom:10px;">📡</div>
-      <div style="font-weight:800;margin-bottom:6px;">Το RADAR δεν βρήκε σαφή υπεροχή</div>
-      <div style="font-size:0.82rem;line-height:1.6;">Εμφανίζονται μόνο 1 / X / 2, Over 2.5, Over 3.5, Corners και Offsides που περνούν αυστηρά thresholds πιθανότητας και επιβεβαίωσης.</div>
-    </div>`;
-  }
-
-  const catColor = c => c==='1X2'?'var(--accent-blue)':c==='GOALS'?'var(--accent-green)':c==='CORNERS'?'var(--accent-gold)':'var(--accent-red)';
-  return `<div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;background:rgba(37,99,235,0.06);border:1px solid rgba(37,99,235,0.12);border-radius:8px;">
-      <div><strong style="color:var(--accent-blue);">📡 APEX RADAR</strong><div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">Μόνο καθαρή υπεροχή μοντέλου — χωρίς bookmaker odds.</div></div>
-      <div style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted);">${signals.length} SIGNALS</div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:9px;">
-      ${signals.map((r,i)=>{
-        const col = catColor(r.category);
-        const p = Number(r.probability||0);
-        const score = Number(r.radarScore||0);
-        return `<div onclick="scrollToMatchAndOpen('row-${r.fixId}')" style="display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;background:var(--bg-base);border:1px solid var(--border-light);border-left:4px solid ${col};border-radius:8px;cursor:pointer;transition:all .15s;" onmouseover="this.style.transform='translateY(-1px)';this.style.borderColor='${col}'" onmouseout="this.style.transform='';this.style.borderColor='var(--border-light)'">
-          <div style="font-family:var(--font-mono);font-weight:900;font-size:1rem;color:var(--text-dim);text-align:center;">#${i+1}</div>
-          <div style="min-width:0;">
-            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:4px;">
-              <span style="font-size:.62rem;font-weight:900;color:${col};background:${col}14;border:1px solid ${col}30;border-radius:5px;padding:2px 7px;">${esc(r.category)}</span>
-              <span style="font-size:.65rem;color:var(--text-muted);">${esc(r.lg||'')}</span>
-              <span style="font-size:.65rem;color:var(--text-dim);">${esc(r.date||'')} ${esc(r.time||'')}</span>
-            </div>
-            <div style="font-size:.95rem;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.ht)} <span style="color:var(--text-muted);font-weight:500;">vs</span> ${esc(r.at)}</div>
-            <div style="font-size:.86rem;font-weight:900;color:${col};margin-top:4px;">${r.icon} ${esc(r.label)}</div>
-            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;line-height:1.45;">${esc(r.reason||'')}</div>
-          </div>
-          <div style="min-width:118px;text-align:right;">
-            <div style="font-family:var(--font-mono);font-size:1.22rem;font-weight:900;color:${col};">${score.toFixed(1)}</div>
-            <div style="font-size:.58rem;color:var(--text-dim);text-transform:uppercase;font-weight:800;">RADAR SCORE · ${esc(r.grade)}</div>
-            <div style="font-family:var(--font-mono);font-size:.72rem;color:var(--text-sub);margin-top:5px;">P ${p.toFixed(1)}%</div>
-            <div style="font-size:.62rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;">${esc(r.metric||'')}</div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>`;
-}
-
-// ================================================================
-//  BEST 4 ENGINE — market-confirmed elite selections (v5.5)
-//  • Uses only strong RADAR signals
-//  • Fetches ALL bookmakers available for each fixture
-//  • Requires best valid market price >= 1.60
-//  • One selection per fixture; never pads to four
-// ================================================================
-const BEST4_MIN_ODDS = 1.60;
-const BEST4_MAX_ODDS = 8.00;
-const BEST4_MAX_FIXTURES_TO_PRICE = 18;
-let best4OddsCache = new BoundedCache(80, CACHE_TTL.ODDS);
-let best4Loading = false;
-const _marketOddsInflight = new Map();
-
-function _best4Norm(s){
-  return String(s||'').toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/\s+/g,' ').trim();
-}
-
-const MARKET_PARSE_MAX_ODDS = 20.0;
-const MARKET_BOMB_MAX_ODDS = 12.0;
-
-function _best4PushQuote(store,key,odd,bkName){
-  const o=Number(odd);
-  if(!key || !Number.isFinite(o) || o<1.01 || o>MARKET_PARSE_MAX_ODDS) return;
-  if(!store[key]) store[key]=[];
-  store[key].push({odd:o, bookmaker:bkName||'Bookmaker'});
-}
-
-function _medianNums(values){
-  const a=(values||[]).filter(Number.isFinite).slice().sort((x,y)=>x-y);
-  if(!a.length) return null;
-  const m=Math.floor(a.length/2);
-  return a.length%2?a[m]:(a[m-1]+a[m])/2;
-}
-
-// Robust best price: with 3+ books reject a single quote >25% above median.
-function _best4ChooseQuote(quotes,maxOdds=BEST4_MAX_ODDS){
-  if(!quotes?.length) return null;
-  const q=quotes.filter(x=>Number.isFinite(x.odd)&&x.odd>=1.01&&x.odd<=maxOdds).sort((a,b)=>a.odd-b.odd);
-  if(!q.length) return null;
-  const mid=_medianNums(q.map(x=>x.odd));
-  const clean=q.length>=3 ? q.filter(x=>x.odd <= mid*1.25) : q;
-  const best=(clean.length?clean:q).slice().sort((a,b)=>b.odd-a.odd)[0];
-  return {...best, books:q.length, median:mid, quotes:q.map(x=>({odd:x.odd,bookmaker:x.bookmaker}))};
-}
-
-function _marketBookSet(perBook,bkName,key,odd){
-  const o=Number(odd);
-  if(!key||!Number.isFinite(o)||o<1.01||o>MARKET_PARSE_MAX_ODDS) return;
-  if(!perBook[bkName]) perBook[bkName]={};
-  // Keep first canonical quote for this market/bookmaker; API normally supplies one.
-  if(perBook[bkName][key]===undefined) perBook[bkName][key]=o;
-}
-
-function _noVigGroupForKey(key){
-  if(key==='1'||key==='X'||key==='2') return ['1','X','2'];
-  const pairs={
-    'O2.5':['O2.5','U2.5'], 'U2.5':['O2.5','U2.5'],
-    'O3.5':['O3.5','U3.5'], 'U3.5':['O3.5','U3.5'],
-    'COR O8.5':['COR O8.5','COR U8.5'], 'COR U8.5':['COR O8.5','COR U8.5'],
-    'OFF TOT O2.5':['OFF TOT O2.5','OFF TOT U2.5'], 'OFF TOT U2.5':['OFF TOT O2.5','OFF TOT U2.5'],
-    'OFF TOT O3.5':['OFF TOT O3.5','OFF TOT U3.5'], 'OFF TOT U3.5':['OFF TOT O3.5','OFF TOT U3.5'],
-    'OFF HOME O1.5':['OFF HOME O1.5','OFF HOME U1.5'], 'OFF HOME U1.5':['OFF HOME O1.5','OFF HOME U1.5'],
-    'OFF AWAY O1.5':['OFF AWAY O1.5','OFF AWAY U1.5'], 'OFF AWAY U1.5':['OFF AWAY O1.5','OFF AWAY U1.5'],
-  };
-  return pairs[key]||null;
-}
-
-function _buildNoVigConsensus(perBook,key){
-  const group=_noVigGroupForKey(key); if(!group) return null;
-  const rows=[];
-  Object.entries(perBook||{}).forEach(([bookmaker,m])=>{
-    if(!group.every(k=>Number.isFinite(Number(m[k]))&&Number(m[k])>1)) return;
-    const inv=group.map(k=>1/Number(m[k]));
-    const z=inv.reduce((a,b)=>a+b,0); if(!(z>0)) return;
-    const idx=group.indexOf(key); if(idx<0) return;
-    rows.push({bookmaker,prob:inv[idx]/z,overround:z-1,odds:Number(m[key])});
-  });
-  if(!rows.length) return null;
-  const probs=rows.map(r=>r.prob);
-  const prob=_medianNums(probs);
-  if(!(prob>0&&prob<1)) return null;
-  const min=Math.min(...probs), max=Math.max(...probs);
-  const meanOverround=rows.reduce((s,r)=>s+r.overround,0)/rows.length;
-  return {
-    prob,
-    fairOdds:1/prob,
-    books:rows.length,
-    spreadPP:(max-min)*100,
-    minProb:min,
-    maxProb:max,
-    meanOverround,
-    rows
-  };
-}
-
-/** Parse ALL bookmakers and preserve both executable prices and complete no-vig market sets. */
-function parseBestOddsAcrossBookmakers(response){
-  const buckets={}, perBook={};
-  const put=(bkName,key,odd)=>{_best4PushQuote(buckets,key,odd,bkName);_marketBookSet(perBook,bkName,key,odd);};
-  (response||[]).forEach(item=>{
-    (item?.bookmakers||[]).forEach(bk=>{
-      const bkName=bk?.name||`Bookmaker ${bk?.id??''}`;
-      (bk?.bets||[]).forEach(bet=>{
-        const n=_best4Norm(bet?.name);
-        const isHalf=n.includes('half')||n.includes('1st')||n.includes('2nd')||n.includes('1st half')||n.includes('2nd half');
-        (bet?.values||[]).forEach(v=>{
-          const val=_best4Norm(v?.value), odd=parseFloat(v?.odd);
-          if(!Number.isFinite(odd)) return;
-
-          if(!isHalf && (n==='match winner'||n==='winner'||n.includes('match winner'))){
-            if(val==='home'||val==='1') put(bkName,'1',odd);
-            else if(val==='draw'||val==='x') put(bkName,'X',odd);
-            else if(val==='away'||val==='2') put(bkName,'2',odd);
-          }
-
-          const isGoalsTotal=!isHalf&&!n.includes('corner')&&!n.includes('offside')&&
-            ((n.includes('goals')&&(n.includes('over/under')||n.includes('over under')||n.includes('total')))||n==='goals over/under');
-          if(isGoalsTotal){
-            if(val==='over 2.5'||val==='o 2.5') put(bkName,'O2.5',odd);
-            if(val==='under 2.5'||val==='u 2.5') put(bkName,'U2.5',odd);
-            if(val==='over 3.5'||val==='o 3.5') put(bkName,'O3.5',odd);
-            if(val==='under 3.5'||val==='u 3.5') put(bkName,'U3.5',odd);
-          }
-
-          if(!isHalf&&n.includes('corner')){
-            if(!n.includes('home')&&!n.includes('away')){
-              if(val==='over 8.5'||val==='o 8.5') put(bkName,'COR O8.5',odd);
-              if(val==='under 8.5'||val==='u 8.5') put(bkName,'COR U8.5',odd);
-            }
-          }
-
-          if(!isHalf&&n.includes('offside')){
-            const isHome=n.includes('home')||n.includes('team 1');
-            const isAway=n.includes('away')||n.includes('team 2');
-            if(!isHome&&!isAway){
-              if(val==='over 2.5'||val==='o 2.5') put(bkName,'OFF TOT O2.5',odd);
-              if(val==='under 2.5'||val==='u 2.5') put(bkName,'OFF TOT U2.5',odd);
-              if(val==='over 3.5'||val==='o 3.5') put(bkName,'OFF TOT O3.5',odd);
-              if(val==='under 3.5'||val==='u 3.5') put(bkName,'OFF TOT U3.5',odd);
-            }
-            if(isHome){
-              if(val==='over 1.5'||val==='o 1.5') put(bkName,'OFF HOME O1.5',odd);
-              if(val==='under 1.5'||val==='u 1.5') put(bkName,'OFF HOME U1.5',odd);
-            }
-            if(isAway){
-              if(val==='over 1.5'||val==='o 1.5') put(bkName,'OFF AWAY O1.5',odd);
-              if(val==='under 1.5'||val==='u 1.5') put(bkName,'OFF AWAY U1.5',odd);
-            }
-          }
-        });
-      });
-    });
-  });
-
-  const out={};
-  Object.keys(buckets).forEach(k=>{
-    const best4=_best4ChooseQuote(buckets[k],BEST4_MAX_ODDS);
-    const bomb=_best4ChooseQuote(buckets[k],MARKET_BOMB_MAX_ODDS);
-    const base=best4||bomb;
-    if(base) out[k]={...base,bombQuote:bomb||base,noVig:_buildNoVigConsensus(perBook,k)};
-  });
-  Object.defineProperty(out,'__perBook',{value:perBook,enumerable:false});
-  return out;
-}
-
-async function fetchBestOddsForFixture(fixtureId){
-  const k=String(fixtureId);
-  if(best4OddsCache.has(k)) return best4OddsCache.get(k);
-  if(_marketOddsInflight.has(k)) return _marketOddsInflight.get(k);
-  // No bookmaker filter: API returns all available bookmakers for the fixture.
-  // Shared by BEST 4 and BOMBS so the same fixture is never priced twice concurrently.
-  const task=apiReq(`odds?fixture=${fixtureId}`,{priority:'low',cacheMs:CACHE_TTL.ODDS})
-    .then(d=>{
-      const parsed=parseBestOddsAcrossBookmakers(d?.response||[]);
-      best4OddsCache.set(k,parsed);
-      return parsed;
-    })
-    .finally(()=>_marketOddsInflight.delete(k));
-  _marketOddsInflight.set(k,task);
-  return task;
-}
-
-function _best4MarketKey(signal){
-  if(!signal) return null;
-  if(signal.category==='1X2') return signal.market; // 1 / X / 2
-  if(signal.category==='GOALS') return signal.market; // O2.5 / O3.5
-  if(signal.category==='CORNERS') return 'COR O8.5';
-  if(signal.category==='OFFSIDES'){
-    const l=String(signal.label||'').toUpperCase();
-    if(l.includes('ΣΥΝΟΛΟ') && l.includes('2.5')) return 'OFF TOT O2.5';
-    if(l.includes('ΣΥΝΟΛΟ') && l.includes('3.5')) return 'OFF TOT O3.5';
-    if(l.includes('HOME') && l.includes('1.5')) return 'OFF HOME O1.5';
-    if(l.includes('AWAY') && l.includes('1.5')) return 'OFF AWAY O1.5';
-  }
-  return null;
-}
-
-function _best4EligibleSignal(s){
-  const p=Number(s?.probability||0), r=Number(s?.radarScore||0);
-  if(r<80) return false;
-  if(s.category==='1X2'){
-    return Number(s.verificationScore||0)>=VERIFY_1X2.VERIFIED_SCORE && String(s.verificationStatus||'')==='VERIFIED';
-  }
-  if(s.category==='GOALS' && s.market==='O2.5') return p>=68;
-  if(s.category==='GOALS' && s.market==='O3.5') return p>=58;
-  if(s.category==='CORNERS') return p>=72;
-  if(s.category==='OFFSIDES') return p>=72;
-  return false;
-}
-
-function _best4ProbQuality(signal){
-  const p=Number(signal.probability||0);
-  if(signal.category==='1X2' && signal.market==='X') return clamp((p-30)/20*100,0,100);
-  if(signal.category==='1X2') return clamp((p-50)/25*100,0,100);
-  if(signal.category==='GOALS' && signal.market==='O3.5') return clamp((p-45)/25*100,0,100);
-  return clamp((p-55)/25*100,0,100);
-}
-
-function _best4DataQuality(rec){
-  if(!rec) return 50;
-  let q=68;
-  if(rec.lineupData?.available) q+=10;
-  const hsd=Number(rec.hS?.r6?.sdGoals), asd=Number(rec.aS?.r6?.sdGoals);
-  if(Number.isFinite(hsd) && hsd<=1.10) q+=5;
-  if(Number.isFinite(asd) && asd<=1.10) q+=5;
-  if(rec.hInjAdj && rec.aInjAdj) q+=4;
-  const fallback = Math.abs(Number(rec.hXGfinal||0)-1.10)<0.02 && Math.abs(Number(rec.aXGfinal||0)-1.10)<0.02;
-  if(fallback) q-=35;
-  return clamp(q,0,100);
-}
-
-function renderBest4Tab(items){
-  if(best4Loading && (!items||!items.length)){
-    return `<div style="text-align:center;padding:34px 20px;color:var(--text-muted);"><div style="font-size:2.2rem;margin-bottom:10px;">🏆</div><div style="font-weight:900;color:var(--text-main);">BEST 4 — φόρτωση αποδόσεων αγοράς…</div><div style="font-size:.8rem;margin-top:7px;">Συγκρίνω όλους τους διαθέσιμους bookmakers για τα ισχυρότερα RADAR signals.</div></div>`;
-  }
-  if(!items?.length){
-    return `<div style="text-align:center;padding:34px 20px;color:var(--text-muted);">
-      <div style="font-size:2.2rem;margin-bottom:10px;">🏆</div>
-      <div style="font-weight:900;color:var(--text-main);margin-bottom:6px;">BEST 4</div>
-      <div style="font-size:.82rem;line-height:1.6;max-width:680px;margin:0 auto;">Δεν υπάρχουν ακόμη επιλογές που να περνούν ταυτόχρονα τα αυστηρά φίλτρα του RADAR και πραγματική καλύτερη διαθέσιμη απόδοση ≥ ${BEST4_MIN_ODDS.toFixed(2)}. Το σύστημα δεν συμπληρώνει τεχνητά τέσσερις επιλογές.</div>
-      <button class="btn btn-primary" style="margin-top:14px;" onclick="window.refreshBest4()">↻ Έλεγχος αποδόσεων</button>
-    </div>`;
-  }
-  const catColor=c=>c==='1X2'?'var(--accent-blue)':c==='GOALS'?'var(--accent-green)':c==='CORNERS'?'var(--accent-gold)':'var(--accent-red)';
-  return `<div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding:11px 13px;background:rgba(217,119,6,.06);border:1px solid rgba(217,119,6,.16);border-radius:9px;">
-      <div><strong style="color:var(--accent-gold);">🏆 APEX BEST 4</strong><div style="font-size:.72rem;color:var(--text-muted);margin-top:3px;">Ισχυρό RADAR + καλύτερη έγκυρη απόδοση αγοράς ≥ ${BEST4_MIN_ODDS.toFixed(2)} · έως 1 επιλογή ανά αγώνα.</div></div>
-      <button class="btn btn-outline" style="height:32px;font-size:.72rem;" onclick="window.refreshBest4()">↻ Refresh Odds</button>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:10px;">
-    ${items.map((x,i)=>{
-      const col=catColor(x.category); const p=Number(x.probability||0); const o=Number(x.bestOdds||0); const fair=Number(x.fairOdds||0);
-      return `<div onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="padding:14px;background:var(--bg-base);border:1px solid var(--border-light);border-top:4px solid ${col};border-radius:9px;cursor:pointer;box-shadow:var(--shadow-sm);">
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-          <div style="font-family:var(--font-mono);font-size:1.25rem;font-weight:900;color:var(--accent-gold);">#${i+1}</div>
-          <div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.25rem;font-weight:900;color:${col};">${Number(x.best4Score||0).toFixed(1)}</div><div style="font-size:.56rem;color:var(--text-dim);font-weight:800;">ROBUST SCORE · ${esc(x.grade||'')}</div></div>
-        </div>
-        <div style="font-size:.94rem;font-weight:900;margin-top:5px;">${esc(x.ht)} <span style="color:var(--text-muted);font-weight:500;">vs</span> ${esc(x.at)}</div>
-        <div style="font-size:.70rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg||'')} · ${esc(x.date||'')} ${esc(x.time||'')}</div>
-        <div style="font-size:.90rem;font-weight:900;color:${col};margin-top:9px;">${x.icon||'🎯'} ${esc(x.label)}</div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">
-          <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.56rem;color:var(--text-dim);">MODEL P</div><b style="font-family:var(--font-mono);">${p.toFixed(1)}%</b></div>
-          <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.56rem;color:var(--text-dim);">FAIR ODDS</div><b style="font-family:var(--font-mono);">${fair.toFixed(2)}</b></div>
-          <div style="background:rgba(22,163,74,.08);padding:7px;border-radius:6px;text-align:center;border:1px solid rgba(22,163,74,.14);"><div style="font-size:.56rem;color:var(--text-dim);">BEST ODDS</div><b style="font-family:var(--font-mono);color:var(--accent-green);">${o.toFixed(2)}</b></div>
-        </div>
-        <div style="font-size:.71rem;color:var(--text-muted);margin-top:9px;line-height:1.45;">${esc(x.reason||'')}</div>
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:9px;padding-top:8px;border-top:1px solid var(--border);font-size:.68rem;">
-          <span style="color:var(--text-muted);">${esc(x.bookmaker||'Bookmaker')} · ${x.books||1} books</span>
-          <span style="font-family:var(--font-mono);font-weight:800;color:${Number(x.marketEdge||0)>0?'var(--accent-green)':'var(--text-muted)'};">Edge ${Number(x.marketEdge||0)>=0?'+':''}${Number(x.marketEdge||0).toFixed(1)}pp</span>
-        </div>
-      </div>`;
-    }).join('')}
-    </div>
-    ${items.length<4?`<div style="margin-top:10px;font-size:.72rem;color:var(--text-muted);">Μόνο ${items.length} επιλογ${items.length===1?'ή':'ές'} πέρασ${items.length===1?'ε':'αν'} όλα τα φίλτρα σήμερα — δεν συμπληρώνω τεχνητά τη λίστα.</div>`:''}
-  </div>`;
-}
-
-window.refreshBest4 = async function(opts={}){
-  if(best4Loading) return latestTopLists.best4||[];
-  let radar=(latestTopLists.radar||[]).filter(_best4EligibleSignal);
-  if(!radar.length){ latestTopLists.best4=[]; renderTopSections(); return []; }
-  best4Loading=true;
-  latestTopLists.best4=[];
-  renderTopSections();
-  try{
-    // Price strongest distinct fixtures first; maximum keeps quota predictable.
-    const fixtureIds=[];
-    for(const s of radar){ if(!fixtureIds.includes(s.fixId)) fixtureIds.push(s.fixId); if(fixtureIds.length>=BEST4_MAX_FIXTURES_TO_PRICE) break; }
-    const priceMap=new Map();
-    const batchSize=Math.max(2,Math.min(5,Math.ceil((API_RATE?.maxConcurrent||4)/2)));
-    let done=0;
-    for(let i=0;i<fixtureIds.length;i+=batchSize){
-      const batch=fixtureIds.slice(i,i+batchSize);
-      await Promise.all(batch.map(async id=>{ try{ priceMap.set(id,await fetchBestOddsForFixture(id)); }catch{ priceMap.set(id,{}); } finally{done++; if(!opts.silent)setProgress(done/fixtureIds.length*100,`BEST 4 odds ${done}/${fixtureIds.length}`);} }));
-    }
-
-    const recMap=new Map((window.scannedMatchesData||[]).map(r=>[r.fixId,r]));
-    // v6.4: no-vig market sanity becomes the final verification gate when prices exist.
-    fixtureIds.forEach(id=>{const rec=recMap.get(id);if(rec)_updateRec1X2VerificationFromMarket(rec,priceMap.get(id)||{});});
-    buildRadarList();_refreshVerifiedOutcomeTopList();
-    radar=(latestTopLists.radar||[]).filter(_best4EligibleSignal);
-    const priced=[];
-    radar.forEach(s=>{
-      const key=_best4MarketKey(s); if(!key) return;
-      const q=priceMap.get(s.fixId)?.[key]; if(!q || Number(q.odd)<BEST4_MIN_ODDS || Number(q.odd)>BEST4_MAX_ODDS) return;
-      const p=Number(s.probability||0)/100; if(!(p>0)) return;
-      const fair=1/p;
-      const implied=1/Number(q.odd);
-      const edge=(p-implied)*100;
-      if(edge<=0) return;
-      const rec=recMap.get(s.fixId);
-      const dq=_best4DataQuality(rec);
-      const pq=_best4ProbQuality(s);
-      const robust=clamp(Number(s.radarScore||0)*0.65 + pq*0.25 + dq*0.10,0,99);
-      const grade=robust>=90?'A+':robust>=85?'A':robust>=80?'B+':'B';
-      priced.push({...s,bestOdds:Number(q.odd),bookmaker:q.bookmaker,books:q.books||1,medianOdds:q.median||null,fairOdds:fair,impliedProb:implied*100,marketEdge:edge,best4Score:robust,grade,dataQuality:dq});
-    });
-
-    priced.sort((a,b)=>b.best4Score-a.best4Score || b.probability-a.probability || b.marketEdge-a.marketEdge);
-    const chosen=[], seenFix=new Set();
-    for(const x of priced){
-      if(seenFix.has(x.fixId)) continue;
-      chosen.push(x); seenFix.add(x.fixId);
-      if(chosen.length===4) break;
-    }
-    latestTopLists.best4=chosen;
-    return chosen;
-  } finally{
-    best4Loading=false;
-    renderTopSections();
-  }
-};
-
 function buildValueBetsList() {
   const sd = window.scannedMatchesData || [];
   const allBets = [];
@@ -5127,336 +2677,251 @@ function renderValueBetsTab(bets) {
 }
 
 // ================================================================
-//  💣 BOMBS v6.1 — NO-VIG VERIFIED MARKET MISPRICING
+//  💣 BOMBS ENGINE — Υψηλή απόδοση + υψηλή πιθανότητα επαλήθευσης
 //
-//  Bomb = πιθανό bookmaker mispricing ΜΟΝΟ όταν:
-//  1) αφαιρείται το bookmaker margin (no-vig consensus),
-//  2) η απόκλιση είναι ουσιαστική αλλά όχι παράλογα ακραία,
-//  3) RADAR / xG / market-specific metrics επιβεβαιώνουν ανεξάρτητα,
-//  4) υπάρχει επαρκής κάλυψη και ποιότητα δεδομένων.
-//
-//  Πολύ μεγάλες αποκλίσεις ΔΕΝ παίρνουν υψηλότερο Bomb Score:
-//    >22pp = HIGH DIVERGENCE
-//    >30pp = MODEL–MARKET CONFLICT
-//  και ΔΕΝ αποθηκεύονται ως verified Bombs.
+//  Κριτήρια επιλογής:
+//  1. Implied probability (από Poisson model) ≥ 25%
+//  2. Implied odds ≥ 3.80 (αν υπάρχουν bookmaker odds)
+//     ή model-derived fair odds ≥ 3.80 (αν ΔΕΝ υπάρχουν odds)
+//  3. Composite Bomb Score βάσει:
+//     - Model probability (weighted 35%)
+//     - Form consistency (25%) — last 6 form rating
+//     - Stability (20%) — χαμηλό σ στα γκολ
+//     - Lineup quality (10%) — coverage ≥ 90%
+//     - Injury impact (10%) — penalty αν key players out
 // ================================================================
 
-const BOMB_MIN_MARKET_ODDS        = 2.60;
-const BOMB_MAX_MARKET_ODDS        = MARKET_BOMB_MAX_ODDS;
-const BOMB_MIN_EXEC_EDGE          = 0.15; // APEX EV at best executable price
-const BOMB_MIN_NOVIG_GAP_PP       = 8.0;
-const BOMB_VERIFIED_MAX_GAP_PP    = 22.0;
-const BOMB_CONFLICT_GAP_PP        = 30.0;
-const BOMB_MIN_DATA_QUALITY       = 70;
-const BOMB_MIN_RADAR_SCORE        = 78;
-const BOMB_MIN_SCORE              = 70;
-const BOMB_MAX_MARKET_SPREAD_PP   = 10.0;
-const BOMB_MAX_FIXTURES_TO_PRICE  = 24;
-let bombLoading=false;
+const BOMB_MIN_PROB  = 0.70;   // ≥70% model prob (aligned με MIN_CONF)
+const BOMB_MIN_ODDS  = 3.80;   // ≥3.80 fair odds
+const BOMB_MAX_ODDS  = 18.0;   // ≤18.0 (πολύ ακραία odds = ανεπαρκή sample)
 
-function _bombOffsideMarketKey(rec){
-  const sig=String(rec?.offside?.bestSignal||'').toUpperCase();
-  if(!sig) return null;
-  if(sig.includes('ΣΥΝΟΛΟ')&&sig.includes('2.5')) return 'OFF TOT O2.5';
-  if(sig.includes('ΣΥΝΟΛΟ')&&sig.includes('3.5')) return 'OFF TOT O3.5';
-  if(sig.includes('HOME')&&sig.includes('1.5')) return 'OFF HOME O1.5';
-  if(sig.includes('AWAY')&&sig.includes('1.5')) return 'OFF AWAY O1.5';
-  return null;
-}
+function computeBombScore(rec) {
+  if(!rec || !rec.pp) return null;
 
-function _bombCandidates(rec){
-  if(!rec?.pp) return [];
-  const pp=rec.pp,out=[];
-  const push=(marketKey,label,icon,p,category)=>{
-    p=Number(p);
-    if(!Number.isFinite(p)||p<=0.02||p>=0.98) return;
-    const fair=1/p;
-    if(!Number.isFinite(fair)||fair<1.02||fair>BOMB_MAX_MARKET_ODDS) return;
-    out.push({marketKey,label,icon,category,modelProb:p,modelFairOdds:fair});
-  };
-  const v=_ensure1X2Verification(rec);
-  const vKey=v?.signal || (v?.status==='CONFLICT'?v?.leader:null);
-  if(vKey && (v?.score>=VERIFY_1X2.STRONG_SCORE || v?.status==='CONFLICT')){
-    if(vKey==='1')push('1','1 — ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ','🏠',pp.pHome,'1X2');
-    if(vKey==='X')push('X','X — ΙΣΟΠΑΛΙΑ','🤝',pp.pDraw,'1X2');
-    if(vKey==='2')push('2','2 — ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ','✈️',pp.pAway,'1X2');
-  }
-  push('O2.5','OVER 2.5 ΓΚΟΛ','🔥',pp.pO25,'GOALS');
-  push('O3.5','OVER 3.5 ΓΚΟΛ','🚀',pp.pO35,'GOALS');
-  if(Number(rec.cornerConf||0)>0) push('COR O8.5','OVER 8.5 ΚΟΡΝΕΡ','🚩',Number(rec.cornerConf)/100,'CORNERS');
-  const offKey=_bombOffsideMarketKey(rec);
-  if(offKey&&Number(rec.offside?.bestProb||0)>0) push(offKey,rec.offside.bestSignal,'🚫',Number(rec.offside.bestProb)/100,'OFFSIDES');
-  return out;
-}
+  const pp      = rec.pp;
+  const hS      = rec.hS || {};
+  const aS      = rec.aS || {};
+  const odds    = rec.odds || {};  // bookmaker odds αν υπάρχουν
 
-function _bombDataQuality(rec){
-  return typeof _best4DataQuality==='function'?_best4DataQuality(rec):60;
-}
+  // ── Βρίσκουμε ποια αγορά είναι bomb candidate ──────────────────
+  const candidates = [];
 
-function _bombRadarMatch(rec,cand){
-  return (latestTopLists.radar||[]).find(s=>s.fixId===rec.fixId&&_best4MarketKey(s)===cand.marketKey)||null;
-}
+  const tryCandidate = (market, modelProb, label, icon, bookOdds) => {
+    if(modelProb <= 0 || modelProb > 0.95) return;
+    const fairOdds = parseFloat((1 / modelProb).toFixed(2));
+    // Επιλέγουμε: bookmaker odds αν υπάρχουν, αλλιώς fair odds
+    const effectiveOdds = (bookOdds && bookOdds > 1.5 && bookOdds <= BOMB_MAX_ODDS)
+      ? bookOdds : fairOdds;
 
-function _bombIndependentConfirmation(rec,cand){
-  const radar=_bombRadarMatch(rec,cand);
-  const radarScore=Number(radar?.radarScore||0);
-  const xgDiff=Number(rec.xgDiff||((rec.hXGfinal||0)-(rec.aXGfinal||0))||0);
-  const tXG=Number(rec.tXG||((rec.hXGfinal||0)+(rec.aXGfinal||0))||0);
-  let metricOK=false, metricScore=0, detail='';
+    if(effectiveOdds < BOMB_MIN_ODDS) return;
+    if(modelProb < BOMB_MIN_PROB) return;
+    if(effectiveOdds > BOMB_MAX_ODDS) return;
 
-  if(cand.marketKey==='1'){
-    const gap=(Number(rec.pp?.pHome||0)-Math.max(Number(rec.pp?.pDraw||0),Number(rec.pp?.pAway||0)))*100;
-    metricOK=xgDiff>=0.45&&gap>=8; metricScore=clamp(55+xgDiff*20+gap*1.2,0,100); detail=`xGΔ ${xgDiff>=0?'+':''}${xgDiff.toFixed(2)} · gap ${gap.toFixed(1)}pp`;
-  }else if(cand.marketKey==='2'){
-    const gap=(Number(rec.pp?.pAway||0)-Math.max(Number(rec.pp?.pDraw||0),Number(rec.pp?.pHome||0)))*100;
-    metricOK=xgDiff<=-0.45&&gap>=8; metricScore=clamp(55+Math.abs(xgDiff)*20+gap*1.2,0,100); detail=`xGΔ ${xgDiff.toFixed(2)} · gap ${gap.toFixed(1)}pp`;
-  }else if(cand.marketKey==='X'){
-    const pD=Number(rec.pp?.pDraw||0), second=Math.max(Number(rec.pp?.pHome||0),Number(rec.pp?.pAway||0));
-    const gap=(pD-second)*100; metricOK=Math.abs(xgDiff)<=0.35&&gap>=3; metricScore=clamp(60+(0.35-Math.abs(xgDiff))*60+Math.max(gap,0)*2,0,100); detail=`|xGΔ| ${Math.abs(xgDiff).toFixed(2)} · draw gap ${gap.toFixed(1)}pp`;
-  }else if(cand.marketKey==='O2.5'){
-    metricOK=tXG>=2.90&&Number(rec.pp?.pO25||0)>=0.62; metricScore=clamp(55+(tXG-2.9)*20+(Number(rec.pp?.pO25||0)-0.62)*100,0,100); detail=`tXG ${tXG.toFixed(2)}`;
-  }else if(cand.marketKey==='O3.5'){
-    metricOK=tXG>=3.50&&Number(rec.pp?.pO35||0)>=0.52; metricScore=clamp(55+(tXG-3.5)*22+(Number(rec.pp?.pO35||0)-0.52)*120,0,100); detail=`tXG ${tXG.toFixed(2)}`;
-  }else if(cand.marketKey==='COR O8.5'){
-    const exp=Number(rec.expCor||0),conf=Number(rec.cornerConf||0); metricOK=exp>=9.5&&conf>=68; metricScore=clamp(conf+(exp-9.5)*4,0,100); detail=`corners ${exp.toFixed(1)} · conf ${conf.toFixed(0)}%`;
-  }else if(String(cand.marketKey).startsWith('OFF ')){
-    const conf=Number(rec.offside?.bestProb||0),lam=Number(rec.offside?.totLambda||0); metricOK=conf>=68&&_bombOffsideMarketKey(rec)===cand.marketKey; metricScore=clamp(conf+(lam-2)*3,0,100); detail=`offside λ ${lam.toFixed(2)} · signal ${conf.toFixed(0)}%`;
-  }
+    // ── Composite Score ──────────────────────────────────────────
+    // 1. Model probability component (0–35)
+    const probScore = clamp((modelProb - BOMB_MIN_PROB) / (0.60 - BOMB_MIN_PROB) * 35, 0, 35);
 
-  const radarOK=radarScore>=BOMB_MIN_RADAR_SCORE;
-  return {ok:radarOK&&metricOK,radarOK,metricOK,radarScore,metricScore,detail,radar};
-}
+    // 2. Form consistency (0–25): μέσος όρος form rating two teams
+    const hForm = safeNum(hS.formRating, 50);
+    const aForm = safeNum(aS.formRating, 50);
+    const avgForm = (hForm + aForm) / 2;
+    const formScore = clamp((avgForm - 30) / 70 * 25, 0, 25);
 
-function _bombVerifiedMinBooks(category){
-  return (category==='1X2'||category==='GOALS')?4:2;
-}
+    // 3. Stability score (0–20): αν σ < 0.83 (STABLE) per team
+    const hSD = hS.r6?.sdGoals;
+    const aSD = aS.r6?.sdGoals;
+    const hStab = hSD !== null && hSD < 0.83 ? 10 : hSD < 1.21 ? 5 : 0;
+    const aStab = aSD !== null && aSD < 0.83 ? 10 : aSD < 1.21 ? 5 : 0;
+    const stabScore = hStab + aStab; // max 20
 
-function _bombGapQuality(gapPP){
-  if(gapPP<5) return 0;
-  if(gapPP<8) return 20+(gapPP-5)/3*25;
-  if(gapPP<=18) return 55+(gapPP-8)/10*45;
-  if(gapPP<=22) return 100-(gapPP-18)/4*15;
-  if(gapPP<=30) return 70-(gapPP-22)/8*40;
-  return 0;
-}
+    // 4. Lineup quality (0–10)
+    const hCov = rec.lineupData?.available ? (rec.hInjAdj?.coverage ?? 0.85) : 0.80;
+    const aCov = rec.lineupData?.available ? (rec.aInjAdj?.coverage ?? 0.85) : 0.80;
+    const lineupScore = clamp(((hCov + aCov) / 2 - 0.6) / 0.4 * 10, 0, 10);
 
-function _evaluateBombCandidate(rec,cand,marketPack){
-  if(!marketPack) return null;
-  const quote=marketPack.bombQuote||marketPack;
-  const nv=marketPack.noVig;
-  if(!nv||!Number.isFinite(Number(nv.prob))||Number(nv.books)<2) return null; // no-vig is mandatory
+    // 5. Injury penalty (0 to −10)
+    const hInjDelta = rec.hInjAdj?.delta || 0;
+    const aInjDelta = rec.aInjAdj?.delta || 0;
+    const injPenalty = clamp((hInjDelta + aInjDelta) * 15, -10, 0);
 
-  const best=Number(quote.odd), median=Number(quote.median||quote.odd), fair=Number(cand.modelFairOdds);
-  const modelProb=Number(cand.modelProb), marketProb=Number(nv.prob), noVigFair=Number(nv.fairOdds);
-  const books=Number(quote.books||1), noVigBooks=Number(nv.books||0);
-  if(!Number.isFinite(best)||!Number.isFinite(median)||!Number.isFinite(fair)||!Number.isFinite(noVigFair)) return null;
-  if(best<BOMB_MIN_MARKET_ODDS||best>BOMB_MAX_MARKET_ODDS) return null;
+    // 6. DC / Situational bonus (0–5)
+    const dcTrust = rec.dcResult?.trust || 0;
+    const sitBonus = dcTrust > 0.6 ? 3 : dcTrust > 0.3 ? 1 : 0;
+    const derbyPenalty = rec.sitCtx?.isDerby ? -3 : 0; // derbies more unpredictable
+    const motBonus = (rec.sitCtx?.hMot > 1.05 || rec.sitCtx?.aMot > 1.05) ? 2 : 0;
 
-  const probGapPP=(modelProb-marketProb)*100;
-  const execEdge=modelProb*best-1;
-  const priceGap=noVigFair/fair-1;
-  if(probGapPP<5||execEdge<0.08||priceGap<=0) return null;
+    const totalScore = Math.round(
+      probScore + formScore + stabScore + lineupScore +
+      injPenalty + sitBonus + derbyPenalty + motBonus
+    );
 
-  const dq=_bombDataQuality(rec);
-  const confirm=_bombIndependentConfirmation(rec,cand);
-  const minBooks=_bombVerifiedMinBooks(cand.category);
-  const marketSpreadPP=Number(nv.spreadPP||0);
-  const marketConsistency=clamp(100-marketSpreadPP/12*100,0,100);
-  const alignedCount=(nv.rows||[]).filter(r=>(modelProb-Number(r.prob))*100>=5).length;
-  const marketAlignedPct=noVigBooks?alignedCount/noVigBooks*100:0;
-
-  let status='HIGH_DIVERGENCE',statusLabel='HIGH DIVERGENCE',statusIcon='🟠';
-  if(probGapPP>=BOMB_CONFLICT_GAP_PP){status='CONFLICT';statusLabel='MODEL–MARKET CONFLICT';statusIcon='🚨';}
-  else if(probGapPP>BOMB_VERIFIED_MAX_GAP_PP){status='HIGH_DIVERGENCE';statusLabel='HIGH DIVERGENCE';statusIcon='🟠';}
-  else if(
-    probGapPP>=BOMB_MIN_NOVIG_GAP_PP &&
-    execEdge>=BOMB_MIN_EXEC_EDGE &&
-    dq>=BOMB_MIN_DATA_QUALITY &&
-    noVigBooks>=minBooks &&
-    marketSpreadPP<=BOMB_MAX_MARKET_SPREAD_PP &&
-    confirm.ok
-  ){
-    status='VERIFIED';statusLabel='VERIFIED MISPRICING';statusIcon='💣';
-  }
-
-  const gapScore=_bombGapQuality(probGapPP);
-  const execScore=clamp((execEdge-0.08)/0.42*100,0,100);
-  const radarScore=clamp(confirm.radarScore,0,100);
-  const coverageScore=clamp(noVigBooks/minBooks*80+(books-minBooks)*4,0,100);
-  let signalScore=Math.round(gapScore*0.30+execScore*0.20+radarScore*0.20+dq*0.15+marketConsistency*0.10+coverageScore*0.05);
-  if(status==='CONFLICT') signalScore=clamp(Math.round(70+(probGapPP-BOMB_CONFLICT_GAP_PP)*1.1+marketConsistency*0.10),0,99);
-  if(status==='HIGH_DIVERGENCE') signalScore=clamp(Math.round(55+Math.min(Math.max(probGapPP-12,0),18)*1.5+confirm.radarScore*0.10+dq*0.05),0,94);
-  if(status==='VERIFIED'&&signalScore<BOMB_MIN_SCORE) status='HIGH_DIVERGENCE',statusLabel='HIGH DIVERGENCE',statusIcon='🟠';
-
-  return {
-    fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,
-    date:rec.m?.fixture?.date?.split('T')[0]||'',time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||'',
-    marketKey:cand.marketKey,category:cand.category,label:cand.label,icon:cand.icon,
-    status,statusLabel,statusIcon,
-    modelFairOdds:parseFloat(fair.toFixed(2)),
-    marketNoVigFairOdds:parseFloat(noVigFair.toFixed(2)),
-    marketNoVigProb:parseFloat((marketProb*100).toFixed(1)),
-    marketMedian:parseFloat(median.toFixed(2)),bestOdds:parseFloat(best.toFixed(2)),
-    bookmaker:quote.bookmaker||'Bookmaker',books,noVigBooks,
-    probabilityGapPP:parseFloat(probGapPP.toFixed(1)),
-    noVigPriceGap:parseFloat((priceGap*100).toFixed(1)),
-    executableEdge:parseFloat((execEdge*100).toFixed(1)),
-    marketSpreadPP:parseFloat(marketSpreadPP.toFixed(1)),
-    marketAlignedPct:parseFloat(marketAlignedPct.toFixed(0)),
-    dataQuality:parseFloat(dq.toFixed(0)),radarScore:parseFloat(confirm.radarScore.toFixed(1)),
-    independentOK:confirm.ok,independentDetail:confirm.detail,
-    bombScore:signalScore,
-    reason:`APEX fair ${fair.toFixed(2)} · no-vig market fair ${noVigFair.toFixed(2)} · ΔP ${probGapPP>=0?'+':''}${probGapPP.toFixed(1)}pp · best ${best.toFixed(2)}`
-  };
-}
-
-function _persistBombSignals(verified,diagnostics=[]){
-  try{
-    const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]');
-    const map=new Map(store.map(x=>[String(x.fixtureId),x]));
-    (window.scannedMatchesData||[]).forEach(r=>{const x=map.get(String(r.fixId));if(x){x.isBomb=false;delete x.bombSignal;delete x.marketDiagnostic;}});
-    (diagnostics||[]).forEach(b=>{const x=map.get(String(b.fixId));if(x)x.marketDiagnostic={status:b.status,marketKey:b.marketKey,label:b.label,probabilityGapPP:b.probabilityGapPP,marketNoVigFairOdds:b.marketNoVigFairOdds,bestOdds:b.bestOdds,bombScore:b.bombScore};});
-    (verified||[]).forEach(b=>{
-      const x=map.get(String(b.fixId));if(!x)return;
-      x.isBomb=true;
-      x.bombSignal={
-        marketKey:b.marketKey,label:b.label,modelFairOdds:b.modelFairOdds,marketNoVigFairOdds:b.marketNoVigFairOdds,
-        marketMedian:b.marketMedian,bestOdds:b.bestOdds,bookmaker:b.bookmaker,books:b.books,noVigBooks:b.noVigBooks,
-        probabilityGapPP:b.probabilityGapPP,executableEdge:b.executableEdge,radarScore:b.radarScore,dataQuality:b.dataQuality,bombScore:b.bombScore,status:'VERIFIED'
-      };
+    candidates.push({
+      market, label, icon, modelProb, fairOdds, effectiveOdds,
+      hasBookOdds: !!(bookOdds && bookOdds > 1.5),
+      bombScore: clamp(totalScore, 0, 100),
+      breakdown: { probScore, formScore, stabScore, lineupScore, injPenalty, sitBonus }
     });
-    localStorage.setItem(LS_PREDS,JSON.stringify([...map.values()]));
-  }catch(e){console.warn('[APEX] Bomb vault persistence failed',e);}
+  };
+
+  // Ελέγχουμε κάθε αγορά
+  tryCandidate('Πάνω 3.5', pp.pO35, 'ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ',  '🚀', odds.over35);
+  tryCandidate('Πάνω 2.5', pp.pO25, 'ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ',  '🔥', odds.over25);
+  tryCandidate('Κάτω 2.5', pp.pU25, 'ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ',  '🔒', odds.under25);
+  tryCandidate('ΓΓ',       pp.pBTTS,'ΓΚΟΛ/ΓΚΟΛ (GG)',       '🎯', odds.bttsY);
+  tryCandidate('Νίκη 🏠',  pp.pHome,'ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ',      '🏠', odds.home);
+  tryCandidate('Νίκη ✈️',  pp.pAway,'ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ',  '✈️', odds.away);
+  tryCandidate('Ισοπαλία', pp.pDraw,'ΙΣΟΠΑΛΙΑ',             '🤝', odds.draw);
+
+  if(!candidates.length) return null;
+
+  // Ο καλύτερος candidate βάσει bombScore
+  const best = candidates.sort((a,b) => b.bombScore - a.bombScore)[0];
+  return { ...best, allCandidates: candidates.slice(0,3) };
 }
 
-window.refreshBombs=async function(opts={}){
-  if(bombLoading)return latestTopLists.bombs||[];
-  const recs=(window.scannedMatchesData||[]).filter(r=>r?.pp&&!isFinished(r.m?.fixture?.status?.short));
-  if(!recs.length){latestTopLists.bombs=[];latestTopLists.bombDiagnostics=[];renderTopSections();return[];}
-  bombLoading=true;latestTopLists.bombs=[];latestTopLists.bombDiagnostics=[];renderTopSections();
-  try{
-    const byId=new Map(recs.map(r=>[r.fixId,r])),ids=[];
-    for(const sig of(latestTopLists.radar||[])){if(byId.has(sig.fixId)&&!ids.includes(sig.fixId))ids.push(sig.fixId);if(ids.length>=BOMB_MAX_FIXTURES_TO_PRICE)break;}
-    const rest=[...recs].sort((a,b)=>_bombDataQuality(b)-_bombDataQuality(a));
-    for(const r of rest){if(!ids.includes(r.fixId))ids.push(r.fixId);if(ids.length>=BOMB_MAX_FIXTURES_TO_PRICE)break;}
+function buildBombsList() {
+  const sd = (window.scannedMatchesData || []).filter(x => !isFinished(x.m?.fixture?.status?.short));
+  const bombs = [];
 
-    const priceMap=new Map();
-    const batchSize=Math.max(2,Math.min(5,Math.ceil((API_RATE?.maxConcurrent||4)/2)));let done=0;
-    for(let i=0;i<ids.length;i+=batchSize){
-      const batch=ids.slice(i,i+batchSize);
-      await Promise.all(batch.map(async id=>{try{priceMap.set(id,await fetchBestOddsForFixture(id));}catch{priceMap.set(id,{});}finally{done++;if(!opts.silent)setProgress(done/ids.length*100,`No-vig market scan ${done}/${ids.length}`);}}));
-    }
-
-    const diagnostics=[];
-    ids.forEach(id=>{
-      const rec=byId.get(id),markets=priceMap.get(id)||{};
-      _updateRec1X2VerificationFromMarket(rec,markets);
-      let bestForMatch=null;
-      _bombCandidates(rec).forEach(c=>{
-        const d=_evaluateBombCandidate(rec,c,markets[c.marketKey]);
-        if(!d)return;
-        const rank={VERIFIED:3,CONFLICT:2,HIGH_DIVERGENCE:1}[d.status]||0;
-        const br=bestForMatch?({VERIFIED:3,CONFLICT:2,HIGH_DIVERGENCE:1}[bestForMatch.status]||0):-1;
-        if(!bestForMatch||rank>br||(rank===br&&d.bombScore>bestForMatch.bombScore))bestForMatch=d;
-      });
-      if(bestForMatch)diagnostics.push(bestForMatch);
+  sd.forEach(rec => {
+    const bomb = computeBombScore(rec);
+    if(!bomb || bomb.bombScore < 35) return; // minimum quality threshold
+    bombs.push({
+      fixId:    rec.fixId,
+      ht:       rec.ht,
+      at:       rec.at,
+      lg:       rec.lg,
+      date:     rec.m?.fixture?.date?.split('T')[0] || '',
+      time:     rec.m?.fixture?.date?.split('T')[1]?.slice(0,5) || '',
+      hFormRating: rec.hS?.formRating || 50,
+      aFormRating: rec.aS?.formRating || 50,
+      hSdGoals:    rec.hS?.r6?.sdGoals,
+      aSdGoals:    rec.aS?.r6?.sdGoals,
+      hasLineup:   rec.lineupData?.available,
+      hasInjury:   (rec.hInjAdj?.delta < -0.05 || rec.aInjAdj?.delta < -0.05),
+      sitCtx:      rec.sitCtx,
+      tXG:         rec.tXG,
+      omegaPick:   rec.omegaPick,
+      ...bomb
     });
+  });
 
-    const verified=diagnostics.filter(x=>x.status==='VERIFIED').sort((a,b)=>b.bombScore-a.bombScore).slice(0,8);
-    const warnings=diagnostics.filter(x=>x.status!=='VERIFIED').sort((a,b)=>{
-      const pa={CONFLICT:2,HIGH_DIVERGENCE:1}[a.status]||0,pb={CONFLICT:2,HIGH_DIVERGENCE:1}[b.status]||0;
-      return pb-pa||b.probabilityGapPP-a.probabilityGapPP;
-    }).slice(0,8);
-    buildRadarList();_refreshVerifiedOutcomeTopList();
-    latestTopLists.bombs=verified;
-    latestTopLists.bombDiagnostics=warnings;
-    _persistBombSignals(verified,warnings);
-    return verified;
-  }finally{bombLoading=false;renderTopSections();}
-};
-
-function buildBombsList(){
-  latestTopLists.bombs=latestTopLists.bombs||[];
-  latestTopLists.bombDiagnostics=latestTopLists.bombDiagnostics||[];
-  return latestTopLists.bombs;
+  latestTopLists.bombs = bombs.sort((a,b) => b.bombScore - a.bombScore).slice(0,8);
 }
 
-function _renderBombCard(b,i,diagnostic=false){
-  const statusCol=b.status==='VERIFIED'?'var(--accent-green)':b.status==='CONFLICT'?'var(--accent-red)':'var(--accent-gold)';
-  const scoreLabel=b.status==='VERIFIED'?'VERIFIED SCORE':b.status==='CONFLICT'?'CONFLICT SEVERITY':'DIVERGENCE SCORE';
-  return `<div onclick="scrollToMatchAndOpen('row-${b.fixId}')" style="padding:14px;background:var(--bg-base);border:1px solid var(--border-light);border-top:4px solid ${statusCol};border-radius:9px;cursor:pointer;box-shadow:var(--shadow-sm);">
-    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-      <div><div style="font-size:.62rem;color:var(--text-dim);font-weight:800;">#${i+1} · ${b.category}</div><div style="font-size:.95rem;font-weight:900;margin-top:3px;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:.68rem;color:var(--text-muted);">${esc(b.lg||'')} · ${b.date} ${b.time}</div></div>
-      <div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${statusCol};">${b.bombScore}</div><div style="font-size:.52rem;color:var(--text-dim);font-weight:800;">${scoreLabel}</div></div>
-    </div>
-    <div style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:3px 8px;border-radius:6px;background:${statusCol}12;border:1px solid ${statusCol}35;color:${statusCol};font-size:.68rem;font-weight:900;">${b.statusIcon} ${b.statusLabel}</div>
-    <div style="font-size:.9rem;font-weight:900;color:${statusCol};margin-top:8px;">${b.icon} ${esc(b.label)}</div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;">
-      <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">APEX FAIR</div><b style="font-family:var(--font-mono);">${b.modelFairOdds.toFixed(2)}</b></div>
-      <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">NO-VIG FAIR</div><b style="font-family:var(--font-mono);">${b.marketNoVigFairOdds.toFixed(2)}</b></div>
-      <div style="background:var(--bg-surface);padding:7px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">MEDIAN ODDS</div><b style="font-family:var(--font-mono);">${b.marketMedian.toFixed(2)}</b></div>
-      <div style="background:rgba(22,163,74,.08);padding:7px;border-radius:6px;text-align:center;border:1px solid rgba(22,163,74,.16);"><div style="font-size:.52rem;color:var(--text-dim);">BEST ODDS</div><b style="font-family:var(--font-mono);color:var(--accent-green);">${b.bestOdds.toFixed(2)}</b></div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:7px;">
-      <div style="padding:7px;background:${statusCol}0D;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">ΔP APEX–MARKET</div><b style="font-family:var(--font-mono);color:${statusCol};">+${b.probabilityGapPP.toFixed(1)}pp</b></div>
-      <div style="padding:7px;background:rgba(22,163,74,.05);border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">EXECUTABLE EDGE</div><b style="font-family:var(--font-mono);color:var(--accent-green);">+${b.executableEdge.toFixed(1)}%</b></div>
-      <div style="padding:7px;background:var(--bg-surface);border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);">MARKET SPREAD</div><b style="font-family:var(--font-mono);">${b.marketSpreadPP.toFixed(1)}pp</b></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px;padding-top:8px;border-top:1px solid var(--border);font-size:.66rem;color:var(--text-muted);">
-      <span>${esc(b.bookmaker)} · prices ${b.books} · no-vig sets ${b.noVigBooks}</span><span>RADAR ${b.radarScore.toFixed(0)} · Data ${b.dataQuality}/100 · Books aligned ${b.marketAlignedPct}%</span>
-    </div>
-    <div style="font-size:.66rem;color:var(--text-muted);margin-top:6px;">${esc(b.independentDetail||'')}</div>
+function renderBombsTab(bombs) {
+  if(!bombs?.length) return `
+    <div style="text-align:center;color:var(--text-muted);padding:36px 20px;">
+      <div style="font-size:2.5rem;margin-bottom:10px;">💣</div>
+      <div style="font-weight:800;font-size:1rem;margin-bottom:6px;">Δεν βρέθηκαν Bombs</div>
+      <div style="font-size:0.8rem;line-height:1.6;">Χρειάζονται αγώνες με model prob ≥70% και fair odds ≥3.80.<br>Ελέγξτε τα Global Engine Parameters ή δοκιμάστε με περισσότερα πρωταθλήματα.</div>
+    </div>`;
+
+  const scoreBar = (val, max, color) => {
+    const w = clamp(Math.round((val/max)*100), 0, 100);
+    return `<div style="background:var(--border-light);border-radius:3px;height:4px;margin-top:2px;"><div style="height:4px;width:${w}%;background:${color};border-radius:3px;"></div></div>`;
+  };
+
+  const bombColor = score => score >= 75 ? 'var(--accent-green)' : score >= 55 ? 'var(--accent-gold)' : 'var(--text-muted)';
+  const oddsColor = odds => odds >= 7.0 ? 'var(--accent-purple)' : odds >= 5.0 ? 'var(--accent-red)' : odds >= 3.8 ? 'var(--accent-gold)' : 'var(--text-muted)';
+
+  return `
+  <div style="margin-bottom:12px;padding:10px 14px;background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.25);border-radius:8px;font-size:0.75rem;color:var(--text-muted);">
+    💣 <strong style="color:var(--accent-red);">Bombs</strong> — Αγορές με model prob ≥ ${(BOMB_MIN_PROB*100).toFixed(0)}% και fair odds ≥ ${BOMB_MIN_ODDS.toFixed(2)}. Βαθμολογία βάσει φόρμας, σταθερότητας, lineup και xG.
+  </div>
+  <div style="display:flex;flex-direction:column;gap:10px;">
+  ${bombs.map((b,i) => {
+    const hStabLbl = b.hSdGoals < 0.83 ? '✅ STABLE' : b.hSdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE';
+    const aStabLbl = b.aSdGoals < 0.83 ? '✅ STABLE' : b.aSdGoals < 1.21 ? '➡️ NORMAL' : '⚠️ VOLATILE';
+    const bCol     = bombColor(b.bombScore);
+
+    return `
+    <div style="background:var(--bg-base);border:1px solid ${b.bombScore>=70?'rgba(244,63,94,0.4)':'var(--border-light)'};border-radius:var(--radius-sm);overflow:hidden;${b.bombScore>=70?'box-shadow:0 0 12px rgba(244,63,94,0.15);':''}">
+
+      <!-- Header row -->
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:${b.bombScore>=70?'rgba(244,63,94,0.06)':'transparent'};">
+        <div style="font-family:var(--font-mono);font-size:0.9rem;color:var(--text-dim);min-width:26px;text-align:center;">#${i+1}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:0.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(b.ht)} vs ${esc(b.at)}</div>
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:1px;">${esc(b.lg)} · ${b.date} ${b.time}</div>
+        </div>
+        <!-- Odds box -->
+        <div style="text-align:center;min-width:64px;background:rgba(0,0,0,0.15);border-radius:6px;padding:6px 10px;">
+          <div style="font-family:var(--font-mono);font-size:1.4rem;font-weight:900;color:${oddsColor(b.effectiveOdds)};line-height:1;">${b.effectiveOdds.toFixed(2)}</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;margin-top:1px;">${b.hasBookOdds?'PINNACLE':'FAIR ODDS'}</div>
+        </div>
+        <!-- Bomb score -->
+        <div style="text-align:center;min-width:52px;">
+          <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:${bCol};line-height:1;">${b.bombScore}</div>
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;">SCORE</div>
+        </div>
+      </div>
+
+      <!-- Pick -->
+      <div style="padding:8px 14px;border-top:1px solid var(--border-light);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:0.85rem;font-weight:800;color:var(--accent-green);">${b.icon} ${esc(b.label)}</span>
+        <span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--accent-blue);">Πιθ. ${(b.modelProb*100).toFixed(1)}%</span>
+        <span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--text-muted);">Fair odds: ${b.fairOdds.toFixed(2)}</span>
+      </div>
+
+      <!-- Factors grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:5px;padding:8px 14px;border-top:1px solid var(--border-light);">
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα 🏠</div>
+          <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:${b.hFormRating>=65?'var(--accent-green)':b.hFormRating>=40?'var(--accent-gold)':'var(--accent-red)'};">${b.hFormRating}%</div>
+          ${scoreBar(b.hFormRating, 100, b.hFormRating>=65?'var(--accent-green)':b.hFormRating>=40?'var(--accent-gold)':'var(--accent-red)')}
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Φόρμα ✈️</div>
+          <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:${b.aFormRating>=65?'var(--accent-green)':b.aFormRating>=40?'var(--accent-gold)':'var(--accent-red)'};">${b.aFormRating}%</div>
+          ${scoreBar(b.aFormRating, 100, b.aFormRating>=65?'var(--accent-green)':b.aFormRating>=40?'var(--accent-gold)':'var(--accent-red)')}
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. 🏠</div>
+          <div style="font-size:0.72rem;font-weight:700;">${b.hSdGoals!==null&&b.hSdGoals!==undefined?hStabLbl:'—'}</div>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">Σταθ. ✈️</div>
+          <div style="font-size:0.72rem;font-weight:700;">${b.aSdGoals!==null&&b.aSdGoals!==undefined?aStabLbl:'—'}</div>
+        </div>
+        <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;">
+          <div style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;margin-bottom:2px;">xG</div>
+          <div style="font-size:0.8rem;font-weight:700;font-family:var(--font-mono);color:var(--accent-blue);">${Number(b.tXG||0).toFixed(2)}</div>
+        </div>
+        ${b.hasLineup ? `<div style="background:rgba(45,212,191,0.08);border:1px solid rgba(45,212,191,0.2);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-teal);">📋 Lineup ✓</div></div>` : ''}
+        ${b.hasInjury ? `<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.2);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-red);">🏥 Τραυμ.</div></div>` : ''}
+        ${b.sitCtx?.isDerby ? `<div style="background:rgba(244,63,94,0.08);border-radius:5px;padding:6px 8px;"><div style="font-size:0.72rem;font-weight:700;color:var(--accent-red);">🔥 Derby</div></div>` : ''}
+      </div>
+
+      <!-- Score breakdown -->
+      <div style="padding:6px 14px 10px;border-top:1px solid var(--border-light);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <span style="font-size:0.65rem;color:var(--text-dim);text-transform:uppercase;font-weight:700;">Bomb Score Breakdown</span>
+          <span style="font-size:0.65rem;font-family:var(--font-mono);font-weight:800;color:${bCol};">${b.bombScore}/100</span>
+        </div>
+        <div style="display:flex;gap:3px;">
+          ${[
+            {lbl:'Πιθ.', v: b.breakdown.probScore,  max:35, col:'var(--accent-blue)'},
+            {lbl:'Φόρμα', v: b.breakdown.formScore, max:25, col:'var(--accent-green)'},
+            {lbl:'Σταθ.', v: b.breakdown.stabScore, max:20, col:'var(--accent-teal)'},
+            {lbl:'Lineup', v: b.breakdown.lineupScore, max:10, col:'var(--accent-purple)'},
+          ].map(s => `<div style="flex:${s.max};background:${s.col}20;border-radius:3px;height:16px;position:relative;overflow:hidden;" title="${s.lbl}: ${s.v.toFixed(0)}/${s.max}">
+            <div style="height:16px;width:${clamp(s.v/s.max*100,0,100)}%;background:${s.col};border-radius:3px;"></div>
+            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:0.45rem;color:#fff;font-weight:800;white-space:nowrap;">${s.lbl}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="padding:8px 14px;border-top:1px solid var(--border-light);display:flex;gap:8px;">
+        <button onclick="scrollToMatchAndOpen('row-${b.fixId}')" style="flex:1;padding:7px;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.3);color:var(--accent-red);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.75rem;">💣 Πλήρης Ανάλυση</button>
+        <button onclick="window.openLogBetModal('${b.fixId}')" style="padding:7px 14px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--accent-green);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.75rem;">📒</button>
+      </div>
+    </div>`;
+  }).join('')}
   </div>`;
 }
-
-function renderBombsTab(bombs){
-  const diagnostics=latestTopLists.bombDiagnostics||[];
-  if(bombLoading&&(!bombs||!bombs.length)&&!diagnostics.length)return `<div style="text-align:center;color:var(--text-muted);padding:36px 20px;"><div style="font-size:2.5rem;margin-bottom:10px;">💣</div><div style="font-weight:900;color:var(--text-main);">No-vig Market Scan…</div><div style="font-size:.8rem;margin-top:6px;">Αφαιρώ bookmaker margin και ελέγχω RADAR/xG/data quality πριν χαρακτηρίσω κάτι Bomb.</div></div>`;
-
-  return `<div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:11px 13px;background:rgba(22,163,74,.05);border:1px solid rgba(22,163,74,.18);border-radius:9px;">
-      <div><strong style="color:var(--accent-green);">💣 NO-VIG VERIFIED BOMBS</strong><div style="font-size:.72rem;color:var(--text-muted);margin-top:3px;">No-vig consensus + ανεξάρτητη επιβεβαίωση. Απόκλιση &gt;${BOMB_VERIFIED_MAX_GAP_PP.toFixed(0)}pp δεν θεωρείται αυτόματα καλύτερη· &gt;${BOMB_CONFLICT_GAP_PP.toFixed(0)}pp σημαίνεται ως Model–Market Conflict.</div></div>
-      <button class="btn btn-outline" style="height:32px;font-size:.72rem;" onclick="window.refreshBombs()">↻ Refresh Market</button>
-    </div>
-    ${bombs?.length?`<div style="font-size:.68rem;font-weight:900;color:var(--accent-green);margin:4px 0 8px;">✅ VERIFIED MISPRICINGS — ${bombs.length}</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;">${bombs.map((b,i)=>_renderBombCard(b,i,false)).join('')}</div>`:`<div style="text-align:center;color:var(--text-muted);padding:24px 16px;border:1px dashed var(--border-light);border-radius:9px;"><div style="font-size:1.8rem;">🛡️</div><div style="font-weight:900;margin-top:5px;">Δεν βρέθηκε Verified Bomb</div><div style="font-size:.75rem;margin-top:4px;">Το σύστημα δεν μετατρέπει ακραία διαφωνία με την αγορά σε «σίγουρη βόμβα».</div></div>`}
-    ${diagnostics.length?`<div style="font-size:.68rem;font-weight:900;color:var(--accent-gold);margin:16px 0 8px;">⚠️ MARKET DIAGNOSTICS — δεν καταγράφονται ως Bombs</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;">${diagnostics.map((b,i)=>_renderBombCard(b,i,true)).join('')}</div>`:''}
-  </div>`;
-}
-
-async function settleBombSignal(bombSignal,fix){
-  if(!bombSignal||!fix) return null;
-  const key=String(bombSignal.marketKey||'');
-  const ah=safeNum(fix.goals?.home), aa=safeNum(fix.goals?.away), total=ah+aa;
-  if(key==='1') return {hit:ah>aa,actual:`${ah}-${aa}`};
-  if(key==='X') return {hit:ah===aa,actual:`${ah}-${aa}`};
-  if(key==='2') return {hit:aa>ah,actual:`${ah}-${aa}`};
-  if(key==='O2.5') return {hit:total>2.5,actual:`${total} goals`};
-  if(key==='O3.5') return {hit:total>3.5,actual:`${total} goals`};
-  if(key.startsWith('COR ')||key.startsWith('OFF ')){
-    const st=await getFixStats(fix.fixture.id);
-    const hid=fix.teams?.home?.id, aid=fix.teams?.away?.id;
-    if(key==='COR O8.5'){
-      const h=extractFixStatFor(st,hid,'Corner Kicks'), a=extractFixStatFor(st,aid,'Corner Kicks');
-      if(h===null||a===null) return null;
-      return {hit:(h+a)>8.5,actual:`${h+a} corners`};
-    }
-    const h=extractFixStatFor(st,hid,'Offsides'), a=extractFixStatFor(st,aid,'Offsides');
-    if(h===null||a===null) return null;
-    if(key==='OFF TOT O2.5') return {hit:(h+a)>2.5,actual:`${h+a} offsides`};
-    if(key==='OFF TOT O3.5') return {hit:(h+a)>3.5,actual:`${h+a} offsides`};
-    if(key==='OFF HOME O1.5') return {hit:h>1.5,actual:`HOME ${h} offsides`};
-    if(key==='OFF AWAY O1.5') return {hit:a>1.5,actual:`AWAY ${a} offsides`};
-  }
-  return null;
-}
-
-function _refreshVerifiedOutcomeTopList(){
-  latestTopLists.outcomes=(window.scannedMatchesData||[]).filter(x=>!isFinished(x.m?.fixture?.status?.short)&&_ensure1X2Verification(x)?.signal&&safeNum(x.verification?.score,0)>=VERIFY_1X2.STRONG_SCORE).sort((a,b)=>safeNum(b.verification?.score,0)-safeNum(a.verification?.score,0)).slice(0,6);
-}
-
 function rebuildTopLists(){
-  // New scan/re-simulation invalidates the previous BEST 4 until odds are repriced.
-  latestTopLists.best4 = [];
   const MIN_CONF = 70;
   const sd = (window.scannedMatchesData||[]).filter(x =>
     !isFinished(x.m?.fixture?.status?.short) &&
@@ -5464,22 +2929,14 @@ function rebuildTopLists(){
     (x.strength||0) >= MIN_CONF
   );
   latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
-  _refreshVerifiedOutcomeTopList();
+  latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΝΙΚΗ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
   latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('ΠΑΝΩ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
-
-  // 🚫 OFFSIDES — ανεξάρτητη αγορά από το κύριο omegaPick
-  // Περιλαμβάνει όλους τους ενεργούς αγώνες με επαρκή offside confidence.
-  latestTopLists.offsides = (window.scannedMatchesData||[])
-    .filter(x => !isFinished(x.m?.fixture?.status?.short) && x.offside && (x.offside.bestProb||0) >= 65)
-    .sort((a,b) => (b.offside?.bestProb||0) - (a.offside?.bestProb||0))
-    .slice(0,12);
-
-  // 📡 RADAR — αυτόνομη κατάταξη σαφών model signals
-  buildRadarList();
-  // Bombs v5.8 are priced asynchronously against bookmaker market data.
-  latestTopLists.bombs = [];
+  // Build value bets from existing odds data
+  buildValueBetsList();
+  // Build bombs
+  buildBombsList();
 
   // ── Σίγουρη Τριάδα: multi-factor certainty score ──────────────────
   const scored = sd.filter(x => x.omegaPick && !x.omegaPick.includes('ΧΩΡΙΣ') && (x.strength||0) >= 70).map(x => {
@@ -5511,59 +2968,46 @@ function rebuildTopLists(){
 }
 
 function renderTopSections(){
-  if(!latestTopLists.best4) latestTopLists.best4 = [];
-  if(!latestTopLists.radar) latestTopLists.radar = [];
-  const best4Count = latestTopLists.best4.length;
-  const radarCount = latestTopLists.radar.length;
+  if(!latestTopLists.valueBets) latestTopLists.valueBets = [];
+  const vbCount = latestTopLists.valueBets.length;
   const tabs=[
-    {id:'best4',    lbl:`🏆 BEST 4`,                                      d:latestTopLists.best4,      sk:'best4Score', sl:'SCORE', special:'best4'},
-    {id:'radar',    lbl:`📡 RADAR`,                                      d:latestTopLists.radar,      sk:'radarScore', sl:'SCORE', special:'radar'},
+    {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
     {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
-    {id:'outcomes', lbl:'🛡️ 1X2 Verified',                                  d:latestTopLists.outcomes,   sk:null,         sl:null, special:'outcomes'},
+    {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
     {id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'},
-    {id:'offsides', lbl:'🚫 Οφσάιντ',                                      d:latestTopLists.offsides||[], sk:null,         sl:null, special:'offsides'},
     {id:'exact',    lbl:`🎯 Ακριβές`,                                      d:latestTopLists.exact,      sk:'exactConf',  sl:'CONF'},
     {id:'players',  lbl:'👥 Παίκτες',                                      d:latestTopLists.players,    sk:null,         sl:null}
   ];
   const t=document.getElementById('topSection');if(!t)return;
   let html=`<div class="quant-panel" style="padding:0;overflow:hidden;"><div class="tabs-wrapper">`;
   tabs.forEach((tab,i)=>{
-    const isBest4= tab.id==='best4';
-    const isRadar= tab.id==='radar';
+    const isVB   = tab.id==='valuebets';
     const isTop  = tab.id==='top3';
     const isBomb = tab.id==='bombs';
     const bombCount = latestTopLists.bombs?.length || 0;
-    const badge = isBest4
-      ? `<span style="background:var(--accent-gold);color:#111827;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${best4Loading?'…':best4Count}</span>`
-      : isRadar && radarCount > 0
-        ? `<span style="background:var(--accent-blue);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${radarCount}</span>`
-        : isTop
+    const badge = isVB && vbCount > 0
+      ? `<span style="background:var(--accent-green);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${vbCount}</span>`
+      : isTop
         ? `<span style="background:var(--accent-gold);color:#000;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">3</span>`
         : isBomb && bombCount > 0
           ? `<span style="background:var(--accent-red);color:#fff;font-size:0.6rem;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">${bombCount}</span>`
           : `<span class="tab-count">${tab.d.length}</span>`;
-    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isBest4?'color:var(--accent-gold);font-weight:900;':isRadar?'color:var(--accent-blue);font-weight:900;':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
+    html+=`<button class="tab-btn ${i===0?'active':''}" onclick="switchTab('${tab.id}')" id="tab-btn-${tab.id}" style="${isVB?'color:var(--accent-green);':isTop?'color:var(--accent-gold);font-weight:800;':isBomb?'color:var(--accent-red);font-weight:800;':''}">${tab.lbl} ${badge}</button>`;
   });
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
     if(tab.id==='players'){
       html += renderPlayersTab(tab.d);
-    } else if(tab.id==='best4'){
-      html += renderBest4Tab(tab.d);
-    } else if(tab.id==='radar'){
-      html += renderRadarTab(tab.d);
+    } else if(tab.id==='valuebets'){
+      html += renderValueBetsTab(tab.d);
     } else if(tab.id==='top3'){
       html += renderTop3Certainty(tab.d);
     } else if(tab.id==='bombs'){
       html += renderBombsTab(tab.d);
-    } else if(tab.id==='offsides'){
-      html += renderOffsidesTab(tab.d);
-    } else if(tab.id==='outcomes'){
-      html += renderVerifiedOutcomesTab(tab.d);
     } else if(!tab.d.length){
       html+=`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1.1rem;">Δεν βρέθηκαν σήματα.</div>`;
     } else {
@@ -5597,47 +3041,6 @@ function renderTopSections(){
     html+=`</div>`;
   });
   html+=`</div>`;t.innerHTML=html;
-}
-
-function renderVerifiedOutcomesTab(matches){
-  if(!matches?.length)return `<div style="text-align:center;color:var(--text-muted);padding:30px;font-weight:700;">Δεν υπάρχουν STRONG / VERIFIED 1X2 σημεία.</div>`;
-  return `<div style="display:flex;flex-direction:column;gap:9px;">${matches.map((x,i)=>{const v=_ensure1X2Verification(x);if(!v)return '';const col=v.status==='VERIFIED'?'var(--accent-green)':'var(--accent-blue)';const p=v.signal==='1'?safeNum(x.pp?.pHome,0):v.signal==='X'?safeNum(x.pp?.pDraw,0):safeNum(x.pp?.pAway,0);return `<div onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px 14px;background:var(--bg-base);border:1px solid var(--border-light);border-left:4px solid ${col};border-radius:8px;cursor:pointer;"><div style="font-family:var(--font-mono);font-weight:900;color:var(--text-dim);">#${i+1}</div><div><div style="font-weight:800;">${esc(x.ht)} <span style="color:var(--text-muted);font-weight:500;">vs</span> ${esc(x.at)}</div><div style="font-size:.68rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg||'')} · ${esc(kickoffGroupLabel(x))}</div><div style="font-size:.76rem;color:${col};font-weight:900;margin-top:4px;">${v.signal==='1'?'🏠':v.signal==='2'?'✈️':'🤝'} ${v.signal} · ${v.status}</div><div style="font-size:.66rem;color:var(--text-muted);margin-top:3px;">P ${(p*100).toFixed(1)}% · gap ${v.gapPP.toFixed(1)}pp · xGΔ ${v.xgDiff>=0?'+':''}${v.xgDiff.toFixed(2)} · Cons ${v.components.consistency.toFixed(0)}/100</div></div><div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:${col};">${v.score}</div><div style="font-size:.54rem;color:var(--text-dim);font-weight:800;">V-SCORE</div></div></div>`;}).join('')}</div>`;
-}
-
-function renderOffsidesTab(matches) {
-  if(!matches?.length) return `<div style="text-align:center;color:var(--text-muted);padding:30px;font-weight:600;">Δεν βρέθηκαν offside signals ≥65%. Εκτελέστε Scan ή επιλέξτε περισσότερα πρωταθλήματα.</div>`;
-
-  const rows = matches.map((x, i) => {
-    const o = x.offside || {};
-    const conf = Number(o.bestProb||0);
-    const col = conf>=80?'var(--accent-green)':conf>=70?'var(--accent-gold)':'var(--accent-blue)';
-    const reliable = conf>=70;
-    return `<div style="background:var(--bg-base);border:1px solid ${reliable?'rgba(45,212,191,0.28)':'var(--border-light)'};border-radius:8px;padding:12px 14px;margin-bottom:9px;">
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-        <div style="font-family:var(--font-mono);font-size:0.95rem;color:var(--text-dim);min-width:24px;">#${i+1}</div>
-        <div style="flex:1;min-width:220px;cursor:pointer;" onclick="scrollToMatchAndOpen('row-${x.fixId}')">
-          <div style="font-size:0.95rem;font-weight:800;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
-          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;text-transform:uppercase;">${esc(x.lg||'')}</div>
-          <div style="font-size:0.8rem;color:${col};font-weight:800;margin-top:5px;">🚫 ${esc(o.bestSignal||'ΧΩΡΙΣ ΣΗΜΑ')} · ${conf.toFixed(1)}% · Grade ${esc(o.grade||'—')}</div>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(86px,1fr));gap:5px;min-width:300px;">
-          <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-dim);">HOME λ</div><div style="font-family:var(--font-mono);font-weight:800;color:var(--accent-gold);">${Number(o.hLambda||0).toFixed(2)}</div></div>
-          <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-dim);">AWAY λ</div><div style="font-family:var(--font-mono);font-weight:800;color:var(--accent-blue);">${Number(o.aLambda||0).toFixed(2)}</div></div>
-          <div style="background:var(--bg-surface);border-radius:5px;padding:6px 8px;text-align:center;"><div style="font-size:0.58rem;color:var(--text-dim);">TOTAL λ</div><div style="font-family:var(--font-mono);font-weight:800;">${Number(o.totLambda||0).toFixed(2)}</div></div>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(6,minmax(85px,1fr));gap:5px;margin-top:9px;font-family:var(--font-mono);font-size:0.68rem;">
-        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">H ≥2<br><b>${Number(o.hPOff2||0).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">A ≥2<br><b>${Number(o.aPOff2||0).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Tot ≥3<br><b>${Number(o.pTotOff25||0).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Tot ≥4<br><b>${Number(o.pTotOff35||0).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Both ≥1<br><b>${Number(o.pBothOff1||0).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:5px;border-radius:4px;text-align:center;">Both ≥2<br><b>${Number(o.pBothOff2||0).toFixed(1)}%</b></div>
-      </div>
-      <div style="font-size:0.62rem;color:var(--text-dim);margin-top:7px;line-height:1.45;">Poisson projection από πρόσφατο μέσο όρο οφσάιντ της κάθε ομάδας. Το offside signal είναι ανεξάρτητο από το κύριο match pick.</div>
-    </div>`;
-  }).join('');
-  return `<div>${rows}</div>`;
 }
 
 // ── Sort state για Players tab ──────────────────────────────
@@ -6122,25 +3525,6 @@ function buildAccordionHTML(x) {
     </div>
   `;
 
-  // v6.4 — Unified 1X2 Verification panel
-  const verificationHTML = (()=>{
-    const v=_ensure1X2Verification(x);if(!v)return '';
-    const col=v.status==='VERIFIED'?'var(--accent-green)':v.status==='STRONG'?'var(--accent-blue)':v.status==='LEAN'?'var(--accent-gold)':v.status==='CONFLICT'?'var(--accent-red)':'var(--text-muted)';
-    const comp=v.components||{};
-    const box=(lbl,val)=>`<div style="background:var(--bg-surface);padding:7px 8px;border-radius:6px;text-align:center;"><div style="font-size:.52rem;color:var(--text-dim);text-transform:uppercase;">${lbl}</div><b style="font-family:var(--font-mono);font-size:.78rem;">${Number(val||0).toFixed(0)}</b></div>`;
-    return `<div class="accordion-card" style="margin:0 0 14px;border-color:${col}55;background:${col}08;">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><h4 style="color:${col};margin:0;">🛡️ Unified 1X2 Verification</h4><div style="font-family:var(--font-mono);font-size:1.1rem;font-weight:900;color:${col};">${v.signal||'—'} · ${v.score}/100 · ${v.status}</div></div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">
-        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;text-align:center;"><div style="font-size:.54rem;color:var(--text-dim);">P1</div><b>${(safeNum(x.pp?.pHome,0)*100).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;text-align:center;"><div style="font-size:.54rem;color:var(--text-dim);">PX</div><b>${(safeNum(x.pp?.pDraw,0)*100).toFixed(1)}%</b></div>
-        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;text-align:center;"><div style="font-size:.54rem;color:var(--text-dim);">P2</div><b>${(safeNum(x.pp?.pAway,0)*100).toFixed(1)}%</b></div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(6,minmax(70px,1fr));gap:5px;margin-top:7px;">${box('Probability',comp.probability)}${box('Gap',comp.gap)}${box('xG confirm',comp.xg)}${box('Consistency',comp.consistency)}${box('Data Quality',comp.dataQuality)}${box('League',comp.leagueReliability)}</div>
-      <div style="font-size:.68rem;color:var(--text-muted);margin-top:8px;line-height:1.5;">Leader ${v.leader} · gap ${v.gapPP.toFixed(1)}pp · xGΔ ${v.xgDiff>=0?'+':''}${v.xgDiff.toFixed(2)} · volatility penalty −${Number(comp.volatilityPenalty||0).toFixed(0)}${v.learning?.active&&Number.isFinite(Number(v.learning.prob))?` · learned reliability ${(Number(v.learning.prob)*100).toFixed(1)}% (n=${v.learning.n})`:''}${Number.isFinite(Number(v.marketGapPP))?` · market Δ ${Number(v.marketGapPP)>=0?'+':''}${Number(v.marketGapPP).toFixed(1)}pp`:''}</div>
-      ${v.conflictReason?`<div style="margin-top:7px;padding:7px 9px;border-radius:6px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);font-size:.68rem;color:var(--accent-red);">🚨 ${esc(v.conflictReason)}</div>`:''}
-    </div>`;
-  })();
-
   // 2. Game Projections (Συμμετρικό με το Breakdown)
   const gameProjHTML = `
     <div class="accordion-card" style="margin:0; height:100%;">
@@ -6173,16 +3557,12 @@ function buildAccordionHTML(x) {
         <div class="accordion-row">
           <span>Σύνολο</span>
           <span class="data-num">${x.offside.totLambda.toFixed(1)}
-            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥3: ${x.offside.pTotOff25}% · ≥4: ${x.offside.pTotOff35}% · ≥5: ${x.offside.pTotOff45}%</span>
+            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">≥4: ${x.offside.pTotOff35}%</span>
           </span>
         </div>
         <div class="accordion-row" style="color:${x.offside.pBothOff2>=50?'var(--accent-green)':x.offside.pBothOff2>=35?'var(--accent-gold)':'var(--text-muted)'};">
-          <span>Αμφότερες ≥1 / ≥2</span>
-          <span class="data-num">${x.offside.pBothOff1}% / ${x.offside.pBothOff2}%</span>
-        </div>
-        <div style="margin-top:7px;padding:7px 9px;border-radius:6px;background:${x.offside.reliable?'rgba(45,212,191,0.08)':'rgba(77,184,255,0.06)'};border:1px solid ${x.offside.reliable?'rgba(45,212,191,0.22)':'var(--border)'};">
-          <div style="font-size:0.6rem;color:var(--text-dim);text-transform:uppercase;font-weight:700;">Καλύτερο Offside Signal</div>
-          <div style="font-size:0.78rem;font-weight:800;color:${x.offside.bestProb>=80?'var(--accent-green)':x.offside.bestProb>=70?'var(--accent-gold)':'var(--accent-blue)'};margin-top:2px;">${x.offside.bestSignal} — ${x.offside.bestProb}% · Grade ${x.offside.grade}</div>
+          <span>Αμφότερες ≥2</span>
+          <span class="data-num">${x.offside.pBothOff2}%</span>
         </div>
         <div style="display:flex;gap:4px;margin-top:6px;font-size:0.62rem;font-family:var(--font-mono);">
           <span style="flex:1;text-align:center;background:var(--bg-surface);border-radius:4px;padding:3px;">🏠≥1: ${x.offside.hPOff1}%</span>
@@ -6194,15 +3574,7 @@ function buildAccordionHTML(x) {
     </div>
   `;
 
-  // 3. Volatility Analysis
-  const volatilityHTML = `
-    <div class="accordion-card" style="min-width:100%; margin-bottom:14px;">
-      <h4>📉 Volatility Analysis</h4>
-      ${renderVolatilityPanel(x.hS, x.aS, x.ht, x.at)}
-    </div>
-  `;
-
-  // 4. HT Prediction
+  // 3. HT Prediction
   const htHTML = x.htAnalysis ? (() => {
     const ht=x.htAnalysis;
     const hPct=Math.round(ht.pLeadHome*100), dPct=Math.round(ht.pDraw*100), aPct=Math.round(ht.pLeadAway*100);
@@ -6312,18 +3684,13 @@ function buildAccordionHTML(x) {
       <!-- LIVE QUALITY INDEX — εμφανίζεται μόνο σε live αγώνες -->
       ${liveQualityPanel}
 
-      ${verificationHTML}
-
       <!-- ΓΡΑΜΜΗ 1: Breakdown & Projections Δίπλα-δίπλα -->
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px; ${liveQualityPanel ? 'margin-top:14px;' : ''}">
         ${homeAwayHTML}
         ${gameProjHTML}
       </div>
 
-      <!-- ΓΡΑΜΜΗ 2: Volatility Analysis -->
-      ${volatilityHTML}
-
-      <!-- ΓΡΑΜΜΗ 3: Τα υπόλοιπα στοιχισμένα -->
+      <!-- ΓΡΑΜΜΗ 2: Τα υπόλοιπα στοιχισμένα -->
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
         ${htHTML}
         ${cardRiskHTML}
@@ -6659,24 +4026,17 @@ function renderSummaryTable() {
   const sec = document.getElementById('summarySection'); if(!sec) return;
   const sd = window.scannedMatchesData || []; if(!sd.length) { sec.innerHTML=''; return; }
   
-  const activeMatches = sortByKickoff(sd.filter(d => !isFinished(d.m?.fixture?.status?.short)));
+  const activeMatches = sd.filter(d => !isFinished(d.m?.fixture?.status?.short));
   const finishedMatches = sd.filter(d => isFinished(d.m?.fixture?.status?.short));
 
   let finalHtml = '';
 
   // 1. ACTIVE MATCHES
   if (activeMatches.length > 0) {
-    // v6.3.2: global ordering πρώτα από ώρα έναρξης και μετά από πρωτάθλημα.
-    // Έτσι όλα τα 19:00 εμφανίζονται μαζί, μετά 19:30, 20:00 κ.ο.κ.
-    const grouped=new Map();
-    activeMatches.forEach(d=>{
-      const timeKey=`${kickoffEpoch(d)}|${d.lg||''}`;
-      if(!grouped.has(timeKey))grouped.set(timeKey,{lg:d.lg||'',kickoff:d,matches:[]});
-      grouped.get(timeKey).matches.push(d);
-    });
+    const grouped={}; activeMatches.forEach(d=>{ if(!grouped[d.lg]) grouped[d.lg]=[]; grouped[d.lg].push(d); });
     let rows='';
-    for(const {lg,kickoff,matches} of grouped.values()){
-      rows+=`<div style="background:linear-gradient(90deg,rgba(45,212,191,.09),rgba(56,189,248,.04));padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span style="font-family:var(--font-mono);color:var(--accent-teal);font-size:.9rem;">🕒 ${esc(kickoffGroupLabel(kickoff))}</span><span style="color:var(--text-dim);">·</span><span>${esc(lg)}</span></div>
+    for(const[lg,matches] of Object.entries(grouped)){
+      rows+=`<div style="background:rgba(56,189,248,0.05);padding:10px 16px;font-weight:800;font-size:0.85rem;color:var(--accent-blue);border-top:1px solid var(--border-light);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:1px;">${esc(lg)}</div>
       <div class="data-table-wrapper" style="border:none;border-radius:0;margin-bottom:0;"><table class="summary-table">
       <thead><tr><th class="col-match">Match</th><th class="col-score">Score</th><th class="col-1x2">${acr('1X2')}</th><th class="col-o25">${acr('O2.5')}</th><th class="col-u25">${acr('U2.5')}</th><th class="col-btts">${acr('BTTS')}</th><th class="col-exact">FT / ${acr('HT')}</th><th class="col-conf">${acr('Conf%')}</th><th class="col-signal">Signal</th></tr></thead><tbody>`;
       matches.forEach(x=>{
@@ -6744,9 +4104,8 @@ function renderSummaryTable() {
         rows+=`<tr id="row-${x.fixId}" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;${live?'background:rgba(16,185,129,0.03)':''}">
           <td class="col-match left-align" style="font-weight:700;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              ${live ? `<span class="live-dot" style="width:7px;height:7px;flex-shrink:0;display:inline-block;"></span><span style="background:rgba(34,197,94,.15);color:var(--accent-green);border:1px solid rgba(34,197,94,.30);border-radius:4px;padding:1px 6px;font-size:.62rem;font-weight:900;letter-spacing:.06em;">LIVE</span>` : ''}
+              ${live ? `<span class="live-dot" style="width:7px;height:7px;flex-shrink:0;display:inline-block;"></span>` : ''}
               ${live && elapsed ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);font-family:var(--font-mono);font-size:0.72rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(74,222,128,0.3);flex-shrink:0;">${elapsed}'</span>` : ''}
-              <span style="background:rgba(45,212,191,.10);color:var(--accent-teal);font-family:var(--font-mono);font-size:.68rem;font-weight:900;padding:1px 6px;border-radius:4px;border:1px solid rgba(45,212,191,.22);flex-shrink:0;" title="Ώρα έναρξης Ελλάδας">🕒 ${kickoffTimeLabel(x)}</span>
               <span style="font-size:0.95rem;">${esc(x.ht)}</span>
               <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
               <span style="font-size:0.95rem;">${esc(x.at)}</span>
@@ -6764,7 +4123,7 @@ function renderSummaryTable() {
             })()}
           </td>
           <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
-          <td class="col-1x2 data-num" style="font-size:1.1rem;">${(()=>{const v=_ensure1X2Verification(x);if(!v)return '—';const col=v.status==='VERIFIED'?'var(--accent-green)':v.status==='STRONG'?'var(--accent-blue)':v.status==='LEAN'?'var(--accent-gold)':v.status==='CONFLICT'?'var(--accent-red)':'var(--text-dim)';return `<div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:${col};">${v.signal||'—'}</div><div style="font-size:.52rem;color:${col};font-weight:800;white-space:nowrap;">V ${v.score} · ${v.status}</div>`;})()}</td>
+          <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
           <td class="col-btts data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
@@ -6794,48 +4153,57 @@ function renderSummaryTable() {
       const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0;
       const aTot = ah+aa, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
 
-      // ── Πραγματικά στατιστικά (από actStats API) — DATA QUALITY GUARD
-      const hXGActN  = isFiniteMetric(x.actStats?.hXg)  ? Number(x.actStats.hXg)  : null;
-      const aXGActN  = isFiniteMetric(x.actStats?.aXg)  ? Number(x.actStats.aXg)  : null;
-      const hPossN   = isFiniteMetric(x.actStats?.hPoss) ? Number(x.actStats.hPoss) : null;
-      const aPossN   = isFiniteMetric(x.actStats?.aPoss) ? Number(x.actStats.aPoss) : null;
-      const hCorActN = isFiniteMetric(x.actStats?.hCor) ? Number(x.actStats.hCor) : null;
-      const aCorActN = isFiniteMetric(x.actStats?.aCor) ? Number(x.actStats.aCor) : null;
-      const hCrdActN = isFiniteMetric(x.actStats?.hCrd) ? Number(x.actStats.hCrd) : null;
-      const aCrdActN = isFiniteMetric(x.actStats?.aCrd) ? Number(x.actStats.aCrd) : null;
-      const hOffActN = isFiniteMetric(x.actStats?.hOff) ? Number(x.actStats.hOff) : null;
-      const aOffActN = isFiniteMetric(x.actStats?.aOff) ? Number(x.actStats.aOff) : null;
-      const fmtActual = (v,d=1) => isFiniteMetric(v) ? Number(v).toFixed(d) : 'N/A';
-      const hXGAct = fmtActual(hXGActN,2), aXGAct = fmtActual(aXGActN,2);
-      const hPoss = isFiniteMetric(hPossN) ? `${Number(hPossN).toFixed(0)}%` : 'N/A';
-      const aPoss = isFiniteMetric(aPossN) ? `${Number(aPossN).toFixed(0)}%` : 'N/A';
-      const corActTot=sumFinitePair(hCorActN,aCorActN), crdActTot=sumFinitePair(hCrdActN,aCrdActN), offActTot=sumFinitePair(hOffActN,aOffActN), xgActTot=sumFinitePair(hXGActN,aXGActN);
-      const hXGPredN=Number(x.hXGfinal||0), aXGPredN=Number(x.aXGfinal||0), hXGPred=hXGPredN.toFixed(2), aXGPred=aXGPredN.toFixed(2), tXGPredN=hXGPredN+aXGPredN, tXGPred=tXGPredN.toFixed(2);
-      const hCorPredN=Number(x.hProjCor||x.expCor/2||0), aCorPredN=Number(x.aProjCor||x.expCor/2||0), hCorPred=hCorPredN.toFixed(1), aCorPred=aCorPredN.toFixed(1), expCorPredN=Number(x.expCor||0), expCorPred=expCorPredN.toFixed(1);
-      const hCrdPredN=Number(x.hS?.crd||0), aCrdPredN=Number(x.aS?.crd||0), hCrdPred=hCrdPredN.toFixed(1), aCrdPred=aCrdPredN.toFixed(1), totCrdPredN=hCrdPredN+aCrdPredN, totCrdPred=totCrdPredN.toFixed(1);
-      const hOffPred=Number(x.offside?.hLambda||0), aOffPred=Number(x.offside?.aLambda||0), totOffPred=hOffPred+aOffPred;
-      const crdDev=isFiniteMetric(crdActTot)?Math.abs(crdActTot-totCrdPredN):null, crdCol=crdDev===null?'var(--text-muted)':crdDev<1.5?'var(--accent-green)':crdDev<3?'var(--accent-gold)':'var(--accent-red)';
-      const offDev=isFiniteMetric(offActTot)?Math.abs(offActTot-totOffPred):null, offCol=offDev===null?'var(--text-muted)':offDev<1?'var(--accent-green)':offDev<2?'var(--accent-gold)':'var(--accent-red)';
-      const xgDev=isFiniteMetric(xgActTot)?Math.abs(xgActTot-tXGPredN):null, xgCol=xgDev===null?'var(--text-muted)':xgDev<.5?'var(--accent-green)':xgDev<1?'var(--accent-gold)':'var(--accent-red)';
-      const corDev=isFiniteMetric(corActTot)?Math.abs(corActTot-expCorPredN):null, corCol=corDev===null?'var(--text-muted)':corDev<2?'var(--accent-green)':corDev<4?'var(--accent-gold)':'var(--accent-red)';
+      // ── Πραγματικά στατιστικά (από actStats API)
+      const hXGAct  = Number(x.actStats?.hXg||0).toFixed(2);
+      const aXGAct  = Number(x.actStats?.aXg||0).toFixed(2);
+      const hPoss   = x.actStats?.hPoss||'—';
+      const aPoss   = x.actStats?.aPoss||'—';
+      const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
+      const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
 
-      // ── Result badge — missing required actual metric => N/A, όχι LOST
+      // ── Προβλέψεις μοντέλου
+      const hXGPred  = Number(x.hXGfinal||0).toFixed(2);
+      const aXGPred  = Number(x.aXGfinal||0).toFixed(2);
+      const tXGPred  = (Number(x.hXGfinal||0)+Number(x.aXGfinal||0)).toFixed(2);
+      const hCorPred = Number(x.hProjCor||x.expCor/2||0).toFixed(1);
+      const aCorPred = Number(x.aProjCor||x.expCor/2||0).toFixed(1);
+      const expCorPred = Number(x.expCor||0).toFixed(1);
+      // Προβλεπόμενες κάρτες από το μοντέλο
+      const hCrdPred = Number(x.hS?.crd||0).toFixed(1);
+      const aCrdPred = Number(x.aS?.crd||0).toFixed(1);
+      const totCrdPred = (Number(x.hS?.crd||0)+Number(x.aS?.crd||0)).toFixed(1);
+      const totCrdAct  = hCrdAct + aCrdAct;
+      const crdDev = Math.abs(totCrdAct - Number(totCrdPred));
+      const crdCol = crdDev < 1.5 ? 'var(--accent-green)' : crdDev < 3 ? 'var(--accent-gold)' : 'var(--accent-red)';
+
+      // ── Σύγκριση: πράσινο αν η πρόβλεψη ήταν εντός ±20%, κόκκινο αν πολύ έξω
+      const xgDev = Math.abs((Number(hXGAct)+Number(aXGAct)) - Number(tXGPred));
+      const xgCol = xgDev < 0.5 ? 'var(--accent-green)' : xgDev < 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)';
+      const corDev = Math.abs((hCorAct+aCorAct) - Number(expCorPred));
+      const corCol = corDev < 2 ? 'var(--accent-green)' : corDev < 4 ? 'var(--accent-gold)' : 'var(--accent-red)';
+
+      // ── Result badge
       let hitHtml = `<span style="color:var(--text-muted)">—</span>`;
       const pick = x.omegaPick||'';
       if(pick && !pick.includes('ΧΩΡΙΣ') && !pick.includes('NO BET')) {
-        let hit=false,evaluable=true;
-        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) hit=aTot>3.5;
-        else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')||pick.includes('OVER 2')) hit=aTot>2.5;
-        else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')||pick.includes('UNDER')) hit=aTot<2.5;
-        else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) hit=aBtts;
-        else if(pick.includes('ΑΣΟΣ')&&!pick.includes('AH')) hit=aOut==='1';
-        else if(pick.includes('ΔΙΠΛΟ')&&!pick.includes('AH')) hit=aOut==='2';
-        else if(pick.includes('ΝΙΚΗ ΓΗΠΕΔ')) hit=aOut==='1';
-        else if(pick.includes('ΝΙΚΗ ΦΙΛΟΞ')) hit=aOut==='2';
-        else if(pick.includes('ΚΟΡΝΕΡ')) { if(!isFiniteMetric(corActTot)) evaluable=false; else hit=corActTot>8.5; }
-        else if(pick.includes('ΚΑΡΤΕΣ')) { if(!isFiniteMetric(crdActTot)) evaluable=false; else hit=crdActTot>5.5; }
-        else if(pick.includes('AH')) { if(pick.includes('ΑΣΟΣ')) hit=(ah-aa)>=2; if(pick.includes('ΔΙΠΛΟ')) hit=(aa-ah)>=2; }
-        hitHtml=!evaluable?`<span style="background:rgba(148,163,184,.12);color:var(--text-muted);padding:3px 8px;border-radius:5px;font-weight:800;font-size:.72rem;">N/A DATA</span>`:hit?`<span style="background:rgba(74,222,128,.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:.72rem;">✅ WON</span>`:`<span style="background:rgba(251,113,133,.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:.72rem;">❌ LOST</span>`;
+        let hit = false;
+        if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5'))                          hit = aTot > 3.5;
+        else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')||pick.includes('OVER 2')) hit = aTot > 2.5;
+        else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')||pick.includes('UNDER')) hit = aTot < 2.5;
+        else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG'))   hit = aBtts;
+        else if(pick.includes('ΑΣΟΣ')&&!pick.includes('AH'))        hit = aOut==='1';
+        else if(pick.includes('ΔΙΠΛΟ')&&!pick.includes('AH'))       hit = aOut==='2';
+        else if(pick.includes('ΝΙΚΗ ΓΗΠΕΔ'))                        hit = aOut==='1';
+        else if(pick.includes('ΝΙΚΗ ΦΙΛΟΞ'))                        hit = aOut==='2';
+        else if(pick.includes('ΚΟΡΝΕΡ'))                            hit = (hCorAct+aCorAct)>8.5;
+        else if(pick.includes('ΚΑΡΤΕΣ'))                            hit = (hCrdAct+aCrdAct)>5.5;
+        else if(pick.includes('AH')){
+          if(pick.includes('ΑΣΟΣ'))  hit = (ah-aa)>=2;
+          if(pick.includes('ΔΙΠΛΟ')) hit = (aa-ah)>=2;
+        }
+        hitHtml = hit
+          ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">✅ WON</span>`
+          : `<span style="background:rgba(251,113,133,0.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">❌ LOST</span>`;
       }
 
       // ── Pred vs Actual cell helper
@@ -6858,11 +4226,10 @@ function renderSummaryTable() {
           <td>${pvA(`${hXGPred}–${aXGPred} (${tXGPred})`, `${hXGAct}–${aXGAct}`, xgCol)}</td>
           <td style="text-align:center;font-family:var(--font-mono);">
             <div style="font-size:0.72rem;color:var(--text-muted);">—</div>
-            <div style="font-size:0.9rem;font-weight:700;">${hPoss}–${aPoss}</div>
+            <div style="font-size:0.9rem;font-weight:700;">${hPoss}%–${aPoss}%</div>
           </td>
-          <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${fmtActual(hCorActN,0)}–${fmtActual(aCorActN,0)} (${fmtActual(corActTot,0)})`, corCol)}</td>
-          <td>${pvA(`${hCrdPred}–${aCrdPred} (${totCrdPred})`, `${fmtActual(hCrdActN,0)}–${fmtActual(aCrdActN,0)} (${fmtActual(crdActTot,0)})`, crdCol)}</td>
-          <td>${pvA(`${hOffPred.toFixed(1)}–${aOffPred.toFixed(1)} (${totOffPred.toFixed(1)})`, `${fmtActual(hOffActN,0)}–${fmtActual(aOffActN,0)} (${fmtActual(offActTot,0)})`, offCol)}</td>
+          <td>${pvA(`${hCorPred}–${aCorPred} (${expCorPred})`, `${hCorAct}–${aCorAct} (${hCorAct+aCorAct})`, corCol)}</td>
+          <td>${pvA(`${hCrdPred}–${aCrdPred} (${totCrdPred})`, `${hCrdAct}–${aCrdAct} (${totCrdAct})`, crdCol)}</td>
           <td style="font-size:0.78rem;font-weight:700;color:${x.strength>=70?'var(--accent-green)':'var(--text-muted)'};max-width:140px;">
             ${esc(pick.split(' ').slice(0,4).join(' ')||'—')}
             ${x.strength>=70?`<div style="font-size:0.6rem;color:var(--text-muted);">${x.strength?.toFixed(0)}% conf</div>`:''}
@@ -6874,16 +4241,172 @@ function renderSummaryTable() {
         </tr>`;
     });
 
-    // ── Model Accuracy Analysis — v6.0 DATA QUALITY GUARD ───────────────
-    const validForAnalysis = finishedMatches.filter(x => isFiniteMetric(x.hXGfinal) && isFiniteMetric(x.aXGfinal));
+    // ── Model Accuracy Analysis ────────────────────────────────────
+    // Μόνο αν έχουμε ≥3 ολοκληρωμένους αγώνες με actStats
+    const validForAnalysis = finishedMatches.filter(x =>
+      x.actStats && x.hXGfinal && x.aXGfinal
+    );
+
     let accuracyHtml = '';
     if(validForAnalysis.length >= 2) {
-      const metrics={xGH:{label:'xG HOME',pred:[],actual:[]},xGA:{label:'xG AWAY',pred:[],actual:[]},tXG:{label:'Total xG',pred:[],actual:[]},corners:{label:'Κόρνερ (Σύν.)',pred:[],actual:[]},cards:{label:'Κάρτες (Σύν.)',pred:[],actual:[]},offsides:{label:'Οφσάιντ (Σύν.)',pred:[],actual:[]},goals:{label:'Γκολ (Σύν.)',pred:[],actual:[]}};
-      validForAnalysis.forEach(x=>{const ah=Number(x.m?.goals?.home??0),aa=Number(x.m?.goals?.away??0),hp=Number(x.hXGfinal),ap=Number(x.aXGfinal),hc=Number(x.hProjCor??x.expCor/2??0),ac=Number(x.aProjCor??x.expCor/2??0),hcp=Number(x.hS?.crd??0),acp=Number(x.aS?.crd??0),hop=Number(x.offside?.hLambda??0),aop=Number(x.offside?.aLambda??0),ha=x.actStats?.hXg,aaX=x.actStats?.aXg,hca=x.actStats?.hCor,aca=x.actStats?.aCor,hcra=x.actStats?.hCrd,acra=x.actStats?.aCrd,hoa=x.actStats?.hOff,aoa=x.actStats?.aOff;if(isFiniteMetric(ha)){metrics.xGH.pred.push(hp);metrics.xGH.actual.push(Number(ha));}if(isFiniteMetric(aaX)){metrics.xGA.pred.push(ap);metrics.xGA.actual.push(Number(aaX));}if(isFiniteMetric(ha)&&isFiniteMetric(aaX)){metrics.tXG.pred.push(hp+ap);metrics.tXG.actual.push(Number(ha)+Number(aaX));}if(isFiniteMetric(hca)&&isFiniteMetric(aca)){metrics.corners.pred.push(hc+ac);metrics.corners.actual.push(Number(hca)+Number(aca));}if(isFiniteMetric(hcra)&&isFiniteMetric(acra)){metrics.cards.pred.push(hcp+acp);metrics.cards.actual.push(Number(hcra)+Number(acra));}if(isFiniteMetric(hoa)&&isFiniteMetric(aoa)){metrics.offsides.pred.push(hop+aop);metrics.offsides.actual.push(Number(hoa)+Number(aoa));}metrics.goals.pred.push(hp+ap);metrics.goals.actual.push(ah+aa);});
-      const calcMAE=(p,a)=>p.length?p.reduce((s,v,i)=>s+Math.abs(v-a[i]),0)/p.length:null,calcBias=(p,a)=>p.length?p.reduce((s,v,i)=>s+(v-a[i]),0)/p.length:null,calcCorr=(p,a)=>{const n=p.length;if(n<2)return null;const mp=p.reduce((s,v)=>s+v,0)/n,ma=a.reduce((s,v)=>s+v,0)/n,cov=p.reduce((s,v,i)=>s+(v-mp)*(a[i]-ma),0)/n,sp=Math.sqrt(p.reduce((s,v)=>s+(v-mp)**2,0)/n),sa=Math.sqrt(a.reduce((s,v)=>s+(v-ma)**2,0)/n);return sp>0&&sa>0?cov/(sp*sa):null;};
-      const mCards=Object.values(metrics).map(m=>{const n=m.pred.length,mae=calcMAE(m.pred,m.actual),corr=calcCorr(m.pred,m.actual),bias=calcBias(m.pred,m.actual),has=Number.isFinite(corr),cc=!has?'var(--text-muted)':corr>=.7?'var(--accent-green)':corr>=.4?'var(--accent-gold)':'var(--accent-red)',bc=!Number.isFinite(bias)?'var(--text-muted)':Math.abs(bias)<.3?'var(--accent-green)':Math.abs(bias)<.7?'var(--accent-gold)':'var(--accent-red)',bs=!Number.isFinite(bias)?'N/A':bias>0?`+${bias.toFixed(2)} ↑`:`${bias.toFixed(2)} ↓`,mx=n?Math.max(...m.pred,...m.actual,1):1,dots=n?m.pred.map((p,i)=>{const sx=(p/mx*60).toFixed(1),sy=(60-m.actual[i]/mx*60).toFixed(1),d=Math.abs(p-m.actual[i]),dc=d<.5?'var(--accent-green)':d<1.2?'var(--accent-gold)':'var(--accent-red)';return `<circle cx="${sx}" cy="${sy}" r="3.5" fill="${dc}" fill-opacity=".8"/>`;}).join(''):'';return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><div><b style="font-size:.72rem;">${m.label}</b><div style="font-family:var(--font-mono);font-size:.58rem;color:${n?'var(--accent-blue)':'var(--text-muted)'};">n=${n}</div></div><svg width="66" height="66" viewBox="-3 -3 66 66" style="border:1px solid var(--border-light);border-radius:5px;background:var(--bg-surface);"><line x1="0" y1="60" x2="60" y2="0" stroke="rgba(148,163,184,.25)" stroke-width=".8" stroke-dasharray="3,2"/>${dots}</svg></div><div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--text-muted);"><span>Συσχέτιση Π→Α</span><b style="color:${cc};">${has?(corr*100).toFixed(0)+'%':'N/A'}</b></div><div style="height:4px;background:var(--border-light);border-radius:2px;margin:3px 0 8px;"><div style="height:4px;width:${has?Math.min(Math.abs(corr)*100,100).toFixed(0):0}%;background:${cc};border-radius:2px;"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.68rem;"><div style="background:var(--bg-surface);padding:4px 6px;border-radius:4px;">MAE<br><b>${Number.isFinite(mae)?mae.toFixed(2):'N/A'}</b></div><div style="background:var(--bg-surface);padding:4px 6px;border-radius:4px;">Bias<br><b style="color:${bc};">${bs}</b></div></div>${n===0?'<div style="font-size:.6rem;color:var(--text-muted);margin-top:7px;">N/A — δεν δόθηκε actual δεδομένο.</div>':''}</div>`;}).join('');
-      const ranked=Object.values(metrics).map(m=>({label:m.label,corr:calcCorr(m.pred,m.actual),n:m.pred.length})).filter(r=>Number.isFinite(r.corr)).sort((a,b)=>b.corr-a.corr),rankHtml=ranked.length?ranked.map((r,i)=>{const c=r.corr>=.7?'var(--accent-green)':r.corr>=.4?'var(--accent-gold)':'var(--accent-red)',med=['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣'][i]||`${i+1}.`;return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-light);"><span>${med}</span><span style="flex:1;font-size:.72rem;">${r.label} <small style="color:var(--text-muted);">n=${r.n}</small></span><b style="color:${c};">${(r.corr*100).toFixed(0)}%</b></div>`;}).join(''):'<div style="font-size:.72rem;color:var(--text-muted);">Δεν υπάρχουν ακόμη ≥2 έγκυρες παρατηρήσεις με διακύμανση.</div>',chips=Object.values(metrics).map(m=>`<span style="font-family:var(--font-mono);font-size:.58rem;padding:3px 6px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-surface);">${m.label}: n=${m.pred.length}</span>`).join('');
-      accuracyHtml=`<div class="quant-panel" style="margin-top:16px;border-color:rgba(168,85,247,.3);"><div style="font-size:.85rem;font-weight:800;color:var(--accent-purple);text-transform:uppercase;letter-spacing:1px;">🔬 Model Accuracy Analysis · Data Quality Guard</div><div style="font-size:.65rem;color:var(--text-muted);margin:2px 0 10px;">Ολοκληρωμένοι αγώνες: ${validForAnalysis.length} · Missing actual ≠ 0 · ξεχωριστό n ανά metric.</div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:14px;">${chips}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;"><div><div style="font-size:.65rem;font-weight:700;color:var(--text-muted);margin-bottom:8px;">ΑΚΡΙΒΕΙΑ ΑΝΑ ΜΕΓΕΘΟΣ</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">${mCards}</div></div><div><div style="font-size:.65rem;font-weight:700;color:var(--text-muted);margin-bottom:8px;">ΚΑΤΑΤΑΞΗ ΣΥΣΧΕΤΙΣΗΣ Π→Α</div><div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:12px;">${rankHtml}</div><div style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.2);border-radius:8px;padding:10px 14px;font-size:.72rem;color:var(--text-muted);"><b style="color:var(--accent-purple);">Data Quality Guard:</b> N/A = το API δεν παρείχε έγκυρο actual statistic. Δεν συμμετέχει σε MAE, Bias, correlation ή calibration.</div></div></div></div>`;
+      // Συλλογή δεδομένων ανά metric
+      const metrics = {
+        xGH:   { label:'xG HOME',        pred:[], actual:[], errors:[] },
+        xGA:   { label:'xG AWAY',         pred:[], actual:[], errors:[] },
+        tXG:   { label:'Total xG',        pred:[], actual:[], errors:[] },
+        corners:{ label:'Κόρνερ (Σύν.)', pred:[], actual:[], errors:[] },
+        cards:  { label:'Κάρτες (Σύν.)', pred:[], actual:[], errors:[] },
+        goals:  { label:'Γκολ (Σύν.)',   pred:[], actual:[], errors:[] },
+      };
+
+      validForAnalysis.forEach(x => {
+        const ah = x.m?.goals?.home??0, aa = x.m?.goals?.away??0;
+        const hXGAct = Number(x.actStats?.hXg||0);
+        const aXGAct = Number(x.actStats?.aXg||0);
+        const hCorAct = x.actStats?.hCor||0, aCorAct = x.actStats?.aCor||0;
+        const hCrdAct = x.actStats?.hCrd||0, aCrdAct = x.actStats?.aCrd||0;
+        const hXGPred = Number(x.hXGfinal||0);
+        const aXGPred = Number(x.aXGfinal||0);
+        const hCorPred = Number(x.hProjCor || x.expCor/2 || 0);
+        const aCorPred = Number(x.aProjCor || x.expCor/2 || 0);
+        const hCrdPred = Number(x.hS?.crd||0);
+        const aCrdPred = Number(x.aS?.crd||0);
+
+        metrics.xGH.pred.push(hXGPred);   metrics.xGH.actual.push(hXGAct);
+        metrics.xGA.pred.push(aXGPred);   metrics.xGA.actual.push(aXGAct);
+        metrics.tXG.pred.push(hXGPred+aXGPred); metrics.tXG.actual.push(hXGAct+aXGAct);
+        metrics.corners.pred.push(hCorPred+aCorPred); metrics.corners.actual.push(hCorAct+aCorAct);
+        metrics.cards.pred.push(hCrdPred+aCrdPred);   metrics.cards.actual.push(hCrdAct+aCrdAct);
+        metrics.goals.pred.push(hXGPred+aXGPred);     metrics.goals.actual.push(ah+aa);
+      });
+
+      // Υπολογισμός MAE (Mean Absolute Error) και Pearson correlation
+      const calcMAE = (pred, actual) => {
+        const n = pred.length;
+        return pred.reduce((s,p,i) => s + Math.abs(p - actual[i]), 0) / n;
+      };
+      const calcCorr = (pred, actual) => {
+        const n = pred.length;
+        if(n < 2) return 0;
+        const mP = pred.reduce((a,b)=>a+b,0)/n;
+        const mA = actual.reduce((a,b)=>a+b,0)/n;
+        const cov = pred.reduce((s,p,i)=>s+(p-mP)*(actual[i]-mA),0)/n;
+        const sdP = Math.sqrt(pred.reduce((s,p)=>s+(p-mP)**2,0)/n);
+        const sdA = Math.sqrt(actual.reduce((s,a)=>s+(a-mA)**2,0)/n);
+        return (sdP*sdA) > 0 ? cov/(sdP*sdA) : 0;
+      };
+      const calcBias = (pred, actual) => {
+        // Θετικό = υπερεκτίμηση, Αρνητικό = υποεκτίμηση
+        const n = pred.length;
+        return pred.reduce((s,p,i)=>s+(p-actual[i]),0)/n;
+      };
+
+      // Χτίζουμε metric cards
+      const mCards = Object.entries(metrics).map(([key, m]) => {
+        const mae  = calcMAE(m.pred, m.actual);
+        const corr = calcCorr(m.pred, m.actual);
+        const bias = calcBias(m.pred, m.actual);
+        const corrPct = (corr*100).toFixed(0);
+        const corrCol = corr >= 0.7 ? 'var(--accent-green)' : corr >= 0.4 ? 'var(--accent-gold)' : 'var(--accent-red)';
+        const biasCol = Math.abs(bias) < 0.3 ? 'var(--accent-green)' : Math.abs(bias) < 0.7 ? 'var(--accent-gold)' : 'var(--accent-red)';
+        const biasStr = bias > 0 ? `+${bias.toFixed(2)} ↑` : `${bias.toFixed(2)} ↓`;
+        const barW = Math.min(Math.abs(corr)*100, 100).toFixed(0);
+
+        // Mini scatter: κάθε ζεύγος pred/actual ως dot
+        const maxV = Math.max(...m.pred, ...m.actual, 1);
+        const dots = m.pred.map((p,i) => {
+          const x = (p/maxV*60).toFixed(1);
+          const y = (60 - (m.actual[i]/maxV*60)).toFixed(1);
+          const dev = Math.abs(p - m.actual[i]);
+          const dc = dev < 0.5 ? 'var(--accent-green)' : dev < 1.2 ? 'var(--accent-gold)' : 'var(--accent-red)';
+          return `<circle cx="${x}" cy="${y}" r="3.5" fill="${dc}" fill-opacity="0.8"/>`;
+        }).join('');
+        // Diagonal perfect line
+        const diag = `<line x1="0" y1="60" x2="60" y2="0" stroke="rgba(255,255,255,0.15)" stroke-width="0.8" stroke-dasharray="3,2"/>`;
+
+        return `<div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
+            <span style="font-size:0.72rem;font-weight:800;color:var(--text-sub);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">${m.label}</span>
+            <svg width="66" height="66" style="flex-shrink:0;border:1px solid var(--border-light);border-radius:5px;background:var(--bg-surface);" viewBox="-3 -3 66 66">
+              ${diag}${dots}
+            </svg>
+          </div>
+          <div style="margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;font-size:0.6rem;color:var(--text-muted);margin-bottom:3px;">
+              <span>Συσχέτιση Π→Α</span>
+              <span style="color:${corrCol};font-weight:700;">${corrPct}%</span>
+            </div>
+            <div style="height:4px;background:var(--border-light);border-radius:2px;">
+              <div style="height:4px;width:${barW}%;background:${corrCol};border-radius:2px;"></div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.68rem;">
+            <div style="background:var(--bg-surface);border-radius:4px;padding:4px 6px;">
+              <div style="color:var(--text-dim);font-size:0.58rem;margin-bottom:1px;">MAE (Μ. Σφάλμα)</div>
+              <div style="font-family:var(--font-mono);font-weight:700;color:var(--text-main);">${mae.toFixed(2)}</div>
+            </div>
+            <div style="background:var(--bg-surface);border-radius:4px;padding:4px 6px;">
+              <div style="color:var(--text-dim);font-size:0.58rem;margin-bottom:1px;">Bias</div>
+              <div style="font-family:var(--font-mono);font-weight:700;color:${biasCol};">${biasStr}</div>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+
+      // Correlations ranking — ποιο metric έχει τη μεγαλύτερη συσχέτιση
+      const ranked = Object.entries(metrics).map(([key, m]) => ({
+        label: m.label, corr: calcCorr(m.pred, m.actual)
+      })).sort((a,b)=>b.corr-a.corr);
+
+      const rankHtml = ranked.map((r,i) => {
+        const col = r.corr>=0.7?'var(--accent-green)':r.corr>=0.4?'var(--accent-gold)':'var(--accent-red)';
+        const medal = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣'][i]||`${i+1}.`;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+          <span style="font-size:0.9rem;flex-shrink:0;">${medal}</span>
+          <span style="font-size:0.72rem;color:var(--text-sub);flex:1;">${r.label}</span>
+          <div style="width:80px;height:5px;background:var(--border-light);border-radius:2px;">
+            <div style="height:5px;width:${Math.min(Math.abs(r.corr)*100,100).toFixed(0)}%;background:${col};border-radius:2px;"></div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:0.72rem;font-weight:700;color:${col};min-width:36px;text-align:right;">${(r.corr*100).toFixed(0)}%</span>
+        </div>`;
+      }).join('');
+
+      accuracyHtml = `
+      <div class="quant-panel" style="margin-top:16px;border-color:rgba(168,85,247,0.3);">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+          <div>
+            <div style="font-size:0.85rem;font-weight:800;color:var(--accent-purple);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:1px;">🔬 Model Accuracy Analysis</div>
+            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">Βασίζεται σε ${validForAnalysis.length} αγώνες · Scatter: κόκκινο=μεγάλη απόκλιση · πράσινο=καλή πρόβλεψη</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+
+          <!-- Metric Cards Grid -->
+          <div>
+            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Ακρίβεια ανά Μέγεθος</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">${mCards}</div>
+          </div>
+
+          <!-- Correlation Ranking -->
+          <div>
+            <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.1em;font-family:var(--font-cond);margin-bottom:8px;">Κατάταξη Συσχέτισης Π→Α</div>
+            <div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+              ${rankHtml}
+            </div>
+            <div style="background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:10px 14px;font-size:0.72rem;">
+              <div style="font-weight:700;color:var(--accent-purple);margin-bottom:6px;">Ερμηνεία</div>
+              <div style="color:var(--text-muted);line-height:1.6;">
+                <span style="color:var(--accent-green);">●</span> ≥70%: Ισχυρή συσχέτιση — αξιόπιστη πρόβλεψη<br>
+                <span style="color:var(--accent-gold);">●</span> 40-70%: Μέτρια — βοηθητική ένδειξη<br>
+                <span style="color:var(--accent-red);">●</span> &lt;40%: Αδύναμη — χρειάζεται βαθμονόμηση<br>
+                <span style="color:var(--text-dim);">Bias ↑</span>: Υπερεκτίμηση · <span style="color:var(--text-dim);">Bias ↓</span>: Υποεκτίμηση
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>`;
     }
 
     finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(74,222,128,0.35);">
@@ -6900,7 +4423,6 @@ function renderSummaryTable() {
             <th>Possession</th>
             <th>Κόρνερ (Π→Α)</th>
             <th>Κάρτες (Π→Α)</th>
-            <th>Οφσάιντ (Π→Α)</th>
             <th>Signal</th>
             <th>Result</th>
           </tr></thead>
@@ -6914,55 +4436,11 @@ function renderSummaryTable() {
   sec.innerHTML = finalHtml;
 }
 
-
-// ================================================================
-//  v6.7 PERFORMANCE INTELLIGENCE + CONTINUOUS LEARNING — all settled results → best league/settings
-// ================================================================
-function _wilsonLower(h,n,z=1.96){
-  if(!n)return 0;const p=h/n,z2=z*z,den=1+z2/n;
-  return Math.max(0,(p+z2/(2*n)-z*Math.sqrt((p*(1-p)+z2/(4*n))/n))/den);
-}
-function _leaderFromVaultRecord(p){
-  const v=String(p?.verificationLeader||p?.verification?.leader||'');if(['1','X','2'].includes(v))return v;
-  const pp=p?.calibratedPP;if(pp){return [['1',safeNum(pp.pHome,0)],['X',safeNum(pp.pDraw,0)],['2',safeNum(pp.pAway,0)]].sort((a,b)=>b[1]-a[1])[0][0];}
-  return ['1','X','2'].includes(p?.outPick)?p.outPick:null;
-}
-function _multiclassBrier(pp,aOut){
-  if(!pp||!['1','X','2'].includes(aOut))return null;
-  const ph=safeNum(pp.pHome,NaN),pd=safeNum(pp.pDraw,NaN),pa=safeNum(pp.pAway,NaN);if(![ph,pd,pa].every(Number.isFinite))return null;
-  return ((ph-(aOut==='1'?1:0))**2+(pd-(aOut==='X'?1:0))**2+(pa-(aOut==='2'?1:0))**2)/3;
-}
-function buildPerformanceIntelligence(rows){
-  const groups=new Map();
-  (rows||[]).forEach(r=>{const p=r.p||{},lid=String(p.leagueId||0);if(!groups.has(lid))groups.set(lid,{lid:Number(lid),name:p.league||`League ${lid}`,n:0,modelN:0,modelH:0,verN:0,verH:0,v80N:0,v80H:0,brier:[],scores:[]});const g=groups.get(lid);g.n++;const leader=_leaderFromVaultRecord(p);if(leader){g.modelN++;if(leader===r.aOut)g.modelH++;const sc=safeNum(p.verificationScore??p.verification?.score,0);g.scores.push({score:sc,hit:leader===r.aOut});}const sig=p.verificationSignal||p.verification?.signal;const sc=safeNum(p.verificationScore??p.verification?.score,0);if(['1','X','2'].includes(sig)&&sc>=VERIFY_1X2.MIN_SIGNAL_SCORE){g.verN++;if(sig===r.aOut)g.verH++;if(sc>=VERIFY_1X2.VERIFIED_SCORE){g.v80N++;if(sig===r.aOut)g.v80H++;}}const b=_multiclassBrier(p.calibratedPP,r.aOut);if(Number.isFinite(b))g.brier.push(b);});
-  const leagues=[...groups.values()].map(g=>{g.modelAcc=g.modelN?g.modelH/g.modelN:null;g.verAcc=g.verN?g.verH/g.verN:null;g.v80Acc=g.v80N?g.v80H/g.v80N:null;g.brierMean=g.brier.length?g.brier.reduce((a,b)=>a+b,0)/g.brier.length:null;g.rankMetric=g.verN>=8?_wilsonLower(g.verH,g.verN):g.modelN>=10?_wilsonLower(g.modelH,g.modelN):-1;return g;}).sort((a,b)=>b.rankMetric-a.rankMetric||b.verN-a.verN||b.modelN-a.modelN);
-  const best=leagues.find(g=>g.rankMetric>=0)||null;
-
-  const allScoreRows=[];(rows||[]).forEach(r=>{const p=r.p||{},leader=_leaderFromVaultRecord(p),sc=safeNum(p.verificationScore??p.verification?.score,0);if(leader&&Number.isFinite(sc))allScoreRows.push({score:sc,hit:leader===r.aOut});});
-  const minN=Math.max(12,Math.ceil(allScoreRows.length*0.15));
-  const cutoffs=[];for(let t=55;t<=90;t+=5){const a=allScoreRows.filter(x=>x.score>=t),h=a.filter(x=>x.hit).length;if(a.length)cutoffs.push({t,n:a.length,h,acc:h/a.length,lb:_wilsonLower(h,a.length)});}
-  const eligible=cutoffs.filter(x=>x.n>=minN);const bestCut=(eligible.length?eligible:cutoffs).sort((a,b)=>b.lb-a.lb||b.n-a.n)[0]||null;
-  return {leagues,best,bestCut,total:rows?.length||0,minN};
-}
-function renderPerformanceIntelligence(rows){
-  const intel=buildPerformanceIntelligence(rows);window._lastPerformanceIntelligence=intel;
-  const fmt=v=>Number.isFinite(v)?(v*100).toFixed(1)+'%':'N/A',num=v=>Number.isFinite(v)?v.toFixed(4):'N/A';
-  const pending=window._pendingAdjustments||{};
-  const best=intel.best;const bestTitle=best?`${esc(best.name)} · ${best.verN>=8?fmt(best.verAcc)+' Verified':fmt(best.modelAcc)+' model leader'} · n=${best.verN>=8?best.verN:best.modelN}`:'Ανεπαρκές δείγμα ανά πρωτάθλημα';
-  const lgRows=intel.leagues.map((g,i)=>{const pr=pending[String(g.lid)]||pending[g.lid]||{},opt=pr.optimized||{},lp=getLeagueParams(g.lid);const rec=Object.keys(opt).length?Object.entries(opt).map(([k,v])=>`${k}→${Number(v).toFixed(3)}`).join(' · '):'χωρίς validated αλλαγή';const rank=g.rankMetric>=0?`${(g.rankMetric*100).toFixed(1)}%`:'—';return `<tr><td class="left-align"><b>${i+1}. ${esc(g.name)}</b><div style="font-size:.58rem;color:var(--text-muted);">Wilson lower bound ${rank}</div></td><td>${g.modelN?fmt(g.modelAcc):'N/A'}<small style="display:block;color:var(--text-muted);">${g.modelH}/${g.modelN}</small></td><td>${g.verN?fmt(g.verAcc):'N/A'}<small style="display:block;color:var(--text-muted);">${g.verH}/${g.verN}</small></td><td>${g.v80N?fmt(g.v80Acc):'N/A'}<small style="display:block;color:var(--text-muted);">${g.v80H}/${g.v80N}</small></td><td>${num(g.brierMean)}</td><td style="font-family:var(--font-mono);font-size:.62rem;">${esc(rec)}</td><td style="font-family:var(--font-mono);font-size:.58rem;color:var(--text-muted);">mult ${lp.mult.toFixed(2)} · xGΔ ${lp.xgDiff.toFixed(2)} · O2.5 ${lp.minXGO25.toFixed(2)}</td></tr>`;}).join('');
-  const cut=intel.bestCut;const cutHtml=cut?`<b style="color:var(--accent-green);">V-Score ≥${cut.t}</b> · accuracy ${fmt(cut.acc)} · ${cut.h}/${cut.n} · Wilson LB ${(cut.lb*100).toFixed(1)}%`:'Ανεπαρκές sample για cutoff optimization';
-  return `<div class="quant-panel" style="border-color:rgba(56,189,248,.28);margin-bottom:14px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><div style="font-size:.9rem;font-weight:900;color:var(--accent-blue);">🏆 SYSTEM PERFORMANCE INTELLIGENCE</div><div style="font-size:.64rem;color:var(--text-muted);margin-top:2px;">Κατάταξη από το σύνολο των settled αποτελεσμάτων του επιλεγμένου Audit. Δεν θεωρεί 100% σε μικρό n ως ισχυρότερο από μεγάλο δείγμα: χρησιμοποιεί Wilson confidence.</div></div><span style="font-family:var(--font-mono);font-size:.66rem;color:var(--accent-blue);">n=${intel.total}</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:12px 0;"><div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;"><div style="font-size:.61rem;color:var(--text-muted);text-transform:uppercase;">Καλύτερα υποστηριζόμενο πρωτάθλημα 1X2</div><div style="font-weight:900;color:var(--accent-green);margin-top:4px;">${bestTitle}</div></div><div style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;"><div style="font-size:.61rem;color:var(--text-muted);text-transform:uppercase;">Προτεινόμενο verification cutoff</div><div style="margin-top:4px;font-size:.74rem;">${cutHtml}</div><div style="font-size:.57rem;color:var(--text-muted);margin-top:4px;">Diagnostic recommendation: εφαρμόζεται μόνο μετά από επαρκές hold-out validation.</div></div></div>
-    <div style="font-size:.65rem;color:var(--text-muted);margin-bottom:7px;"><b style="color:var(--text-main);">Ρυθμίσεις καλύτερης απόδοσης:</b> οι validated παράμετροι είναι league-specific. Το panel εμφανίζει τις αλλαγές που βρήκε το Auto-Calibration αντί να επιβάλλει ένα ενιαίο global set σε όλα τα πρωταθλήματα.</div>
-    <div class="data-table-wrapper"><table class="summary-table"><thead><tr><th class="left-align">League</th><th>Model 1X2</th><th>V≥60</th><th>V≥80</th><th>Brier ↓</th><th>Validated settings</th><th>Effective params</th></tr></thead><tbody>${lgRows||'<tr><td colspan="7">Δεν υπάρχουν δεδομένα.</td></tr>'}</tbody></table></div>
-  </div>`;
-}
-
 // ================================================================
 //  AUDIT, VAULT & AI ADVISOR (Auto-Optimization Logic)
 // ================================================================
 // ================================================================
-//  AUDIT ENGINE v3.3 ULTRA — Bulk Fetch + Persistent FT Cache + Immediate Calibration
+//  AUDIT ENGINE v3 — Auto-detect + Immediate Calibration
 // ================================================================
 
 /**
@@ -6972,7 +4450,7 @@ function renderPerformanceIntelligence(rows){
  * το date range από το vault και τρέχει αμέσως.
  */
 window.runCustomAudit = async function(autoMode = false) {
-  const store = _combinedLearningStore();
+  const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
 
   if(!store.length) {
     if(!autoMode) showErr('Δεν υπάρχουν δεδομένα στο vault. Τρέξτε scan πρώτα.');
@@ -7019,7 +4497,6 @@ window.runCustomAudit = async function(autoMode = false) {
   try {
 
     const lgFilter = document.getElementById('auditLeague')?.value || 'ALL';
-    _rememberLearningWindow(s,e,lgFilter);
 
     let cands = store.filter(x => {
       const d = (x.date || '').split('T')[0];
@@ -7042,34 +4519,22 @@ window.runCustomAudit = async function(autoMode = false) {
     }
 
     // ── Φέρνουμε αποτελέσματα για κάθε fixture ────────────────
-    const stats = { games:0, outHit:0, validOut:0, verT:0,verH:0,verVerifiedT:0,verVerifiedH:0,verStrongT:0,verStrongH:0,verLeanT:0,verLeanH:0, o25T:0, o25H:0, o35T:0, o35H:0, u25T:0, u25H:0, bttsT:0, bttsH:0, exHit:0, corT:0, corH:0, bombT:0, bombH:0, bombProfit:0 };
-    const rows = [], curveData = [], calibRecs = [], archivePairs=[];
+    const stats = { games:0, outHit:0, validOut:0, o25T:0, o25H:0, o35T:0, o35H:0, u25T:0, u25H:0, bttsT:0, bttsH:0, exHit:0, corT:0, corH:0 };
+    const rows = [], curveData = [], calibRecs = [];
     let settled = 0;
-
-    // v6.3 ULTRA AUDIT: cache first, then bulk-by-date, then only missing IDs.
-    // This turns e.g. 100 fixture requests across 5 dates into ~5 bulk calls.
-    setProgress(3,'Audit: έλεγχος persistent cache…');
-    const auditFixtureMap = await preloadAuditFixtures(cands);
 
     for(let i = 0; i < cands.length; i++) {
       const p = cands[i];
-      setProgress(70+Math.round(((i+1)/cands.length)*22), `Audit processing: ${i+1}/${cands.length}`);
+      setProgress(Math.round(((i+1)/cands.length)*100), `Έλεγχος: ${p.homeTeam} vs ${p.awayTeam}`);
 
-      const fix = auditFixtureMap.get(String(p.fixtureId));
+      const fr  = await apiReq(`fixtures?id=${p.fixtureId}`);
+      const fix = fr?.response?.[0];
       if(!fix || !isFinished(fix?.fixture?.status?.short)) continue;
 
-      settled++;archivePairs.push({p,fix});
+      settled++;
       const ah = safeNum(fix.goals.home), aa = safeNum(fix.goals.away);
       const aTot = ah + aa, aExact = `${ah}-${aa}`, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
       stats.games++;
-
-      // v6.4 Unified 1X2 Verification Audit — frozen pre-match verification snapshot
-      const vSig=p.verificationSignal||p.verification?.signal||null;
-      const vStatus=p.verificationStatus||p.verification?.status||'NO_SIGNAL';
-      const vScore=safeNum(p.verificationScore??p.verification?.score,0);
-      const vEvaluable=['1','X','2'].includes(vSig)&&vScore>=VERIFY_1X2.MIN_SIGNAL_SCORE;
-      const vHit=vEvaluable&&vSig===aOut;
-      if(vEvaluable){stats.verT++;if(vHit)stats.verH++;if(vStatus==='VERIFIED'){stats.verVerifiedT++;if(vHit)stats.verVerifiedH++;}else if(vStatus==='STRONG'){stats.verStrongT++;if(vHit)stats.verStrongH++;}else if(vStatus==='LEAN'){stats.verLeanT++;if(vHit)stats.verLeanH++;}}
 
       // Stats μόνο για records με πραγματικό pick (hasPick)
       const hadPick = p.hasPick || (!!(p.omegaPick && !p.omegaPick.includes('ΧΩΡΙΣ') && (p.strength||0) >= 70));
@@ -7091,20 +4556,8 @@ window.runCustomAudit = async function(autoMode = false) {
       if(hadPick && p.predCorner)  { stats.corT++;  stats.corH += isHit1X2 ? 1 : 0; }
       if(hadPick && p.exactScorePred === aExact) stats.exHit++;
 
-      // Bomb-specific settlement: επαληθεύουμε ΑΚΡΙΒΩΣ την αγορά που χαρακτηρίστηκε mispriced.
-      let bombResult=null;
-      if(p.bombSignal){
-        try{ bombResult=await settleBombSignal(p.bombSignal,fix); }catch{}
-        if(bombResult){
-          stats.bombT++;
-          if(bombResult.hit) stats.bombH++;
-          const o=Number(p.bombSignal.bestOdds||0);
-          stats.bombProfit += bombResult.hit && o>1 ? (o-1) : -1; // flat 1-unit stake
-        }
-      }
-
       curveData.push({ tXG: p.tXG||2.5, hitO25: aTot>2.5 ? 1 : 0 });
-      rows.push({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2, bombResult });
+      rows.push({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2 });
 
       // Calibration record — ΠΛΗΡΕΣ με όλα τα fields
       let correct = false;
@@ -7118,27 +4571,15 @@ window.runCustomAudit = async function(autoMode = false) {
       else if(pick.includes('AH'))                                    correct = isHit1X2;
 
       calibRecs.push({
-        fixtureId: p.fixtureId,
-        date:       p.date,
-        leagueId:   p.leagueId,
-        predicted:  pick,
-        actual:     aExact,
-        outcome:    aOut,
-        tXG:        p.tXG   || 2.5,
-        xgDiff:     p.xgDiff || 0,
-        // v6.2 Adaptive 1X2 learns from the RAW prior, never from already-calibrated probabilities.
-        rawPP:      p.rawPP || null,
-        features:   p.oneXTwoFeatures || null,
-        verification: p.verification || null,
-        verificationLeader: p.verificationLeader || p.verification?.leader || null,
-        verificationSignal: p.verificationSignal || p.verification?.signal || null,
-        verificationScore: safeNum(p.verificationScore ?? p.verification?.score,0),
-        isBomb:     !!(p.isBomb),
+        leagueId:  p.leagueId,
+        predicted: pick,
+        actual:    aExact,
+        tXG:       p.tXG   || 2.5,
+        xgDiff:    p.xgDiff || 0,
+        isBomb:    !!(p.isBomb),
         correct,
       });
     }
-
-    const archiveWrite=_archiveSettledBatch(archivePairs);
 
     if(!settled) {
       document.getElementById('auditSection').innerHTML =
@@ -7152,11 +4593,7 @@ window.runCustomAudit = async function(autoMode = false) {
     const col = v => v >= 75 ? 'var(--accent-green)' : v >= 55 ? 'var(--accent-gold)' : 'var(--accent-red)';
 
     const statsCards = [
-      { lbl:'🛡️ 1X2 Verified Layer', h:stats.verH, t:stats.verT, target:65 },
-      { lbl:'✅ VERIFIED ≥80', h:stats.verVerifiedH, t:stats.verVerifiedT, target:70 },
-      { lbl:'🟢 STRONG 70–79', h:stats.verStrongH, t:stats.verStrongT, target:62 },
-      { lbl:'🟡 LEAN 60–69', h:stats.verLeanH, t:stats.verLeanT, target:55 },
-      { lbl:'1X2/ΑΧ legacy',      h:stats.outHit,  t:stats.validOut, target:75 },
+      { lbl:'1X2/ΑΧ',      h:stats.outHit,  t:stats.validOut, target:75 },
       { lbl:'Πάνω 2.5',    h:stats.o25H,    t:stats.o25T,     target:75 },
       { lbl:'Πάνω 3.5',    h:stats.o35H,    t:stats.o35T,     target:75 },
       { lbl:'Κάτω 2.5',    h:stats.u25H,    t:stats.u25T,     target:65 },
@@ -7164,7 +4601,7 @@ window.runCustomAudit = async function(autoMode = false) {
       { lbl:'Ακριβές',      h:stats.exHit,   t:stats.games,    target:15 },
     ];
 
-    let cardsHtml = statsCards.map(m => {
+    const cardsHtml = statsCards.map(m => {
       const v = rv(m.h, m.t);
       const hitTarget = v >= m.target;
       const barW = m.t > 0 ? Math.min(Math.round(v), 100) : 0;
@@ -7180,18 +4617,10 @@ window.runCustomAudit = async function(autoMode = false) {
         </div>
       </div>`;
     }).join('');
-    if(stats.bombT>0){
-      const hit=rv(stats.bombH,stats.bombT), roi=stats.bombProfit/stats.bombT*100;
-      cardsHtml += `<div style="background:var(--bg-base);border:1px solid ${roi>0?'rgba(22,163,74,.28)':'rgba(220,38,38,.22)'};border-radius:var(--radius-sm);padding:14px 16px;">
-        <div style="font-size:.65rem;font-weight:800;color:var(--accent-red);text-transform:uppercase;">💣 Bomb Mispricing</div>
-        <div style="font-family:var(--font-mono);font-size:1.55rem;font-weight:900;color:${roi>=0?'var(--accent-green)':'var(--accent-red)'};">ROI ${roi>=0?'+':''}${roi.toFixed(1)}%</div>
-        <div style="font-size:.68rem;color:var(--text-muted);margin-top:5px;">Hit ${hit.toFixed(1)}% · ${stats.bombH}/${stats.bombT} · P/L ${stats.bombProfit>=0?'+':''}${stats.bombProfit.toFixed(2)} units</div>
-      </div>`;
-    }
 
     // Rows table
     let tableRows = '';
-    rows.forEach(({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2, bombResult }) => {
+    rows.forEach(({ p, ah, aa, aTot, aExact, aOut, aBtts, isHit1X2 }) => {
       const cell = (pred, hit) => pred
         ? `<span style="color:${hit?'var(--accent-green)':'var(--accent-red)'};">${hit?'✅':'❌'}</span>`
         : `<span style="color:var(--text-dim);">—</span>`;
@@ -7203,12 +4632,11 @@ window.runCustomAudit = async function(autoMode = false) {
           <div style="font-size:0.72rem;color:var(--accent-blue);margin-top:2px;">${esc(p.omegaPick||'')}</div>
         </td>
         <td class="data-num" style="font-size:1.1rem;font-weight:900;">${ah}-${aa}</td>
-        <td>${(()=>{const vs=p.verificationSignal||p.verification?.signal;const sc=safeNum(p.verificationScore??p.verification?.score,0);if(!vs||sc<VERIFY_1X2.MIN_SIGNAL_SCORE)return '—';const hit=vs===aOut;return `<span title="V ${sc} · ${esc(p.verificationStatus||p.verification?.status||'')}" style="color:${hit?'var(--accent-green)':'var(--accent-red)'};font-weight:900;">${hit?'✅':'❌'} ${esc(vs)} <small>V${sc}</small></span>`;})()}</td>
+        <td>${p.outPick&&p.outPick!=='-'?`<span style="color:${isHit1X2?'var(--accent-green)':'var(--accent-red)'};">${isHit1X2?'✅':'❌'}</span>`:'—'}</td>
         <td>${cell(p.predOver25, aTot>2.5)}</td>
         <td>${cell(p.predOver35, aTot>3.5)}</td>
         <td>${cell(p.predUnder25, aTot<2.5)}</td>
         <td>${cell(p.predBTTS, aBtts)}</td>
-        <td>${p.bombSignal?(bombResult?`<span title="${esc(p.bombSignal.label||'Bomb')} · @${Number(p.bombSignal.bestOdds||0).toFixed(2)} · ${esc(bombResult.actual||'')}" style="color:${bombResult.hit?'var(--accent-green)':'var(--accent-red)'};font-weight:900;">${bombResult.hit?'✅':'❌'} 💣</span>`:'⚠️'): '—'}</td>
         <td style="font-family:var(--font-mono);font-size:0.9rem;">
           <span style="color:${exactHit1?'var(--accent-green)':'var(--text-muted)'};">${p.exactScorePred||'—'}</span>
           ${p.exactScorePred2&&p.exactScorePred2!==p.exactScorePred?`<br><span style="color:${exactHit2?'var(--accent-green)':'var(--text-dim)'};">${p.exactScorePred2}</span>`:''}
@@ -7217,7 +4645,7 @@ window.runCustomAudit = async function(autoMode = false) {
     });
 
     const html = `<div class="quant-panel">
-      <div class="panel-title">📊 Αποτελέσματα Audit + Recall — ${settled} αγώνες · ${s} → ${e} · archive +${archiveWrite.added}</div>
+      <div class="panel-title">📊 Αποτελέσματα Audit — ${settled} αγώνες · ${s} → ${e}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px;">${cardsHtml}</div>
       <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;font-family:var(--font-cond);font-weight:700;">Καμπύλη xG → Over 2.5</div>
       ${buildMiniCurve(engineConfig.tXG_O25, curveData)}
@@ -7225,7 +4653,7 @@ window.runCustomAudit = async function(autoMode = false) {
         <table class="summary-table">
           <thead><tr>
             <th class="left-align">Αγώνας</th><th>Σκορ</th>
-            <th>1Χ2</th><th>Π2.5</th><th>Π3.5</th><th>Κ2.5</th><th>BTTS</th><th>💣 Bomb</th><th>Ακριβές</th>
+            <th>1Χ2</th><th>Π2.5</th><th>Π3.5</th><th>Κ2.5</th><th>BTTS</th><th>Ακριβές</th>
           </tr></thead>
           <tbody>${tableRows}</tbody>
         </table>
@@ -7239,7 +4667,6 @@ window.runCustomAudit = async function(autoMode = false) {
       setProgress(95, 'Grid Search calibration…');
       window._lastAuditCalibRecs = calibRecs;
       window.runAutoCalibration(calibRecs);
-      try{const cm=_loadContinuousMeta();cm.lastLearnAt=Date.now();cm.lastN=calibRecs.length;_saveContinuousMeta(cm);updateLearningArchiveBadge();}catch{}
 
       // Εφαρμόζουμε αμέσως αν βρεθεί βελτίωση — πάντα, όχι μόνο σε autoMode
       if(window._pendingAdjustments) {
@@ -7261,11 +4688,7 @@ window.runCustomAudit = async function(autoMode = false) {
       }, 350);
     }
 
-    // v6.6: συνολική απόδοση + league ranking + validated settings.
-    const perfHtml=renderPerformanceIntelligence(rows);
-    const auditEl=document.getElementById('auditSection');if(auditEl&&perfHtml)auditEl.insertAdjacentHTML('afterbegin',perfHtml);
-
-    showOk(`✅ Recall & Learn ολοκληρώθηκε — ${settled} settled αγώνες αξιολογήθηκαν · Learning Archive ${archiveWrite.total}.`);
+    showOk(`✅ Audit ολοκληρώθηκε — ${settled} αγώνες αξιολογήθηκαν.`);
 
   } catch(e) {
     showErr(e.message);
@@ -7300,29 +4723,17 @@ function saveToVault(data){
         omegaPick:    d.omegaPick || 'ΧΩΡΙΣ ΣΥΣΤΑΣΗ',
         tXG:          d.tXG   || 0,
         xgDiff:       d.xgDiff || 0,
-        // v6.2: immutable pre-match 1X2 calibration snapshot (raw prior + features + calibrated probabilities)
-        rawPP:        d.ppRaw ? {pHome:safeNum(d.ppRaw.pHome,0),pDraw:safeNum(d.ppRaw.pDraw,0),pAway:safeNum(d.ppRaw.pAway,0)} : null,
-        oneXTwoFeatures: d.oneXTwo?.features ? {...d.oneXTwo.features} : null,
-        calibratedPP: d.pp ? {pHome:safeNum(d.pp.pHome,0),pDraw:safeNum(d.pp.pDraw,0),pAway:safeNum(d.pp.pAway,0)} : null,
-        oneXTwoSource: d.oneXTwo?.source || null,
-        verificationSignal: d.verification?.signal || null,
-        verificationLeader: d.verification?.leader || d.rawOutPick || null,
-        verificationScore:  safeNum(d.verification?.score,0),
-        verificationStatus: d.verification?.status || 'NO_SIGNAL',
-        verification: d.verification ? {signal:d.verification.signal||null,leader:d.verification.leader||null,score:safeNum(d.verification.score,0),status:d.verification.status||'NO_SIGNAL',gapPP:safeNum(d.verification.gapPP,0),xgDiff:safeNum(d.verification.xgDiff,0),components:d.verification.components||null,marketGapPP:Number.isFinite(Number(d.verification.marketGapPP))?Number(d.verification.marketGapPP):null,policy:d.verification.policy||null} : null,
         strength:     d.strength || 0,
         isBomb:       !!(d.isBomb),
         hasPick:      !!(d.omegaPick && !d.omegaPick.includes('ΧΩΡΙΣ') && d.strength >= 70),
       });
     });
     localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));
-    try{_seedLiveBaselinesFromScan(data);}catch{}
   }catch(e){}
 }
-window.clearVault=function(){if(confirm("Purge Vault + Learning Archive + learned 1X2 models?")){localStorage.removeItem(LS_PREDS);localStorage.removeItem(LS_ADAPTIVE_1X2);localStorage.removeItem(LS_VERIFY_1X2_LEARNING);localStorage.removeItem(LS_LEARNING_ARCHIVE);localStorage.removeItem(LS_CONTINUOUS_META);localStorage.removeItem(LS_1X2_POLICY);_adaptive1X2State=null;_verifyLearningState=null;_verificationPolicyState=null;showOk("Vault, Learning Archive και learned 1X2 models διαγράφηκαν.");updateAuditLeagueFilter();}};
+window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
 function updateAuditLeagueFilter() {
-  const store = _combinedLearningStore();
-  updateLearningArchiveBadge();
+  const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
   const sel = document.getElementById('auditLeague');
   if(!sel) return;
   const known = new Set(store.map(x => x.leagueId));
@@ -7419,7 +4830,6 @@ const LEAGUE_GROUPS = [
   { label: '🏴󠁧󠁢󠁳󠁣󠁴󠁿 Σκωτία', ids: [179] },
   { label: '🇹🇷 Τουρκία', ids: [203] },
   { label: '🇬🇷 Ελλάδα', ids: [197] },
-  { label: '🇨🇾 Κύπρος', ids: [318] },
   { label: '🇩🇰 Δανία', ids: [119] },
   { label: '🇸🇪 Σουηδία', ids: [113] },
   { label: '🇳🇴 Νορβηγία', ids: [103] },
@@ -8280,6 +5690,7 @@ function renderStabilitySignals(rec) {
 //    Πάνω 2.5 ≥ 75% → βελτιστοποίηση minXGO25
 //    Πάνω 3.5 ≥ 75% → βελτιστοποίηση minXGO35
 //    Κόρνερ   ≥ 70% → βελτιστοποίηση mult (secondary)
+//    Bombs    ≥ 60% → βελτιστοποίηση mult
 //
 //  GRID: 15 τιμές ανά παράμετρο = πολύ γρήγορο (pure JS, < 50ms)
 //  FALLBACK: αν δεν βρεθεί τιμή που χτυπάει τον στόχο,
@@ -8287,11 +5698,12 @@ function renderStabilitySignals(rec) {
 // ================================================================
 
 const CALIB_TARGETS = {
-  // 1X2 is calibrated by Adaptive 1X2 v6.2 (Brier/Log Loss), not the legacy xgDiff hit-rate grid.
+  outcomes: 0.75,
   btts:     0.80,
   over25:   0.75,
   over35:   0.75,
   corners:  0.70,
+  bombs:    0.60,
 };
 const CALIB_MIN_N  = 8;    // ελάχιστα records ανά market
 const CALIB_GRID_N = 20;   // σημεία grid ανά παράμετρο
@@ -8388,17 +5800,21 @@ function gridSearchLeague(records, leagueId) {
   // 2. Δοκιμάζουμε thresholds σε ΟΛΑ τα settled ματς — ακόμα και αυτά
   // που ήταν "ΧΩΡΙΣ ΣΥΣΤΑΣΗ". Αν αλλάξει το όριο, μπορεί να πάρουν σήμα.
   const byMarket = {
+    outcomes: settledRecords,
     over25:   settledRecords,
     over35:   settledRecords,
     btts:     settledRecords,
     corners:  settledRecords,
+    bombs:    settledRecords,
   };
 
   const marketToParam = {
+    outcomes: 'xgDiff',
     over25:   'minXGO25',
     over35:   'minXGO35',
     btts:     'minBTTS',
     corners:  'mult',
+    bombs:    'mult',
   };
 
   const optimized = {};
@@ -8518,18 +5934,6 @@ window.runAutoCalibration = function(auditRecords) {
     return;
   }
 
-  // v6.2: full probabilistic 1/X/2 calibration (Brier + Log Loss + hold-out validation).
-  const adaptive1X2Summary = runAdaptive1X2Calibration(auditRecords);
-  const adaptive1X2Html = renderAdaptive1X2Calibration(adaptive1X2Summary);
-  const verificationLearningSummary = runVerificationLearning(auditRecords);
-  const verificationLearningHtml = renderVerificationLearning(verificationLearningSummary);
-  const verificationPolicySummary = runVerificationPolicyLearning(auditRecords);
-  const verificationPolicyHtml = renderVerificationPolicyLearning(verificationPolicySummary);
-  // Probabilistic calibration ή verification reliability εφαρμόζονται μόνο μετά από hold-out βελτίωση.
-  if((adaptive1X2Summary?.applied>0 || verificationLearningSummary?.accepted || verificationPolicySummary?.applied>0) && window.scannedMatchesData?.length){
-    try{ window.resimulateMatches(); saveToVault(window.scannedMatchesData); }catch(e){ console.warn('[APEX] 1X2 calibrated re-simulate',e); }
-  }
-
   // Group by league
   const byLeague = {};
   auditRecords.forEach(r => {
@@ -8560,7 +5964,7 @@ window.runAutoCalibration = function(auditRecords) {
       const improved = s.improved;
       const barW = Math.min(Math.round(s.bestAcc / s.target * 100), 100);
       const barColor = reached ? 'var(--accent-green)' : improved ? 'var(--accent-gold)' : 'var(--accent-red)';
-      const mLabel = {outcomes:'🏆 1X2/AH', btts:'🎯 BTTS', over25:'🔥 O2.5', over35:'🚀 O3.5', corners:'🚩 Κόρνερ'}[m] || m;
+      const mLabel = {outcomes:'🏆 1X2/AH', btts:'🎯 BTTS', over25:'🔥 O2.5', over35:'🚀 O3.5', corners:'🚩 Κόρνερ', bombs:'💣 Bombs'}[m] || m;
       const statusIcon = reached ? '✅' : improved ? '📈' : '⚠️';
       const paramChange = s.changed && s.improved
         ? `<span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent-gold);margin-left:6px;">${m==='outcomes'?'xgDiff':m==='over25'?'minXGO25':m==='over35'?'minXGO35':m==='btts'?'minBTTS':'mult'}: ${s.curVal.toFixed(3)}→<strong>${s.bestVal.toFixed(3)}</strong></span>`
@@ -8607,16 +6011,13 @@ window.runAutoCalibration = function(auditRecords) {
         <button onclick="window.applyCalibAdjustments(window._pendingAdjustments)" class="btn btn-gold" style="height:34px;font-size:0.8rem;">✅ Εφαρμογή & Re-Simulate</button>
       </div>`
     : `<div style="padding:14px;background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);border-radius:8px;font-size:0.8rem;color:var(--accent-green);margin-bottom:14px;">
-        ✅ <strong>Δεν βρέθηκαν νέες validated αλλαγές στο legacy grid.</strong> Το Adaptive 1X2 εμφανίζεται ξεχωριστά παραπάνω και εφαρμόζει αλλαγές μόνο όταν βελτιώνουν hold-out Brier/Log Loss.
+        ✅ <strong>Το μοντέλο είναι άριστα βαθμονομημένο!</strong> Όλα τα πρωταθλήματα πετυχαίνουν τους στόχους ή δεν επιδέχονται περαιτέρω βελτίωση.
       </div>`;
 
   el.innerHTML = `
-    ${adaptive1X2Html}
-    ${verificationLearningHtml}
-    ${verificationPolicyHtml}
     ${headerHtml}
     ${rows}
-    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Adaptive 1X2: min global ${ADAPTIVE_1X2_MIN_GLOBAL} / league ${ADAPTIVE_1X2_MIN_LEAGUE} · Verification learning min ${VERIFY_LEARN_MIN_N} · Legacy grid: ${CALIB_GRID_N} τιμές/παράμετρο για totals/BTTS/corners · Pure backtest χωρίς API calls</div>`;
+    <div style="margin-top:8px;font-size:0.62rem;color:var(--text-muted);">Grid: ${CALIB_GRID_N} τιμές/παράμετρο · Min samples: ${CALIB_MIN_N} · Pure backtest χωρίς API calls</div>`;
 };
 
 function renderCalibLog() {
@@ -8667,7 +6068,7 @@ window.resimulateMatches=function(){
     const hXGfinal=hXG*hFactor, aXGfinal=aXG*aFactor;
     const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
     const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
-    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId,d.h2h||null,{lineupData:d.lineupData,hInjAdj:d.hInjAdj,aInjAdj:d.aInjAdj,marketNoVig1X2:d.marketNoVig1X2});
+    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId);
     const htAnalysis=computeHTAnalysis(res.hExp,res.aExp,lp);
     Object.assign(d,{
       tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
@@ -8677,7 +6078,7 @@ window.resimulateMatches=function(){
       outPick:res.outPick,xgDiff:res.xgDiff,
       exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
       omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
-      hExp:res.hExp,aExp:res.aExp,pp:res.pp,ppRaw:res.ppRaw,oneXTwo:res.oneXTwo,verification:res.verification,rawOutPick:res.rawOutPick,offside:res.offside,
+      hExp:res.hExp,aExp:res.aExp,pp:res.pp,
       lambdaTotal:res.lambdaTotal,cornerConf:res.cornerConf,expCor:res.expCor
     });
     // Re-adjust card probabilities με νέο xgDiff
@@ -8686,7 +6087,6 @@ window.resimulateMatches=function(){
     if(d.aPlayers?.length) adjustPlayerCardProbs(d.aPlayers, d.hS, cardCtx);
   });
   rebuildTopLists();renderTopSections();renderSummaryTable();showOk('Re-simulated!');
-  Promise.allSettled([window.refreshBest4({silent:true}),window.refreshBombs({silent:true})]).catch(()=>{});
 };
 
 window.addEventListener('DOMContentLoaded',()=>{
@@ -8877,45 +6277,6 @@ window.addEventListener('DOMContentLoaded',()=>{
       // Bet Journal + Sheets config section
       const advSec=document.getElementById('advisorSection');
       if(advSec){
-        // Sheets URL config panel
-        const sheetsPanel=document.createElement('div');
-        sheetsPanel.className='quant-panel';sheetsPanel.style.borderColor='rgba(52,211,153,0.3)';
-        const savedUrl=localStorage.getItem(LS_SHEETS_URL)||'';
-        sheetsPanel.innerHTML=`<div class="panel-title clickable" style="color:var(--accent-green);" onclick="togglePanel('sheetsCfgBody','sheetsCfgArrow')">
-          <span>📊 Google Sheets Integration</span><span id="sheetsCfgArrow" class="arrow">▼</span>
-        </div>
-        <div id="sheetsCfgBody" style="display:none;">
-          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
-            Εισάγετε το Apps Script Web App URL για αυτόματο push στατιστικών μετά κάθε scan.<br>
-            <a href="https://script.google.com" target="_blank" style="color:var(--accent-blue);font-size:0.75rem;">→ Google Apps Script</a>
-          </div>
-          <div class="toolbar">
-            <div class="input-group" style="flex:3;"><label class="input-label">Apps Script URL</label>
-              <input type="url" id="sheetsUrlInput" class="quant-input" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(savedUrl)}"></div>
-            <button class="btn btn-primary" onclick="(()=>{const u=document.getElementById('sheetsUrlInput').value.trim();if(u){localStorage.setItem(LS_SHEETS_URL,u);showOk('Sheets URL αποθηκεύτηκε.');}else{localStorage.removeItem(LS_SHEETS_URL);showOk('Sheets URL αφαιρέθηκε.');}})()">💾 Αποθήκευση</button>
-            <button class="btn btn-outline" onclick="pushToSheets(window.scannedMatchesData)" style="color:var(--accent-green);border-color:rgba(52,211,153,0.4);">▶ Push Now</button>
-          </div>
-          <div style="margin-top:14px;font-size:0.72rem;color:var(--text-muted);">
-            <strong style="color:var(--text-main);">Apps Script (αντίγραψε στο Google Drive):</strong><br>
-            <pre style="background:var(--bg-base);border:1px solid var(--border-light);border-radius:6px;padding:10px;font-size:0.65rem;overflow-x:auto;white-space:pre-wrap;line-height:1.5;">function doPost(e) {
-  var data = JSON.parse(e.postData.contents);
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // Sheet: Predictions
-  var pred = ss.getSheetByName('προβλέψεις') || ss.insertSheet('προβλέψεις');
-  if(pred.getLastRow()===0) pred.appendRow(['date','fixtureId','home','away','league','leagueId','pick','conf%','tXG','hXG','aXG','xgDiff','exact','htScore','pO25','pO35','pU25','pBTTS','cornerConf','ev%','kelly','sitFlags','hasLineup','hasInjury']);
-  (data.predRows||[]).forEach(function(r){ pred.appendRow([r.date,r.fixtureId,r.home,r.away,r.league,r.leagueId,r.omegaPick,r.confidence,r.tXG,r.hXG,r.aXG,r.xgDiff,r.exactScore,r.htScore,r.pO25,r.pO35,r.pU25,r.pBTTS,r.cornerConf,r.ev,r.kelly,r.sitFlags,r.hasLineup,r.hasInjury]); });
-
-  // Sheet: Team Stats
-  var ts = ss.getSheetByName('team_stats') || ss.insertSheet('team_stats');
-  if(ts.getLastRow()===0) ts.appendRow(['date','team','league','leagueId','isHome','fXG','fXGA','sXG','formRating','avgCorners','avgCards','shotsOn','shotsOff','sdGoals_6','sdCorners_6','sdCards_6','sdGoals_sea','seaPlayed']);
-  (data.teamRows||[]).forEach(function(r){ ts.appendRow([r.date,r.team,r.league,r.leagueId,r.isHome,r.fXG,r.fXGA,r.sXG,r.formRating,r.avgCorners,r.avgCards,r.shotsOn,r.shotsOff,r.sdGoals_6,r.sdCorners_6,r.sdCards_6,r.sdGoals_sea,r.seaPlayed]); });
-
-  return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);
-}</pre>
-          </div>
-        </div>`;
-        advSec.appendChild(sheetsPanel);
         // Bet Journal section
         const bjSection=document.createElement('div');bjSection.id='betJournalSection';
         advSec.appendChild(bjSection);
@@ -8953,7 +6314,6 @@ window.addEventListener('DOMContentLoaded',()=>{
               <div style="font-size:0.65rem;color:var(--text-muted);">Last poll: <span id="liveTrackerLastPoll" style="font-family:var(--font-mono);">—</span></div>
             </div>
           </div>
-          <div id="liveLearningStatus" style="margin-bottom:12px;padding:10px 12px;background:rgba(124,58,237,.045);border:1px solid rgba(124,58,237,.16);border-radius:9px;"></div>
           <div id="liveAlertFlash" style="margin-bottom:12px;"></div>
           <div id="liveDashboard" style="display:flex;flex-direction:column;gap:12px;"></div>
           <div id="liveAlertSection" style="margin-top:20px;display:none;">
@@ -8968,10 +6328,8 @@ window.addEventListener('DOMContentLoaded',()=>{
       }
       // Load saved live alerts
       try{const la=JSON.parse(localStorage.getItem(LS_LIVE_ALERTS));if(Array.isArray(la))liveAlerts=la;}catch{}
-      try{_renderLiveLearningStatus();}catch{}
     }
   });
-  try{updateLearningArchiveBadge();setTimeout(()=>_maybeBackgroundContinuousLearning(false),3500);}catch{}
   const today=todayISO();const ss=document.getElementById('scanStart'),se=document.getElementById('scanEnd');if(ss)ss.value=today;if(se)se.value=today;
   const d15=new Date();d15.setDate(d15.getDate()-15);const as=document.getElementById('auditStart'),ae=document.getElementById('auditEnd');if(as)as.value=d15.toISOString().split('T')[0];if(ae)ae.value=today;
 });
