@@ -183,7 +183,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '15/09/2026';
-const BUILD_TIME    = '13:51 EET';
+const BUILD_TIME    = '14:05 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1787,6 +1787,9 @@ window.runScan=async function(){
       showOk(`✅ Scan ολοκληρώθηκε — ${all.length} αγώνες.`);
     }
     window.fetchAllOdds().catch(()=>{});
+
+    // ── Auto-Calibration: τρέχει στο background μετά κάθε scan ──
+    setTimeout(() => window.autoCalibrate(), 800);
   }catch(e){showErr(e.message);}finally{isRunning=false;setLoader(false);setBtnsDisabled(false);}
 };
 
@@ -5946,8 +5949,111 @@ window.applyCalibAdjustments = function(adjustmentsByLeague) {
 };
 
 /**
- * Κύρια συνάρτηση: τρέχει grid search και εμφανίζει αποτελέσματα.
+ * AUTO-CALIBRATION — τρέχει αυτόματα μετά κάθε scan
+ * Ελέγχει το Vault, τρέχει grid search, εφαρμόζει βελτιώσεις
+ * χωρίς να ρωτά τον χρήστη.
  */
+window.autoCalibrate = function() {
+  try {
+    // Φόρτωσε όλα τα settled ματς από το Vault
+    const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
+    const settled = store.filter(d =>
+      d.actualResult && ['1','X','2'].includes(d.actualResult) &&
+      d.omegaPick && d.leagueId
+    );
+
+    // Ελάχιστο 20 ματς με αποτέλεσμα για αξιόπιστη βαθμονόμηση
+    const MIN_FOR_CALIB = 20;
+    if(settled.length < MIN_FOR_CALIB) return;
+
+    // Group ανά πρωτάθλημα
+    const byLeague = {};
+    settled.forEach(r => {
+      const id = r.leagueId || 0;
+      if(!byLeague[id]) byLeague[id] = [];
+      byLeague[id].push(r);
+    });
+
+    // Grid search ανά πρωτάθλημα με ≥8 ματς
+    const allResults = {};
+    let totalImproved = 0;
+    let totalChanges = 0;
+    const improvements = [];
+
+    Object.entries(byLeague).forEach(([lid, recs]) => {
+      if(recs.length < CALIB_MIN_N) return;
+      const res = gridSearchLeague(recs, parseInt(lid));
+      allResults[lid] = res;
+
+      // Έλεγχος αν υπάρχουν πραγματικές βελτιώσεις
+      const hasImprovement = Object.entries(res.stats || {}).some(([,s]) =>
+        s.improved && s.changed && (s.bestAcc - s.baselineAcc) > 2.0
+      );
+      if(hasImprovement) {
+        totalImproved++;
+        // Συλλογή βελτιώσεων για notification
+        Object.entries(res.stats || {}).forEach(([market, s]) => {
+          if(s.improved && s.changed) {
+            const lgName = (typeof LEAGUES_DATA!=='undefined' ?
+              LEAGUES_DATA.find(l=>l.id==lid)?.name : null) || `League ${lid}`;
+            improvements.push(`${lgName} · ${market}: ${s.baselineAcc}%→${s.bestAcc}%`);
+            totalChanges++;
+          }
+        });
+      }
+    });
+
+    if(!totalImproved) return; // Καμία βελτίωση → τίποτα
+
+    // Εφαρμογή ΧΩΡΙΣ ερώτηση
+    Object.entries(allResults).forEach(([lid, data]) => {
+      if(!data.optimized || !Object.keys(data.optimized).length) return;
+      const id = parseInt(lid);
+      if(!leagueMods[id]) leagueMods[id] = {};
+      Object.assign(leagueMods[id], data.optimized);
+    });
+
+    // Αποθήκευση
+    try { localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); } catch {}
+    const grkNow = new Date().toLocaleString('el-GR', {
+      timeZone:'Europe/Athens',
+      day:'2-digit',month:'2-digit',year:'numeric',
+      hour:'2-digit',minute:'2-digit'
+    });
+    try { localStorage.setItem('omega_last_calib_ts', grkNow); } catch {}
+    updateLastCalibBadge(grkNow);
+
+    // Calibration log
+    calibLog.unshift({
+      date: grkNow,
+      auto: true,
+      applied: Object.entries(allResults)
+        .filter(([,d])=>d.optimized&&Object.keys(d.optimized).length)
+        .map(([lid,d])=>({
+          leagueId: parseInt(lid),
+          params: d.optimized,
+          markets: Object.entries(d.stats||{})
+            .filter(([,s])=>s.changed&&s.improved)
+            .map(([m,s])=>`${m}: ${s.baselineAcc}%→${s.bestAcc}%`)
+            .join(', ')
+        }))
+    });
+    saveCalibLog();
+    renderCalibLog();
+
+    // Re-simulate αν υπάρχουν ολοκληρωμένα ματς
+    if(window.scannedMatchesData?.length) window.resimulateMatches();
+
+    // Notification — διακριτικό, όχι intrusive
+    const shortList = improvements.slice(0,3).join(' | ');
+    const extra = improvements.length > 3 ? ` +${improvements.length-3} ακόμα` : '';
+    showOk(`🎯 Auto-Calib: ${totalChanges} αλλαγές σε ${totalImproved} πρωτ. — ${shortList}${extra}`);
+
+  } catch(e) {
+    console.warn('[APEX] autoCalibrate error:', e.message);
+  }
+};
+
 window.runAutoCalibration = function(auditRecords) {
   const el = document.getElementById('autoCalibPanel');
   if(!el) return;
