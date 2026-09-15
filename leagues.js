@@ -17,6 +17,7 @@ const LEAGUES_DATA = [
   { id:39,  name:"Premier League (EN)"     },   // TIGHT
   { id:40,  name:"Championship (EN)"       },   // TRAP
   { id:41,  name:"League One (EN)"         },   // TRAP
+  { id:45,  name:"EFL Cup (EN)"            },   // TRAP — knock-out, B teams
 
   // ── Spain ─────────────────────────────────────────────────
   { id:140, name:"La Liga (ES)"            },   // TIGHT
@@ -25,6 +26,7 @@ const LEAGUES_DATA = [
   // ── Italy ─────────────────────────────────────────────────
   { id:135, name:"Serie A (IT)"            },   // TIGHT
   { id:136, name:"Serie B (IT)"            },   // TRAP
+  { id:137, name:"Coppa Italia (IT)"       },   // TRAP — knock-out, rotation
 
   // ── Germany ───────────────────────────────────────────────
   { id:78,  name:"Bundesliga (DE)"         },   // GOLD ★
@@ -57,9 +59,6 @@ const LEAGUES_DATA = [
 
   // ── Greece ────────────────────────────────────────────────
   { id:197, name:"Super League (GR)"       },   // TIGHT
-
-  // ── Cyprus ────────────────────────────────────────────────
-  { id:318, name:"1. Division (CY)"         },   // Standard — Α΄ Εθνική Κύπρου
 
   // ── ═══ ΒΟΡΕΙΕΣ ΧΩΡΕΣ ═══ ────────────────────────────────
 
@@ -124,7 +123,6 @@ const MY_LEAGUES_IDS  = [
   140,  // La Liga ES
   135,  // Serie A IT
   197,  // Super League GR
-  318,  // 1. Division CY — Α΄ Εθνική Κύπρου
 ];
 
 // ── League avg goals per match (home + away) ──────────────────
@@ -142,6 +140,7 @@ const LEAGUE_AVG_GOALS = {
   113: 2.85,  // Allsvenskan
   144: 2.70,  // Jupiler Pro
   39:  2.72,  // Premier League
+  45:  2.85,  // EFL Cup — rotation squads, more open
   203: 2.65,  // Süper Lig
   71:  2.65,  // Brasileirao
   244: 2.58,  // Veikkausliiga
@@ -172,8 +171,8 @@ const LEAGUE_AVG_GOALS = {
 // TRAP: υψηλή διακύμανση, πολλές εκπλήξεις → mult × 0.90
 // Απαραίτητο: να μην υπάρχουν IDs που δεν ανήκουν στο LEAGUES_DATA
 const TRAP_LEAGUES = new Set([
-  40, 41,        // Championship, League One (EN)
-  136, 141,      // Serie B (IT), La Liga 2 (ES)
+  40, 41, 45,    // Championship, League One, EFL Cup (EN)
+  136, 137, 141, // Serie B, Coppa Italia (IT), La Liga 2 (ES)
   79, 62,        // 2. Bundesliga (DE), Ligue 2 (FR)
   357, 395,      // Premier Division IE, NIFL Premiership NIR
   239, 280, 268, // Colombia, Peru, Uruguay
@@ -214,9 +213,9 @@ const LEAGUES_HT_FACTORS = {
   // Germany
   78:  0.420, 79:  0.425,
   // England
-  39:  0.440, 40:  0.435, 41:  0.435,
+  39:  0.440, 40:  0.435, 41:  0.435, 45:  0.448, // EFL Cup — goals early (rotation)
   // Italy
-  135: 0.440, 136: 0.435,
+  135: 0.440, 136: 0.435, 137: 0.445, // Coppa Italia — αρκετά γκολ 1ου ημ.
   // Spain
   140: 0.430, 141: 0.430,
   // France
@@ -235,9 +234,8 @@ const LEAGUES_HT_FACTORS = {
   179: 0.438,
   // Turkey
   203: 0.438,
-  // Greece / Cyprus
+  // Greece
   197: 0.435,
-  318: 0.435, // Cyprus 1. Division — standard HT fallback
   // Scandinavia / Nordic
   113: 0.430, // Allsvenskan (SE)
   103: 0.440, // Eliteserien (NO) — γκολ και στα 2 ημίχρονα
