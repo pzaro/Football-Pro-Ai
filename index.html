@@ -6,7 +6,7 @@
   <title>APEX OMEGA v5.0 — AI Quant Terminal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260915-deepcheck">
 </head>
 <body>
 
@@ -22,6 +22,7 @@
       <span id="lastUpdatedText">—</span>
     </div>
     <button onclick="openGlossary()" style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);color:var(--blue);border-radius:8px;padding:4px 10px;font-size:0.72rem;font-weight:700;cursor:pointer;font-family:var(--font-cond);letter-spacing:0.05em;" title="Γλωσσάριο Δεικτών">? Γλωσσάριο</button>
+      <button onclick="window.testApi && window.testApi()" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);color:var(--green);border-radius:8px;padding:4px 10px;font-size:0.72rem;font-weight:700;cursor:pointer;font-family:var(--font-cond);letter-spacing:0.05em;" title="Έλεγχος σύνδεσης API-Football">🩺 API Test</button>
   </div>
   <div class="header-right">
     <div class="bankroll-widget" onclick="openBankroll()" title="Bankroll Manager">
@@ -328,7 +329,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="leagues.js"></script>
-<script src="stats.js"></script>
+<script src="leagues.js?v=20260915-deepcheck"></script>
+<script src="stats.js?v=20260915-deepcheck"></script>
 </body>
 </html>

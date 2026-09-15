@@ -168,22 +168,63 @@ const SETTINGS_MAP = {
   cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold'
 };
 
-const _apiQueue = []; let _apiActive = 0;
-// 🚀 Paid Plan (30 req/sec limit)
-// Paid Plan: 15 concurrent + 35ms = ~25 req/sec (ασφαλές — browser limit ~6/host)
-// Ultra Plan: 75.000 req/day → ~52 req/sec max
-// 25 concurrent + 20ms gap = ~40 req/sec (ασφαλές)
-// Ultra plan: 75k req/day — original working values
-const MAX_CONCURRENT = 15;
-const REQUEST_GAP_MS = 35;
+const _apiQueue = [];
+let _apiActive = 0;
+let _apiPumpTimer = null;
+let _apiLastStart = 0;
+
+// API-SPORTS rate control.
+// IMPORTANT: daily quota != requests/second. Start conservatively and adapt
+// after /status reports the subscription / response rate-limit headers.
+const MAX_CONCURRENT = 6;
+let API_START_GAP_MS = 220; // safe default ≈4.5 req/s until plan is known
+const REQUEST_GAP_MS = 0;   // pacing is done BEFORE request start, not after finish
+let apiRateInfo = { plan:'unknown', perMinute:null, remainingMinute:null, dailyRemaining:null, gapMs:API_START_GAP_MS, lastStatus:null };
 let _errTimer = null, _okTimer = null;
+
+function _apiErrorText(data){
+  const e=data?.errors;
+  if(!e) return '';
+  if(typeof e==='string') return e;
+  if(Array.isArray(e)) return e.filter(Boolean).map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' | ');
+  if(typeof e==='object') return Object.entries(e).map(([k,v])=>`${k}: ${typeof v==='string'?v:JSON.stringify(v)}`).join(' | ');
+  return String(e);
+}
+function _hasApiErrors(data){
+  const e=data?.errors;
+  return !!(e && ((Array.isArray(e)&&e.length) || (typeof e==='object'&&!Array.isArray(e)&&Object.keys(e).length) || (typeof e==='string'&&e.trim())));
+}
+function _adaptApiRate(plan, headers){
+  const p=String(plan||'').toLowerCase();
+  const hdrLimit=parseInt(headers?.get?.('x-ratelimit-limit') || headers?.get?.('X-RateLimit-Limit') || '',10);
+  // Official 2026 limits: Free 10/min, Pro 300/min, Ultra 450/min, Mega 900/min.
+  let perMinute=Number.isFinite(hdrLimit)&&hdrLimit>0 ? hdrLimit : null;
+  if(!perMinute){
+    if(p.includes('free')) perMinute=10;
+    else if(p.includes('pro')) perMinute=300;
+    else if(p.includes('ultra')) perMinute=450;
+    else if(p.includes('mega')) perMinute=900;
+  }
+  if(perMinute){
+    // 12% safety margin against bursts / shared-IP protection.
+    API_START_GAP_MS=Math.max(70, Math.ceil((60000/perMinute)*1.12));
+  } else {
+    API_START_GAP_MS=220;
+  }
+  apiRateInfo.plan=plan||'unknown';
+  apiRateInfo.perMinute=perMinute;
+  apiRateInfo.gapMs=API_START_GAP_MS;
+  const rem=parseInt(headers?.get?.('x-ratelimit-remaining') || headers?.get?.('X-RateLimit-Remaining') || '',10);
+  if(Number.isFinite(rem)) apiRateInfo.remainingMinute=rem;
+  window.__APEX_API_DIAG__={...apiRateInfo};
+}
 
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '15/09/2026';
-const BUILD_TIME    = '16:00 EET · SAFE SPEED';
+const BUILD_TIME    = 'DEEP CHECK · API RATE FIX';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -609,51 +650,151 @@ function getPoissonMatrixHTML(hL,aL,maxGoals=4){
 // ================================================================
 //  API FETCHING & CACHING
 // ================================================================
-async function apiReq(path){return new Promise(resolve=>{_apiQueue.push({path,resolve});_drainQueue();});}
-async function _drainQueue(){while(_apiActive<MAX_CONCURRENT&&_apiQueue.length>0){const{path,resolve}=_apiQueue.shift();_apiActive++;_executeRequest(path,resolve);}}
-async function _executeRequest(path,resolve){
-  // Jitter 0-20ms
-  await new Promise(r=>setTimeout(r,Math.random()*20));
-  const MAX_RETRIES=3;
-  let resolved=false;
+async function apiReq(path){
+  return new Promise((resolve,reject)=>{
+    _apiQueue.push({path,resolve,reject});
+    _drainQueue();
+  });
+}
+
+function _drainQueue(){
+  if(_apiPumpTimer || !_apiQueue.length || _apiActive>=MAX_CONCURRENT) return;
+  const wait=Math.max(0, API_START_GAP_MS-(Date.now()-_apiLastStart));
+  _apiPumpTimer=setTimeout(()=>{
+    _apiPumpTimer=null;
+    if(!_apiQueue.length || _apiActive>=MAX_CONCURRENT){ _drainQueue(); return; }
+    const {path,resolve,reject}=_apiQueue.shift();
+    _apiActive++;
+    _apiLastStart=Date.now();
+    _executeRequest(path,resolve,reject);
+    _drainQueue(); // schedule the next START, respecting API_START_GAP_MS
+  },wait);
+}
+
+async function _executeRequest(path,resolve,reject){
+  const MAX_RETRIES=2;
+  let lastErr=null;
   try{
     for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
       try{
-        const r=await fetch(`${API_BASE}/${path}`,{headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}});
+        const r=await fetch(`${API_BASE}/${path}`,{
+          method:'GET',
+          headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}
+        });
+        let data=null;
+        try{ data=await r.json(); }catch{ data=null; }
+
+        const minuteRemaining=parseInt(r.headers.get('X-RateLimit-Remaining')||'',10);
+        const dailyRemaining=parseInt(r.headers.get('x-ratelimit-requests-remaining')||'',10);
+        if(Number.isFinite(minuteRemaining)) apiRateInfo.remainingMinute=minuteRemaining;
+        if(Number.isFinite(dailyRemaining)) apiRateInfo.dailyRemaining=dailyRemaining;
+        window.__APEX_API_DIAG__={...apiRateInfo,lastHttp:r.status,lastPath:path};
+
         if(r.ok){
-          const data=await r.json();
-          // Έλεγχος αν το response έχει πραγματικά δεδομένα (όχι κενό array)
-          if(data.response&&typeof currentCredits==='number'){
-            currentCredits--;
+          const apiErr=_apiErrorText(data);
+          if(_hasApiErrors(data)){
+            console.warn(`[APEX API] ${path} returned API error:`,apiErr,data?.errors);
+            // Rate/auth/quota errors must NOT silently become empty football data.
+            if(/rate|limit|quota|key|auth|forbidden|subscription/i.test(apiErr)){
+              throw new Error(`API: ${apiErr}`);
+            }
+          }
+          if(data?.response && typeof currentCredits==='number'){
+            currentCredits=Math.max(0,currentCredits-1);
             const el=document.getElementById('creditDisplay');
             if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}
           }
-          resolve(data); resolved=true; return;
+          resolve(data||{response:[]});
+          return;
         }
-        // 429 Rate limit → aggressive backoff + log
+
+        const bodyErr=_apiErrorText(data) || `HTTP ${r.status}`;
+        if(r.status===403 || r.status===401){
+          throw new Error(`API authentication failed (${r.status}): ${bodyErr}`);
+        }
         if(r.status===429){
-          const wait=2000*(attempt+1);
-          console.warn(`[APEX] 429 Rate limit on: ${path} — waiting ${wait}ms`);
-          await new Promise(r=>setTimeout(r,wait));
+          lastErr=new Error(`API rate limit 429: ${bodyErr}`);
+          if(attempt<MAX_RETRIES){
+            const wait=5000*(attempt+1);
+            console.warn(`[APEX] 429 on ${path} — cooling down ${wait}ms`);
+            await new Promise(x=>setTimeout(x,wait));
+            continue;
+          }
+          throw lastErr;
+        }
+        if((r.status===499 || r.status>=500) && attempt<MAX_RETRIES){
+          lastErr=new Error(`API HTTP ${r.status}: ${bodyErr}`);
+          await new Promise(x=>setTimeout(x,1500*(attempt+1)));
           continue;
         }
-        // Άλλα errors (500, 503 κλπ)
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,800*(attempt+1)));continue;}
+        throw new Error(`API HTTP ${r.status}: ${bodyErr}`);
       }catch(err){
-        if(attempt<MAX_RETRIES){await new Promise(r=>setTimeout(r,600*(attempt+1)));continue;}
-        console.warn(`[APEX] Network error: ${path}`,err.message);
+        lastErr=err;
+        // Authentication/rate errors are explicit; network/5xx may retry.
+        if(/authentication failed|rate limit 429|API: .*rate|API: .*key|API: .*quota/i.test(err?.message||'')){
+          if(attempt>=MAX_RETRIES || /authentication failed/i.test(err.message)) break;
+        } else if(attempt<MAX_RETRIES){
+          await new Promise(x=>setTimeout(x,1200*(attempt+1)));
+          continue;
+        }
+        break;
       }
     }
-    if(!resolved){
-      console.warn(`[APEX] Failed after ${MAX_RETRIES} retries: ${path}`);
-      resolve({response:[]});
-    }
+    console.error(`[APEX] API request failed: ${path}`,lastErr);
+    reject(lastErr||new Error(`API request failed: ${path}`));
   }finally{
-    await new Promise(r=>setTimeout(r,REQUEST_GAP_MS));
-    _apiActive--;_drainQueue();
+    _apiActive--;
+    _drainQueue();
   }
 }
-window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
+
+window.apiHealthCheck=async function(verbose=false){
+  const el=document.getElementById('creditDisplay');
+  try{
+    if(el){el.textContent='TEST';el.className='credit-value';}
+    const r=await fetch(`${API_BASE}/status`,{
+      method:'GET',
+      headers:{'x-apisports-key':API_KEY,'Accept':'application/json'}
+    });
+    let d=null;
+    try{d=await r.json();}catch{}
+    const apiErr=_apiErrorText(d);
+    if(!r.ok) throw new Error(`API status ${r.status}: ${apiErr||'request rejected'}`);
+    if(_hasApiErrors(d)) throw new Error(`API status: ${apiErr}`);
+    if(!d?.response) throw new Error('API status: κενή απάντηση');
+
+    const plan=d.response?.subscription?.plan || d.response?.subscription || 'unknown';
+    _adaptApiRate(plan,r.headers);
+    const req=d.response?.requests||{};
+    const limit=Number(req.limit_day ?? req.limit ?? 0);
+    const used=Number(req.current ?? 0);
+    currentCredits=limit>0 ? Math.max(0,limit-used) : null;
+    apiRateInfo.lastStatus='OK';
+    apiRateInfo.dailyRemaining=currentCredits;
+    window.__APEX_API_DIAG__={...apiRateInfo,http:r.status,keyLength:API_KEY.length,keySuffix:API_KEY.slice(-4)};
+    if(el){
+      el.textContent=currentCredits===null?'API OK':currentCredits;
+      el.className='credit-value'+(currentCredits!==null&&currentCredits<50?' low':'');
+      el.title=`API OK · ${plan} · pace ${API_START_GAP_MS}ms`;
+    }
+    console.info('[APEX API] HEALTH OK',window.__APEX_API_DIAG__);
+    if(verbose) showOk(`✅ API OK · Plan: ${plan} · pacing ${API_START_GAP_MS}ms${currentCredits!==null?` · ${currentCredits} credits`:''}`);
+    return true;
+  }catch(err){
+    apiRateInfo.lastStatus='ERROR';
+    window.__APEX_API_DIAG__={...apiRateInfo,error:err?.message||String(err),keyLength:API_KEY.length,keySuffix:API_KEY.slice(-4)};
+    if(el){el.textContent='API ERR';el.className='credit-value low';el.title=err?.message||String(err);}
+    console.error('[APEX API] HEALTH FAILED',err,window.__APEX_API_DIAG__);
+    if(verbose) showErr(`❌ ${err?.message||'API connection failed'}`);
+    throw err;
+  }
+};
+window.testApi=async function(){
+  try{await window.apiHealthCheck(true);}catch{}
+};
+window.initCredits=async function(){
+  try{await window.apiHealthCheck(false);}catch{}
+};
 
 // Cup league IDs — δεν έχουν season statistics, χρησιμοποιούμε primary league
 const CUP_LEAGUE_IDS = new Set([45,48,137,3,848]); // FA Cup, EFL Cup, Coppa Italia, EL, UECL
@@ -1604,7 +1745,8 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
     hG:pp.bestScore.h,aG:pp.bestScore.a,
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
     hExp:hL,aExp:aL,exactConf,xgDiff,pp,
-    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL};
+    cornerConf:cornerRes.conf,expCor:cornerRes.expCor,lambdaTotal:hL+aL,
+    offside};
 }
 
 // ================================================================
@@ -1769,10 +1911,19 @@ async function analyzeMatchSafe(m,index,total){
       actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
       sitCtx,    // Situational context (motivation flags, derby)
       dcResult,  // Dixon-Coles attack/defense strengths
-      offside,   // Offside projection (Poisson model)
+      offside: result.offside,   // Offside projection (Poisson model)
     });
   }catch(err){
-    window.scannedMatchesData.push({m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,omegaPick:'NO BET',reason:'Analysis error',strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0});
+    console.error('[APEX] analyzeMatchSafe failed', {
+      fixtureId:m?.fixture?.id,
+      match:`${m?.teams?.home?.name||'?'} vs ${m?.teams?.away?.name||'?'}`,
+      error:err
+    });
+    window.scannedMatchesData.push({
+      m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
+      omegaPick:'NO BET',reason:`Analysis error: ${err?.message||'unknown'}`,strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0,
+      analysisError:err?.message||String(err)
+    });
   }
 }
 
@@ -1786,13 +1937,16 @@ window.runScan=async function(){
   ['topSection','summarySection','advisorSection','auditSection'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='';});
   window.scannedMatchesData=[];teamStatsCache.clear();lastFixCache.clear();standCache.clear();h2hCache.clear();scorersCache.clear();assistsCache.clear();cardsCache.clear();injuryCache.clear();
   try{
+    setLoader(true,'Checking API connection…');
+    await window.apiHealthCheck(false);
+    setLoader(true,'Initializing Deep Quant…');
     const selLg=document.getElementById('leagueFilter').value;let all=[];
     for(const date of getDatesInRange(startD,endD)){
       setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
       const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
       all.push(...dm);if(all.length>350)break;
     }
-    if(!all.length){showErr('Δεν βρέθηκαν αγώνες.');return;}
+    if(!all.length){showErr('API OK, αλλά δεν βρέθηκαν αγώνες για την ημερομηνία / φίλτρο που επέλεξες.');return;}
     if(all.length>350) all=all.slice(0,350);
 
     // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
