@@ -183,7 +183,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '15/09/2026';
-const BUILD_TIME    = '14:10 EET';
+const BUILD_TIME    = '15:24 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1720,11 +1720,21 @@ async function analyzeMatchSafe(m,index,total){
       if(sr.response && sr.response.length === 2) {
         const hs = sr.response[0].statistics; const as = sr.response[1].statistics;
         actStats = {
-          hPoss: statVal(hs, 'Ball Possession'), aPoss: statVal(as, 'Ball Possession'),
-          hCor: statVal(hs, 'Corner Kicks'), aCor: statVal(as, 'Corner Kicks'),
-          hCrd: statVal(hs, 'Yellow Cards') + statVal(hs, 'Red Cards'), aCrd: statVal(as, 'Yellow Cards') + statVal(as, 'Red Cards'),
-          hXg: statVal(hs, 'expected_goals'), aXg: statVal(as, 'expected_goals')
+          hPoss: statVal(hs,'Ball Possession'),       aPoss: statVal(as,'Ball Possession'),
+          hCor:  statVal(hs,'Corner Kicks'),           aCor:  statVal(as,'Corner Kicks'),
+          hCrd:  statVal(hs,'Yellow Cards')+statVal(hs,'Red Cards'),
+          aCrd:  statVal(as,'Yellow Cards')+statVal(as,'Red Cards'),
+          hXg:   statVal(hs,'expected_goals'),         aXg:   statVal(as,'expected_goals'),
+          hOff:  statVal(hs,'Offsides'),               aOff:  statVal(as,'Offsides'),
+          hSoT:  statVal(hs,'Shots on Goal'),          aSoT:  statVal(as,'Shots on Goal'),
+          hFoul: statVal(hs,'Fouls'),                  aFoul: statVal(as,'Fouls'),
         };
+        // Computed actuals για calibration
+        actStats.totCor  = (actStats.hCor||0) + (actStats.aCor||0);
+        actStats.totCrd  = (actStats.hCrd||0) + (actStats.aCrd||0);
+        actStats.totOff  = (actStats.hOff||0) + (actStats.aOff||0);
+        actStats.totGoals= (m.goals?.home||0) + (m.goals?.away||0);
+        actStats.btts    = (m.goals?.home||0)>0 && (m.goals?.away||0)>0;
       }
     }
 
@@ -5744,23 +5754,28 @@ function renderStabilitySignals(rec) {
 // ================================================================
 
 const CALIB_TARGETS = {
-  outcomes: 0.75,
-  btts:     0.80,
-  over25:   0.75,
-  over35:   0.75,
-  corners:  0.70,
-  bombs:    0.60,
+  outcomes:  0.75,
+  btts:      0.80,
+  over25:    0.75,
+  over35:    0.75,
+  corners:   0.70,  // Over 8.5 Cor accuracy target
+  cards:     0.65,  // Over 4.5 Cards accuracy target
+  offsides:  0.60,  // Both ≥2 offsides accuracy target
+  bombs:     0.60,
 };
-const CALIB_MIN_N  = 8;    // ελάχιστα records ανά market
-const CALIB_GRID_N = 20;   // σημεία grid ανά παράμετρο
+const CALIB_MIN_N  = 8;
+const CALIB_GRID_N = 20;
 
 const PARAM_BOUNDS = {
-  mult:     [0.75, 1.45],
-  minXGO25: [2.60, 3.80],  // P(O2.5) 55%-78%
-  minXGO35: [3.20, 4.50],  // P(O3.5) 48%-72%
-  xgDiff:   [0.40, 1.10],  // xG diff για 1X2
-  minBTTS:  [0.90, 1.60],  // min(hXG,aXG) για BTTS
-  maxU25:   [1.50, 2.20],  // max tXG για Under 2.5
+  mult:        [0.75, 1.45],
+  minXGO25:    [2.60, 3.80],
+  minXGO35:    [3.20, 4.50],
+  xgDiff:      [0.40, 1.10],
+  minBTTS:     [0.90, 1.60],
+  maxU25:      [1.50, 2.20],
+  minCorConf:  [55,   90],    // cornerConf % threshold για Over 8.5
+  minCardConf: [3.5,  6.0],   // predCards threshold για Over 4.5
+  minOffConf:  [25,   65],    // pBothOff2 % threshold για Αμφότερες ≥2
 };
 
 const LS_CALIB_LOG = 'omega_calib_log_v5.0';
@@ -5793,14 +5808,20 @@ function backtestParam(records, paramName, paramValue) {
     if(parts.length < 2) return;
     const ah = parseInt(parts[0]), aa = parseInt(parts[1]);
     if(isNaN(ah) || isNaN(aa)) return;
-    const aTot = ah + aa;
+    const aTot  = ah + aa;
     const aBtts = ah > 0 && aa > 0;
 
-    let wouldSignal = false;
-    let wouldHit    = false;
+    // Πραγματικά στατιστικά από actStats (αν υπάρχουν)
+    const act = r.actStats || {};
+    const actCorTot  = act.totCor  ?? null;  // πραγματικά κόρνερ
+    const actCrdTot  = act.totCrd  ?? null;  // πραγματικές κάρτες
+    const actOffTot  = act.totOff  ?? null;  // πραγματικά οφσάιντ
+    const actHOff    = act.hOff    ?? null;
+    const actAOff    = act.aOff    ?? null;
+
+    let wouldSignal = false, wouldHit = false;
 
     if(paramName === 'xgDiff') {
-      // Προσομοίωση 1X2 από raw xgDiff — ΑΝΕΞΑΡΤΗΤΑ από το παλιό pick string
       wouldSignal = Math.abs(r.xgDiff || 0) >= paramValue;
       if(wouldSignal) {
         const predictedOut = (r.xgDiff > 0) ? '1' : '2';
@@ -5808,7 +5829,6 @@ function backtestParam(records, paramName, paramValue) {
         wouldHit = (predictedOut === actualOut);
       }
     } else if(paramName === 'minXGO25') {
-      // Προσομοίωση Over 2.5 από raw tXG
       wouldSignal = (r.tXG || 0) >= paramValue;
       wouldHit    = wouldSignal && (aTot > 2.5);
     } else if(paramName === 'minXGO35') {
@@ -5823,6 +5843,34 @@ function backtestParam(records, paramName, paramValue) {
       const adjustedXG = (r.tXG || 2.5) * (paramValue / curLPMult);
       wouldSignal = adjustedXG >= 2.2;
       wouldHit    = wouldSignal && r.correct;
+    // ── ΝΕΟΙ ΔΕΙΚΤΕΣ: Corners ──────────────────────────────────
+    } else if(paramName === 'minCorConf') {
+      // Threshold βεβαιότητας κόρνερ (corner confidence %)
+      wouldSignal = (r.cornerConf || 0) >= paramValue;
+      if(wouldSignal && actCorTot !== null) {
+        wouldHit = actCorTot > 8.5;
+      } else if(wouldSignal) {
+        // Fallback: εκτιμώ από expCor
+        wouldHit = (r.expCor || 0) > 8.5;
+      }
+    // ── ΝΕΟΙ ΔΕΙΚΤΕΣ: Cards ────────────────────────────────────
+    } else if(paramName === 'minCardConf') {
+      // Threshold για Over 4.5 κάρτες
+      const predCards = (r.hS?.crd||2) + (r.aS?.crd||2);
+      wouldSignal = predCards >= paramValue;
+      if(wouldSignal && actCrdTot !== null) {
+        wouldHit = actCrdTot > 4.5;
+      } else if(wouldSignal) {
+        wouldHit = predCards > 4.5;
+      }
+    // ── ΝΕΟΙ ΔΕΙΚΤΕΣ: Offsides ─────────────────────────────────
+    } else if(paramName === 'minOffConf') {
+      // Threshold για αμφότερες ≥2 οφσάιντ
+      const predOff = (r.offside?.pBothOff2 || 0);
+      wouldSignal = predOff >= paramValue;
+      if(wouldSignal && actHOff !== null && actAOff !== null) {
+        wouldHit = actHOff >= 2 && actAOff >= 2;
+      }
     }
 
     if(wouldSignal) { n++; if(wouldHit) hits++; }
@@ -5855,12 +5903,14 @@ function gridSearchLeague(records, leagueId) {
   };
 
   const marketToParam = {
-    outcomes: 'xgDiff',
-    over25:   'minXGO25',
-    over35:   'minXGO35',
-    btts:     'minBTTS',
-    corners:  'mult',
-    bombs:    'mult',
+    outcomes:  'xgDiff',
+    over25:    'minXGO25',
+    over35:    'minXGO35',
+    btts:      'minBTTS',
+    corners:   'minCorConf',   // βαθμονόμηση Over 8.5 Cor confidence
+    cards:     'minCardConf',  // βαθμονόμηση Over 4.5 Κάρτες
+    offsides:  'minOffConf',   // βαθμονόμηση Αμφότερες ≥2 Οφσάιντ
+    bombs:     'mult',
   };
 
   const optimized = {};
