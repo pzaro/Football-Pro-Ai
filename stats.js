@@ -183,7 +183,7 @@ let _errTimer = null, _okTimer = null;
 // ================================================================
 const APP_VERSION   = 'v5.0';
 const BUILD_DATE    = '15/09/2026';
-const BUILD_TIME    = '13:44 EET';
+const BUILD_TIME    = '13:51 EET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -655,8 +655,30 @@ async function _executeRequest(path,resolve){
 }
 window.initCredits=async function(){try{const r=await fetch(`${API_BASE}/status`,{headers:{'x-apisports-key':API_KEY}});if(!r.ok)return;const d=await r.json();currentCredits=(d.response?.requests?.limit_day||500)-(d.response?.requests?.current||0);const el=document.getElementById('creditDisplay');if(el){el.textContent=currentCredits;el.className='credit-value'+(currentCredits<50?' low':'');}}catch{}};
 
-async function getTStats(t,lg,s){const k=`${t}_${lg}_${s}`;if(teamStatsCache.has(k))return teamStatsCache.get(k);const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);teamStatsCache.set(k,d?.response||{});return d?.response||{};}
-async function getLFix(t,lg,s){const k=`${t}_${lg}_${s}`;if(lastFixCache.has(k))return lastFixCache.get(k);const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);lastFixCache.set(k,d?.response||[]);return d?.response||[];}
+async function getTStats(t,lg,s){
+  const k=`${t}_${lg}_${s}`;
+  if(teamStatsCache.has(k))return teamStatsCache.get(k);
+  const d=await apiReq(`teams/statistics?team=${t}&league=${lg}&season=${s}`);
+  teamStatsCache.set(k,d?.response||{});
+  return d?.response||{};
+}
+
+async function getLFix(t,lg,s){
+  const k=`${t}_${lg}_${s}`;
+  if(lastFixCache.has(k))return lastFixCache.get(k);
+  // Πρώτα: season=2026 ολοκληρωμένα ματς
+  const d=await apiReq(`fixtures?team=${t}&league=${lg}&season=${s}&last=20&status=FT`);
+  let res=d?.response||[];
+  // Αν η σεζόν 2026 έχει λίγα ματς (αρχές σεζόν), παίρνουμε τα last=20 cross-season
+  // Αυτά είναι τα πιο πρόσφατα ολοκληρ. ματς της ομάδας — πάντα 2026 ή τέλη 2025
+  if(res.length < 6){
+    const d2 = await apiReq(`fixtures?team=${t}&league=${lg}&last=20&status=FT`);
+    const cross = d2?.response||[];
+    if(cross.length > res.length) res = cross;
+  }
+  lastFixCache.set(k,res);
+  return res;
+}
 async function getStand(lg,s){
   const k=`${lg}_${s}`;
   if(standCache.has(k))return standCache.get(k);
