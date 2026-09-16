@@ -231,8 +231,8 @@ function _adaptApiRate(plan, headers){
 //  VERSION & BUILD INFO
 // ================================================================
 const APP_VERSION   = 'v5.0';
-const BUILD_DATE    = '15/09/2026';
-const BUILD_TIME    = 'DEEP CHECK · POST-MATCH HISTORY';
+const BUILD_DATE    = '16/09/2026';
+const BUILD_TIME    = 'HOURLY AUTO-LEARN · LEAGUE SELECTOR SAFE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -431,7 +431,10 @@ function setProgress(p,text=''){
   if(b)b.style.width=Math.round(clamp(p,0,100))+'%';
   if(s)s.textContent=text+(_apiActive>0?` [${_apiActive} req]`:'');
 }
-function setBtnsDisabled(d){['btnPre','leagueFilter','btnSyncLive'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;});}
+function setBtnsDisabled(d){
+  ['btnPre','leagueFilter','btnSyncLive','scanLeagueAllBtn','scanLeagueNoneBtn','scanLeagueRefreshBtn','selfImproveNowBtn'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=d;});
+  document.querySelectorAll('#scanLeagueCheckboxes input[type="checkbox"]').forEach(el=>{el.disabled=d;});
+}
 function showErr(msg){clearTimeout(_errTimer);const box=document.getElementById('errorBox');if(!box)return;box.innerHTML=`<div>⚠️ ${esc(msg)}</div>`;_errTimer=setTimeout(()=>box.innerHTML='',6000);}
 function showOk(msg){clearTimeout(_okTimer);const box=document.getElementById('successBox');if(!box)return;box.innerHTML=`<div>✓ ${esc(msg)}</div>`;_okTimer=setTimeout(()=>box.innerHTML='',4000);}
 function clearAlerts(){const e=document.getElementById('errorBox'),s=document.getElementById('successBox');if(e)e.innerHTML='';if(s)s.innerHTML='';}
@@ -1802,6 +1805,108 @@ function computeHTAnalysis(hExp, aExp, lp) {
   };
 }
 
+
+// ================================================================
+//  DATE-AWARE LEAGUE SELECTOR — SAFE PREVIEW CACHE
+//  Φορτώνει μόνο τα υποστηριζόμενα APEX leagues που έχουν fixtures
+//  στην επιλεγμένη ημερομηνία/περίοδο. Νέο range => όλα checked.
+// ================================================================
+let _scanPreview = { key:'', fixtures:[], leagues:[], loadedAt:0 };
+let _scanPreviewSeq = 0;
+let _scanPreviewTimer = null;
+let _scanSelectedLeagueIds = new Set();
+
+function _scanDateRangeKey(startD, endD){ return `${startD||''}|${endD||''}`; }
+function _scanSupportedLeagueSet(){ return new Set(typeof LEAGUE_IDS!=='undefined' ? LEAGUE_IDS.map(Number) : []); }
+
+function _renderScanLeagueSelector(leagues, {loading=false,error='',resetSelection=false}={}){
+  const box=document.getElementById('scanLeagueCheckboxes');
+  const status=document.getElementById('scanLeagueSelectorStatus');
+  if(!box||!status) return;
+  if(loading){ status.textContent='⏳ Φόρτωση αγώνων και πρωταθλημάτων…'; box.innerHTML=''; return; }
+  if(error){ status.textContent=`⚠ ${error}`; box.innerHTML=''; return; }
+  if(!leagues?.length){ status.textContent='Δεν βρέθηκαν υποστηριζόμενα πρωταθλήματα για την επιλεγμένη περίοδο.'; box.innerHTML=''; return; }
+  if(resetSelection) _scanSelectedLeagueIds = new Set(leagues.map(x=>Number(x.id)));
+  else {
+    const valid=new Set(leagues.map(x=>Number(x.id)));
+    _scanSelectedLeagueIds=new Set([..._scanSelectedLeagueIds].filter(id=>valid.has(id)));
+  }
+  const selectedCount=leagues.filter(x=>_scanSelectedLeagueIds.has(Number(x.id))).length;
+  const matchCount=leagues.reduce((n,x)=>n+x.matches,0);
+  status.textContent=`${selectedCount}/${leagues.length} πρωταθλήματα · ${matchCount} αγώνες διαθέσιμοι`;
+  box.innerHTML=leagues.map(x=>{
+    const checked=_scanSelectedLeagueIds.has(Number(x.id))?'checked':'';
+    const type=(typeof GOLD_LEAGUES!=='undefined'&&GOLD_LEAGUES.has(x.id))?'⭐':(typeof TIGHT_LEAGUES!=='undefined'&&TIGHT_LEAGUES.has(x.id))?'🔒':(typeof TRAP_LEAGUES!=='undefined'&&TRAP_LEAGUES.has(x.id))?'⚠':'•';
+    return `<label style="display:flex;align-items:center;gap:7px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-base);cursor:pointer;min-width:0;">
+      <input type="checkbox" class="scan-league-check" value="${x.id}" ${checked} onchange="window.toggleScanLeague(${x.id},this.checked)" style="accent-color:var(--accent-blue);width:16px;height:16px;flex-shrink:0;">
+      <span style="min-width:0;flex:1;font-size:0.72rem;color:var(--text-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${type} ${esc(x.name)}</span>
+      <span style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-muted);flex-shrink:0;">${x.matches}</span>
+    </label>`;
+  }).join('');
+}
+
+window.toggleScanLeague=function(id,checked){
+  id=Number(id);
+  if(checked) _scanSelectedLeagueIds.add(id); else _scanSelectedLeagueIds.delete(id);
+  _renderScanLeagueSelector(_scanPreview.leagues,{resetSelection:false});
+};
+window.setAllScanLeagues=function(checked){
+  _scanSelectedLeagueIds = checked ? new Set((_scanPreview.leagues||[]).map(x=>Number(x.id))) : new Set();
+  _renderScanLeagueSelector(_scanPreview.leagues,{resetSelection:false});
+};
+window.getScanSelectedLeagueIds=function(){ return [..._scanSelectedLeagueIds]; };
+
+async function _loadScanFixturePreview(startD,endD,{force=false}={}){
+  const key=_scanDateRangeKey(startD,endD);
+  if(!startD||!endD||new Date(endD)<new Date(startD)){
+    _renderScanLeagueSelector([],{error:'Ελέγξτε τις ημερομηνίες.'});
+    return {key,fixtures:[],leagues:[],loadedAt:0};
+  }
+  if(!force && _scanPreview.key===key && _scanPreview.fixtures.length){
+    _renderScanLeagueSelector(_scanPreview.leagues,{resetSelection:false});
+    return _scanPreview;
+  }
+  const seq=++_scanPreviewSeq;
+  _renderScanLeagueSelector([],{loading:true});
+  try{
+    const supported=_scanSupportedLeagueSet();
+    const fixtures=[];
+    for(const date of getDatesInRange(startD,endD)){
+      const res=await apiReq(`fixtures?date=${date}`);
+      if(seq!==_scanPreviewSeq) return _scanPreview; // stale date change
+      (res?.response||[]).forEach(m=>{ if(supported.has(Number(m.league?.id))) fixtures.push(m); });
+      if(fixtures.length>350) break;
+    }
+    const capped=fixtures.slice(0,350);
+    const counts=new Map();
+    capped.forEach(m=>{
+      const id=Number(m.league.id);
+      if(!counts.has(id)) counts.set(id,{id,name:m.league.name||`League ${id}`,country:m.league.country||'',matches:0});
+      counts.get(id).matches++;
+    });
+    const order=new Map((typeof LEAGUES_DATA!=='undefined'?LEAGUES_DATA:[]).map((l,i)=>[Number(l.id),i]));
+    const leagues=[...counts.values()].sort((a,b)=>(order.get(a.id)??999)-(order.get(b.id)??999)||a.name.localeCompare(b.name));
+    const changedKey=_scanPreview.key!==key;
+    _scanPreview={key,fixtures:capped,leagues,loadedAt:Date.now()};
+    _renderScanLeagueSelector(leagues,{resetSelection:changedKey});
+    return _scanPreview;
+  }catch(e){
+    console.warn('[APEX] league preview:',e.message);
+    _renderScanLeagueSelector([],{error:`Αδυναμία φόρτωσης: ${e.message}`});
+    return {key,fixtures:[],leagues:[],loadedAt:0};
+  }
+}
+
+window.refreshScanLeagueOptions=async function(force=false){
+  const startD=document.getElementById('scanStart')?.value||todayISO();
+  const endD=document.getElementById('scanEnd')?.value||startD;
+  return _loadScanFixturePreview(startD,endD,{force});
+};
+function scheduleScanLeagueRefresh(){
+  clearTimeout(_scanPreviewTimer);
+  _scanPreviewTimer=setTimeout(()=>window.refreshScanLeagueOptions(false),450);
+}
+
 // ================================================================
 //  SCANNER MAIN LOOP
 // ================================================================
@@ -1948,14 +2053,14 @@ window.runScan=async function(){
     setLoader(true,'Checking API connection…');
     await window.apiHealthCheck(false);
     setLoader(true,'Initializing Deep Quant…');
-    const selLg=document.getElementById('leagueFilter').value;let all=[];
-    for(const date of getDatesInRange(startD,endD)){
-      setProgress(5,`Fetching ${date}...`);const res=await apiReq(`fixtures?date=${date}`);
-      const dm=(res.response||[]).filter(m=>{if(selLg==='WORLD')return true;if(selLg==='ALL')return typeof LEAGUE_IDS!=='undefined'&&LEAGUE_IDS.includes(m.league.id);if(selLg==='MY_LEAGUES')return getActiveMyLeagues().includes(m.league.id);return m.league.id===parseInt(selLg);});
-      all.push(...dm);if(all.length>350)break;
-    }
-    if(!all.length){showErr('API OK, αλλά δεν βρέθηκαν αγώνες για την ημερομηνία / φίλτρο που επέλεξες.');return;}
-    if(all.length>350) all=all.slice(0,350);
+    // Date-aware league selector: reuse preview fixtures instead of downloading the same dates twice.
+    setProgress(5,'Loading selected leagues…');
+    const preview=await _loadScanFixturePreview(startD,endD,{force:false});
+    const selectedIds=new Set(window.getScanSelectedLeagueIds().map(Number));
+    if(!preview.leagues.length){showErr('API OK, αλλά δεν βρέθηκαν υποστηριζόμενοι αγώνες για την επιλεγμένη περίοδο.');return;}
+    if(!selectedIds.size){showErr('Επιλέξτε τουλάχιστον ένα πρωτάθλημα πριν από το Run Scan.');return;}
+    let all=(preview.fixtures||[]).filter(m=>selectedIds.has(Number(m.league.id))).slice(0,350);
+    if(!all.length){showErr('Δεν υπάρχουν αγώνες στα πρωταθλήματα που έχετε τσεκάρει.');return;}
 
     // ── Pre-fetch shared data ανά league (1 φορά, όχι ανά match) ──
     // Standings, scorers, assists, cards είναι per-league — cache τα πρώτα
@@ -6235,7 +6340,7 @@ function gridSearchLeague(records, leagueId) {
 /**
  * Εφαρμόζει τα βέλτιστα parameters και αποθηκεύει.
  */
-window.applyCalibAdjustments = function(adjustmentsByLeague) {
+window.applyCalibAdjustments = function(adjustmentsByLeague, options={}) {
   const applied = [];
   Object.entries(adjustmentsByLeague).forEach(([lid, data]) => {
     const id = parseInt(lid);
@@ -6245,7 +6350,7 @@ window.applyCalibAdjustments = function(adjustmentsByLeague) {
     applied.push({ leagueId: id, params: data.optimized, stats: data.stats });
   });
 
-  if(!applied.length) { showErr('Δεν υπάρχουν αλλαγές για εφαρμογή.'); return; }
+  if(!applied.length) { if(!options.silent) showErr('Δεν υπάρχουν αλλαγές για εφαρμογή.'); return 0; }
 
   try { localStorage.setItem(LS_LGMODS, JSON.stringify(leagueMods)); } catch {}
 
@@ -6268,7 +6373,172 @@ window.applyCalibAdjustments = function(adjustmentsByLeague) {
   renderCalibLog();
   window.resimulateMatches();
   renderLeagueMods();
-  showOk(`✅ Βαθμονόμηση εφαρμόστηκε για ${applied.length} πρωτάθλημα.`);
+  if(!options.silent) showOk(`✅ Βαθμονόμηση εφαρμόστηκε για ${applied.length} πρωτάθλημα.`);
+  return applied.length;
+};
+
+
+// ================================================================
+//  HOURLY AUTO-LEARN — incremental & guarded
+//  Τρέχει όταν η εφαρμογή είναι ανοιχτή. Αν ο browser κοιμηθεί,
+//  εκτελεί το overdue cycle μόλις επανέλθει σε foreground.
+// ================================================================
+const LS_SELF_IMPROVE_STATE='omega_self_improve_state_v5.0';
+const SELF_IMPROVE_EVERY_MS=60*60*1000;
+const SELF_IMPROVE_SYNC_MAX=24;
+let _selfImproveTimer=null, _selfImproveBusy=false;
+
+function _getSelfImproveState(){
+  try{return JSON.parse(localStorage.getItem(LS_SELF_IMPROVE_STATE)||'{}')||{};}catch{return {};}
+}
+function _saveSelfImproveState(st){try{localStorage.setItem(LS_SELF_IMPROVE_STATE,JSON.stringify(st));}catch{}}
+function _selfImproveStatus(text,col='var(--text-muted)'){
+  const el=document.getElementById('selfImproveStatus'); if(el){el.textContent=text;el.style.color=col;}
+}
+function _scoreFromVault(r){
+  const s=_pmParseScore(r?.pmActualScore); if(s) return s;
+  if(_pmHasNum(r?.pmActualHome)&&_pmHasNum(r?.pmActualAway)) return {h:Number(r.pmActualHome),a:Number(r.pmActualAway)};
+  return null;
+}
+function _pickCorrectForScore(r,h,a){
+  const p=r.omegaPick||''; const tot=h+a, btts=h>0&&a>0;
+  if(p.includes('ΑΣΟΣ')||p.includes('ΝΙΚΗ ΓΗΠΕΔ')) return h>a;
+  if(p.includes('ΔΙΠΛΟ')||p.includes('ΝΙΚΗ ΦΙΛΟΞ')) return a>h;
+  if(p.includes('ΠΑΝΩ ΑΠΟ 3.5')) return tot>3.5;
+  if(p.includes('ΠΑΝΩ ΑΠΟ 2.5')||p.includes('OVER 2')) return tot>2.5;
+  if(p.includes('ΚΑΤΩ ΑΠΟ 2.5')||p.includes('UNDER')) return tot<2.5;
+  if(p.includes('ΓΚΟΛ/ΓΚΟΛ')||p.includes('GG')) return btts;
+  if(p.includes('AH')){ if(p.includes('ΑΣΟΣ')) return (h-a)>=2; if(p.includes('ΔΙΠΛΟ')) return (a-h)>=2; }
+  return false;
+}
+function _vaultToCalibRecord(r){
+  const sc=_scoreFromVault(r); if(!sc||!r?.leagueId) return null;
+  return {fixtureId:r.fixtureId,leagueId:Number(r.leagueId),predicted:r.omegaPick||'',actual:`${sc.h}-${sc.a}`,tXG:Number(r.tXG||0),xgDiff:Number(r.xgDiff||0),isBomb:!!r.isBomb,correct:_pickCorrectForScore(r,sc.h,sc.a)};
+}
+async function _selfImproveSyncFinished(store){
+  const today=todayISO();
+  const candidates=store.filter(r=>{
+    if(_scoreFromVault(r)||!r.fixtureId) return false;
+    const d=String(r.date||'').slice(0,10); return d && d<=today;
+  }).sort((a,b)=>{
+    const da=String(a.date||'').slice(0,10), db=String(b.date||'').slice(0,10);
+    const pa=da<today?0:1, pb=db<today?0:1;
+    return pa-pb || da.localeCompare(db);
+  }).slice(0,SELF_IMPROVE_SYNC_MAX);
+  if(!candidates.length) return {store,newSettled:0,checked:0};
+  const map=new Map(store.map(r=>[String(r.fixtureId),r]));
+  let newSettled=0,checked=0;
+  const BATCH=3;
+  for(let i=0;i<candidates.length;i+=BATCH){
+    await Promise.all(candidates.slice(i,i+BATCH).map(async r=>{
+      try{
+        const fr=await apiReq(`fixtures?id=${r.fixtureId}`); const fix=fr?.response?.[0]; checked++;
+        const prev=map.get(String(r.fixtureId))||r;
+        if(fix&&isFinished(fix?.fixture?.status?.short)&&_pmHasNum(fix.goals?.home)&&_pmHasNum(fix.goals?.away)){
+          const h=Number(fix.goals.home),a=Number(fix.goals.away);
+          map.set(String(r.fixtureId),{...prev,pmActualScore:`${h}-${a}`,pmActualHome:h,pmActualAway:a,pmStatus:fix.fixture.status.short||'FT',pmSettledAt:new Date().toISOString(),selfImproveCheckedAt:new Date().toISOString()});
+          newSettled++;
+        }else map.set(String(r.fixtureId),{...prev,selfImproveCheckedAt:new Date().toISOString()});
+      }catch(e){console.warn('[APEX] hourly result sync',r.fixtureId,e.message);}
+    }));
+  }
+  const next=[...map.values()]; localStorage.setItem(LS_PREDS,JSON.stringify(next));
+  return {store:next,newSettled,checked};
+}
+function _calibFingerprint(records){
+  const ids=records.map(r=>`${r.fixtureId||''}:${r.leagueId}:${r.actual}`).sort();
+  let h=2166136261; const txt=ids.join('|');
+  for(let i=0;i<txt.length;i++){h^=txt.charCodeAt(i);h=Math.imul(h,16777619);}
+  return `${records.length}:${(h>>>0).toString(16)}`;
+}
+function _safeHourlyAdjustments(byLeague){
+  const marketToParam={outcomes:'xgDiff',over25:'minXGO25',over35:'minXGO35',btts:'minBTTS'};
+  const out={};
+  Object.entries(byLeague).forEach(([lid,recs])=>{
+    if(recs.length<CALIB_MIN_N) return;
+    const raw=gridSearchLeague(recs,Number(lid)); const optimized={};
+    Object.entries(raw.stats||{}).forEach(([market,st])=>{
+      // Hourly mode deliberately changes ONLY score-derived parameters.
+      // Corners/cards/offsides require richer actual stats and are analysis-only here.
+      const param=marketToParam[market];
+      if(!param||!st.changed||!st.improved||(st.bestAcc-st.baselineAcc)<2.0) return;
+      if(raw.optimized?.[param]!==undefined) optimized[param]=raw.optimized[param];
+    });
+    if(Object.keys(optimized).length) out[lid]={...raw,optimized};
+  });
+  return out;
+}
+
+window.runHourlySelfImprove=async function(manual=false){
+  if(_selfImproveBusy) return false;
+  if(isRunning||postMatchSyncing){_selfImproveStatus('Αναμονή — υπάρχει άλλη διαδικασία σε εξέλιξη','var(--accent-gold)');return false;}
+  _selfImproveBusy=true; isRunning=true; setBtnsDisabled(true);
+  const state=_getSelfImproveState(); const started=Date.now();
+  _selfImproveStatus('⏳ συγχρονισμός νέων αποτελεσμάτων…','var(--accent-gold)');
+  try{
+    let store=_pmVault();
+    if(!store.length){
+      const st={...state,lastRun:new Date().toISOString(),lastStatus:'empty'};_saveSelfImproveState(st);
+      _selfImproveStatus('Vault κενό · επόμενος έλεγχος σε 1 ώρα'); return true;
+    }
+    const sync=await _selfImproveSyncFinished(store); store=sync.store;
+    const calib=store.map(_vaultToCalibRecord).filter(Boolean);
+    const fp=_calibFingerprint(calib);
+    if(calib.length<20){
+      _saveSelfImproveState({...state,lastRun:new Date().toISOString(),lastFingerprint:fp,lastSettledCount:calib.length,lastStatus:'waiting_sample'});
+      _selfImproveStatus(`Δείγμα ${calib.length}/20 · νέα τελικά: ${sync.newSettled} · επόμενος έλεγχος σε 1 ώρα`,'var(--accent-gold)');
+      return true;
+    }
+    if(!manual && fp===state.lastFingerprint){
+      _saveSelfImproveState({...state,lastRun:new Date().toISOString(),lastStatus:'no_new_results'});
+      _selfImproveStatus(`Καμία νέα ολοκλήρωση · ${calib.length} settled · επόμενος έλεγχος σε 1 ώρα`);
+      return true;
+    }
+    const byLeague={}; calib.forEach(r=>{(byLeague[r.leagueId]??=[]).push(r);});
+    const adjustments=_safeHourlyAdjustments(byLeague);
+    const leagueN=Object.keys(adjustments).length;
+    let applied=0;
+    if(leagueN){
+      // Existing application path, but silent: same persistence/log/re-simulation, no intrusive toast.
+      applied=window.applyCalibAdjustments(adjustments,{silent:true})||0;
+    }
+    _saveSelfImproveState({...state,lastRun:new Date().toISOString(),lastFingerprint:fp,lastSettledCount:calib.length,lastAppliedLeagues:applied,lastStatus:applied?'applied':'stable'});
+    _selfImproveStatus(applied?`✅ Auto-Learn: ${applied} πρωτ. βελτιώθηκαν · ${calib.length} settled`:`✓ Έλεγχος ολοκληρώθηκε · μοντέλο σταθερό · ${calib.length} settled`,'var(--accent-green)');
+    renderSummaryTable();
+    return true;
+  }catch(e){
+    console.warn('[APEX] hourly self-improve:',e);
+    _saveSelfImproveState({...state,lastRun:new Date().toISOString(),lastStatus:'error',lastError:e.message});
+    _selfImproveStatus(`⚠ Auto-Learn error: ${e.message}`,'var(--accent-red)'); return false;
+  }finally{
+    _selfImproveBusy=false; isRunning=false; setBtnsDisabled(false);
+    console.info('[APEX] Hourly Auto-Learn cycle',Date.now()-started,'ms');
+  }
+};
+window.runSelfImproveNow=function(){return window.runHourlySelfImprove(true);};
+function _updateSelfImproveDueStatus(){
+  if(_selfImproveBusy) return;
+  const st=_getSelfImproveState();
+  if(!st.lastRun){_selfImproveStatus('Ενεργό · πρώτο cycle σε ~60 λεπτά');return;}
+  const age=Date.now()-Date.parse(st.lastRun); const left=Math.max(0,SELF_IMPROVE_EVERY_MS-age);
+  const mins=Math.ceil(left/60000);
+  const suffix=st.lastSettledCount?` · ${st.lastSettledCount} settled`:'';
+  _selfImproveStatus(left<=0?`Έτοιμο για ωριαίο cycle${suffix}`:`Ενεργό · επόμενο σε ${mins}′${suffix}`);
+}
+function _selfImproveDueCheck(){
+  const st=_getSelfImproveState();
+  if(!st.lastRun){_saveSelfImproveState({...st,lastRun:new Date().toISOString(),lastStatus:'scheduled'});_updateSelfImproveDueStatus();return;}
+  if(Date.now()-Date.parse(st.lastRun)>=SELF_IMPROVE_EVERY_MS) window.runHourlySelfImprove(false);
+  else _updateSelfImproveDueStatus();
+}
+window.startHourlySelfImprovement=function(){
+  if(_selfImproveTimer) clearInterval(_selfImproveTimer);
+  _selfImproveDueCheck();
+  _selfImproveTimer=setInterval(_selfImproveDueCheck,60*1000);
+  if(!window._selfImproveVisibilityBound){
+    window._selfImproveVisibilityBound=true;
+    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')_selfImproveDueCheck();});
+  }
 };
 
 /**
@@ -6725,6 +6995,9 @@ window.addEventListener('DOMContentLoaded',()=>{
       // My Leagues panel
       window.renderMyLeaguesPanel();
       updateLeagueFilterOption();
+      // Date-aware leagues + hourly guarded self-improvement
+      window.refreshScanLeagueOptions?.(false);
+      window.startHourlySelfImprovement?.();
       // Bet Journal + Sheets config section
       const advSec=document.getElementById('advisorSection');
       if(advSec){
@@ -6782,5 +7055,7 @@ window.addEventListener('DOMContentLoaded',()=>{
     }
   });
   const today=todayISO();const ss=document.getElementById('scanStart'),se=document.getElementById('scanEnd');if(ss)ss.value=today;if(se)se.value=today;
+  if(ss) ss.addEventListener('change',scheduleScanLeagueRefresh);
+  if(se) se.addEventListener('change',scheduleScanLeagueRefresh);
   const d15=new Date();d15.setDate(d15.getDate()-15);const as=document.getElementById('auditStart'),ae=document.getElementById('auditEnd');if(as)as.value=d15.toISOString().split('T')[0];if(ae)ae.value=today;
 });

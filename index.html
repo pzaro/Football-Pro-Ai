@@ -6,7 +6,7 @@
   <title>APEX OMEGA v5.0 — AI Quant Terminal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260915-deepcheck">
+  <link rel="stylesheet" href="style.css?v=20260916-hourly-autolearn-league-selector-safe">
 </head>
 <body>
 
@@ -132,13 +132,31 @@
           <label class="input-label">Date To</label>
           <input type="date" id="scanEnd" class="quant-input">
         </div>
-        <div class="input-group" style="flex:2;">
-          <label class="input-label">League Filter</label>
-          <select id="leagueFilter" class="quant-input">
-            <option value="MY_LEAGUES">⭐ My Leagues (High Yield)</option>
-            <option value="ALL">🌐 All Top Leagues</option>
+        <div class="input-group" style="flex:2;min-width:320px;">
+          <label class="input-label">League Filter — αγώνες επιλεγμένης περιόδου</label>
+          <!-- Κρατάμε το legacy select κρυφό για backward compatibility με παλιές βοηθητικές συναρτήσεις. -->
+          <select id="leagueFilter" class="quant-input" style="display:none;" aria-hidden="true" tabindex="-1">
+            <option value="ALL" selected>All Top Leagues</option>
           </select>
+          <div id="scanLeagueSelector" style="border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);padding:9px 10px;min-height:38px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <span id="scanLeagueSelectorStatus" style="font-size:0.72rem;color:var(--text-muted);">Επιλέξτε ημερομηνία — φόρτωση διαθέσιμων πρωταθλημάτων…</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" id="scanLeagueAllBtn" class="btn btn-outline" onclick="window.setAllScanLeagues(true)" style="height:28px;padding:3px 9px;font-size:0.65rem;">✓ Όλα</button>
+                <button type="button" id="scanLeagueNoneBtn" class="btn btn-outline" onclick="window.setAllScanLeagues(false)" style="height:28px;padding:3px 9px;font-size:0.65rem;">○ Κανένα</button>
+                <button type="button" id="scanLeagueRefreshBtn" class="btn btn-outline" onclick="window.refreshScanLeagueOptions(true)" style="height:28px;padding:3px 9px;font-size:0.65rem;">↻ Refresh</button>
+              </div>
+            </div>
+            <div id="scanLeagueCheckboxes" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px 10px;margin-top:8px;"></div>
+          </div>
         </div>
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:7px 10px;border:1px solid rgba(192,132,252,0.16);border-radius:8px;background:rgba(192,132,252,0.04);">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+          <span style="font-size:0.72rem;font-weight:800;color:var(--purple);">🧠 Hourly Auto-Learn</span>
+          <span id="selfImproveStatus" style="font-size:0.66rem;color:var(--text-muted);">Ενεργοποίηση μετά τη σύνδεση…</span>
+        </div>
+        <button type="button" id="selfImproveNowBtn" class="btn btn-outline" onclick="window.runSelfImproveNow()" style="height:30px;padding:4px 10px;font-size:0.66rem;color:var(--purple);border-color:rgba(192,132,252,0.3);">▶ Run now</button>
       </div>
       <div class="toolbar" style="margin-top:12px; justify-content:flex-end;">
         <button class="btn btn-outline" onclick="exportData()">↓ JSON</button>
@@ -329,7 +347,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="leagues.js?v=20260915-postmatch-history-safe"></script>
-<script src="stats.js?v=20260915-postmatch-history-safe"></script>
+<script src="leagues.js?v=20260916-hourly-autolearn-league-selector-safe"></script>
+<script src="stats.js?v=20260916-hourly-autolearn-league-selector-safe"></script>
 </body>
 </html>
