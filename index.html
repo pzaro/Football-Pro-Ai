@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.8.1 — Global Results + 60s Auto Sync + Greece Time + CMI</title>
+  <title>APEX OMEGA v5.9 — Streamlined Scanner + Time Window + Global Results + CMI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260919-v581-global-results">
+  <link rel="stylesheet" href="style.css?v=20260919-v59-time-window">
 </head>
 <body>
 
@@ -15,7 +15,7 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <div class="brand-logo">
       APEX<span>OMEGA</span>
-      <span class="version-tag" id="versionTag">v5.8.1</span>
+      <span class="version-tag" id="versionTag">v5.9</span>
     </div>
     <div id="lastUpdatedBadge" style="display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.58rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:3px 9px;white-space:nowrap;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
@@ -64,7 +64,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.8.1 · GLOBAL RESULTS · 60S AUTO SYNC · GREECE TIME · CMI</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.9 · STREAMLINED SCANNER · ATHENS TIME WINDOW · GLOBAL RESULTS · CMI</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -126,24 +126,41 @@
       <div class="panel-title" style="margin-bottom:14px;">
         <span>🔍 Match Scanner</span>
       </div>
-      <div class="toolbar">
+      <div class="scanner-window-grid">
         <div class="input-group">
-          <label class="input-label">Date From</label>
+          <label class="input-label">Scan Mode</label>
+          <select id="scanMode" class="quant-input" onchange="window.onScanModeChange()">
+            <option value="REMAINING" selected>⏱ Από τώρα έως...</option>
+            <option value="CUSTOM">🗓 Προσαρμοσμένο διάστημα</option>
+          </select>
+        </div>
+        <div class="input-group" id="scanStartDateGroup">
+          <label class="input-label">Από ημερομηνία · Ελλάδα</label>
           <input type="date" id="scanStart" class="quant-input">
         </div>
+        <div class="input-group" id="scanStartTimeGroup">
+          <label class="input-label">Από ώρα · Ελλάδα</label>
+          <input type="time" id="scanStartTime" class="quant-input" step="60">
+        </div>
         <div class="input-group">
-          <label class="input-label">Date To</label>
+          <label class="input-label">Έως ημερομηνία · Ελλάδα</label>
           <input type="date" id="scanEnd" class="quant-input">
         </div>
+        <div class="input-group">
+          <label class="input-label">Έως ώρα · Ελλάδα</label>
+          <input type="time" id="scanEndTime" class="quant-input" step="60" value="23:59">
+        </div>
+      </div>
+      <div id="scanWindowSummary" class="scan-window-summary">
+        <span class="scan-window-icon">🕒</span>
+        <span>Το παράθυρο ανάλυσης υπολογίζεται σε ώρα Ελλάδος (Europe/Athens).</span>
+      </div>
+      <div class="toolbar" style="margin-top:12px;">
         <div class="input-group" style="flex:2;min-width:320px;">
-          <label class="input-label">League Filter — αγώνες επιλεγμένης περιόδου</label>
-          <!-- Κρατάμε το legacy select κρυφό για backward compatibility με παλιές βοηθητικές συναρτήσεις. -->
-          <select id="leagueFilter" class="quant-input" style="display:none;" aria-hidden="true" tabindex="-1">
-            <option value="ALL" selected>All Top Leagues</option>
-          </select>
+          <label class="input-label">League Filter — μόνο αγώνες που απομένουν στο επιλεγμένο παράθυρο</label>
           <div id="scanLeagueSelector" style="border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);padding:9px 10px;min-height:38px;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-              <span id="scanLeagueSelectorStatus" style="font-size:0.72rem;color:var(--text-muted);">Επιλέξτε ημερομηνία — φόρτωση διαθέσιμων πρωταθλημάτων…</span>
+              <span id="scanLeagueSelectorStatus" style="font-size:0.72rem;color:var(--text-muted);">Φόρτωση διαθέσιμων αγώνων…</span>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 <button type="button" id="scanLeagueAllBtn" class="btn btn-outline" onclick="window.setAllScanLeagues(true)" style="height:28px;padding:3px 9px;font-size:0.65rem;">✓ Όλα</button>
                 <button type="button" id="scanLeagueNoneBtn" class="btn btn-outline" onclick="window.setAllScanLeagues(false)" style="height:28px;padding:3px 9px;font-size:0.65rem;">○ Κανένα</button>
@@ -177,7 +194,7 @@
       <div class="panel-title clickable" style="color:var(--gold);" onclick="togglePanel('myLeaguesBody','myLeaguesArrow')">
         <span style="display:flex;align-items:center;gap:10px;">
           ⭐ My Leagues
-          <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">Επιλογή πρωταθλημάτων για scan</span>
+          <span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">Preset πρωταθλημάτων για Live Tracker</span>
         </span>
         <span id="myLeaguesArrow" class="arrow">▼</span>
       </div>
@@ -329,7 +346,7 @@
         <div class="panel-title clickable" style="color:var(--gold);" onclick="togglePanel('autoCalibBody','autoCalibArrow')">
           <span style="display:flex;align-items:center;gap:10px;">
             🎯 Auto-Calibration Engine
-            <span style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono);">per-league · gradient descent</span>
+            <span style="font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono);">per-league · grid search</span>
           </span>
           <span id="autoCalibArrow" class="arrow">▼</span>
         </div>
@@ -379,7 +396,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="leagues.js?v=20260919-v581-global-results"></script>
-<script src="stats.js?v=20260919-v581-global-results"></script>
+<script src="leagues.js?v=20260919-v59-time-window"></script>
+<script src="stats.js?v=20260919-v59-time-window"></script>
 </body>
 </html>

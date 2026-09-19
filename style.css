@@ -1862,3 +1862,45 @@ body {
   .global-completed-result{padding:5px 6px;}
   .global-completed-result .settled-market-grid{gap:4px;}
 }
+
+
+/* ================================================================
+   v5.9 — STREAMLINED SCANNER / ATHENS TIME WINDOW
+   ================================================================ */
+.scanner-window-grid{
+  display:grid;
+  grid-template-columns:minmax(170px,1.25fr) repeat(4,minmax(135px,1fr));
+  gap:10px;
+  align-items:end;
+}
+.scan-window-summary{
+  margin-top:10px;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:9px 11px;
+  border:1px solid rgba(37,99,235,.18);
+  border-radius:9px;
+  background:linear-gradient(135deg,rgba(37,99,235,.055),rgba(14,165,233,.025));
+  color:var(--text-sub);
+  font-size:.69rem;
+  line-height:1.45;
+}
+.scan-window-summary b{color:var(--text-main);font-weight:800;}
+.scan-window-summary.error{border-color:rgba(220,38,38,.25);background:rgba(220,38,38,.045);color:var(--accent-red);}
+.scan-window-icon{font-size:.85rem;flex:0 0 auto;}
+#scanStart:disabled,#scanStartTime:disabled{
+  opacity:.72;
+  cursor:not-allowed;
+  background:var(--bg-base);
+  border-style:dashed;
+}
+@media (max-width:1050px){
+  .scanner-window-grid{grid-template-columns:repeat(3,minmax(150px,1fr));}
+}
+@media (max-width:720px){
+  .scanner-window-grid{grid-template-columns:1fr 1fr;}
+}
+@media (max-width:480px){
+  .scanner-window-grid{grid-template-columns:1fr;}
+}
