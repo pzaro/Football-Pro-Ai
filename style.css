@@ -1840,3 +1840,25 @@ body {
   .postmatch-final-score { font-size:1.25rem; }
   .settled-signal-chip { font-size:.57rem; }
 }
+
+
+/* ================================================================
+   v5.8.1 — GLOBAL COMPLETED RESULT STRIPS
+   ================================================================ */
+.global-completed-result{
+  margin-top:7px;padding:7px 8px;border-radius:8px;
+  background:#f8fafc;border:1px solid #cbd5e1;
+  display:flex;flex-direction:column;gap:6px;max-width:100%;
+}
+.global-completed-result.compact{padding:5px 7px;margin-top:5px;}
+.global-completed-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.global-completed-result .settled-market-grid{margin-top:0;}
+.global-completed-result .settled-signal-chip.won{background:#dcfce7;border-color:#86efac;color:#166534;}
+.global-completed-result .settled-signal-chip.lost{background:#fee2e2;border-color:#fca5a5;color:#991b1b;}
+.global-completed-result .settled-signal-chip.unknown{background:#fef3c7;border-color:#fde68a;color:#92400e;}
+.match-final-score-badge{font-size:.72rem!important;font-weight:900!important;padding:3px 8px!important;}
+.match-completed-badge{font-size:.62rem!important;font-weight:900!important;}
+@media(max-width:720px){
+  .global-completed-result{padding:5px 6px;}
+  .global-completed-result .settled-market-grid{gap:4px;}
+}

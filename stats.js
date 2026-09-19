@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.8 — SETTLED MARKET RESULTS + GREECE TIME + PROFESSIONAL UI + CMI
+// APEX OMEGA v5.8.1 — GLOBAL RESULTS + 60S AUTO SYNC + SETTLED MARKETS + GREECE TIME + CMI
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -293,9 +293,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.8';
+const APP_VERSION   = 'v5.8.1';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'SETTLED MARKETS · FINAL SCORE · GREECE TIME · PROFESSIONAL UI · CMI';
+const BUILD_TIME    = 'GLOBAL RESULTS · 60S AUTO SYNC · SETTLED MARKETS · GREECE TIME · CMI';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -665,7 +665,9 @@ window.importData=function(ev){
       const endD   = dates[dates.length-1] || todayISO();
 
       syncAuditFromScan(imported, startD, endD);
-      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν. Vault ενημερώθηκε.`);
+      startAutoSync();
+      setTimeout(()=>window.syncFixtureLifecycle({silent:false,force:true}),350);
+      showOk(`✅ Import: ${imported.length} αγώνες φορτώθηκαν. Αυτόματος έλεγχος αποτελεσμάτων ενεργός ανά 60″.`);
     }catch(err){
       showErr("Σφάλμα αρχείου: " + err.message);
     }
@@ -1026,6 +1028,17 @@ function confirmedMarketsSettlementHTML(rec,{compact=false}={}){
     const cf=Number.isFinite(sig.confidence)?` · ${sig.confidence.toFixed(0)}%`:'';
     return `<span class="settled-signal-chip ${cls}" title="${esc(sig.market)}${cf}"><b>${icon}</b> ${esc(sig.market)}: ${esc(sig.label)}${cf}</span>`;
   }).join('')}</div>`;
+}
+
+function globalCompletedResultHTML(rec,{compact=true}={}){
+  const src=_displayRecord(rec)||rec;
+  const st=_fixtureState(src);
+  if(!st.finished) return '';
+  const score=(st.home!==null&&st.home!==undefined&&st.away!==null&&st.away!==undefined)?`${st.home}–${st.away}`:'—';
+  return `<div class="global-completed-result ${compact?'compact':''}">
+    <div class="global-completed-head"><span class="match-completed-badge">✓ ΟΛΟΚΛΗΡΩΘΗΚΕ</span><span class="match-final-score-badge">FT ${score}</span></div>
+    ${confirmedMarketsSettlementHTML(src,{compact:true})}
+  </div>`;
 }
 
 
@@ -2881,11 +2894,11 @@ function _renderLiveAlerts(){
   el.innerHTML=liveAlerts.map(a=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:0.7rem;flex-wrap:wrap;"><span style="color:var(--text-muted);font-family:var(--font-mono);min-width:55px;">${a.time}</span><span style="font-weight:700;color:var(--text-main);">${esc(a.ht)} vs ${esc(a.at)}</span><span style="color:var(--text-muted);">${a.elapsed}' · ${a.score}</span><span style="color:var(--accent-red);">${esc(a.from)}</span><span style="color:var(--text-muted);">→</span><span style="color:var(--accent-green);">${esc(a.to)}</span></div>`).join('');
 }
 
-window.syncLiveScores=async function(){
+window.syncLiveScores=async function(silent=false){
   if(isRunning)return;const btn=document.getElementById('btnSyncLive');if(btn){btn.innerText='Syncing…';btn.disabled=true;}
   try{
     const res=await apiReq('fixtures?live=all');const liveArr=res.response||[];
-    if(!liveArr.length){showOk('Δεν υπάρχουν live αγώνες.');return;}
+    if(!liveArr.length){if(!silent)showOk('Δεν υπάρχουν live αγώνες.');return;}
     const liveMap=new Map(liveArr.map(f=>[f.fixture.id,f]));
 
     // 1. Score + events (1 credit)
@@ -2902,7 +2915,7 @@ window.syncLiveScores=async function(){
     });
 
     const liveTracked=window.scannedMatchesData.filter(d=>liveMap.has(d.fixId));
-    if(!liveTracked.length){renderSummaryTable();tickerRefresh();showOk(`✅ 1 Credit · Synced ${n} αγώνες`);return;}
+    if(!liveTracked.length){renderSummaryTable();tickerRefresh();if(!silent)showOk(`✅ 1 Credit · Synced ${n} αγώνες`);return;}
 
     // 2. Live Stats + Lineups (parallel per match)
     let subCount=0, liveIntelCount=0;
@@ -2936,8 +2949,8 @@ window.syncLiveScores=async function(){
 
     renderSummaryTable();tickerRefresh();
     const credits = 1 + liveTracked.length * 2;
-    showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}`);
-  }catch(e){showErr('Sync error: '+e.message);}
+    if(!silent)showOk(`✅ ~${credits} Credits · ${n} live · Intel: ${liveIntelCount} · Αντικαταστάσεις: ${subCount}`);
+  }catch(e){if(!silent)showErr('Sync error: '+e.message);else console.warn('[APEX] silent live sync:',e.message);}
   finally{if(btn){btn.innerText='Live Sync';btn.disabled=false;}}
 };
 
@@ -3053,7 +3066,86 @@ window.fetchLineupForMatch = async function(fixId) {
 };
 
 let _autoSyncTimer=null;
-function startAutoSync(){if(_autoSyncTimer)clearInterval(_autoSyncTimer);_autoSyncTimer=setInterval(()=>{const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));if(hasLive&&!isRunning)syncLiveScores();},90000);}
+let _lifecycleSyncRunning=false;
+window.syncFixtureLifecycle=async function({silent=true,force=false}={}){
+  if(_lifecycleSyncRunning||isRunning) return {updated:0,finished:0};
+  const data=window.scannedMatchesData||[];
+  if(!data.length) return {updated:0,finished:0};
+  const now=Date.now();
+  const candidates=data.filter(d=>{
+    const st=d.m?.fixture?.status?.short||'';
+    if(isFinished(st)) return false;
+    const ms=Date.parse(d.m?.fixture?.date||d.date||'');
+    return force || isLive(st) || (Number.isFinite(ms)&&ms<=now+10*60*1000);
+  });
+  if(!candidates.length) return {updated:0,finished:0};
+  const byDate=new Map();
+  candidates.forEach(d=>{
+    const raw=d.m?.fixture?.date||d.date||'';
+    const date=String(raw).slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    if(!byDate.has(date)) byDate.set(date,[]);
+    byDate.get(date).push(d);
+  });
+  let dates=[...byDate.keys()].sort().reverse();
+  dates=dates.slice(0,force?14:3);
+  if(!dates.length) return {updated:0,finished:0};
+  _lifecycleSyncRunning=true;
+  let updated=0, finished=0;
+  const newlyFinished=[];
+  try{
+    const responses=await Promise.all(dates.map(async date=>{
+      try{return [date,(await apiReq(`fixtures?date=${date}`))?.response||[]];}
+      catch(e){console.warn('[APEX] lifecycle date',date,e.message);return [date,[]];}
+    }));
+    const fresh=new Map();
+    responses.forEach(([,arr])=>(arr||[]).forEach(f=>fresh.set(String(f.fixture?.id),f)));
+    candidates.forEach(d=>{
+      const f=fresh.get(String(d.fixId)); if(!f) return;
+      const prev=d.m?.fixture?.status?.short||'';
+      d.m.fixture.status=f.fixture.status;
+      d.m.goals=f.goals;
+      if(f.score) d.m.score=f.score;
+      updated++;
+      if(!isFinished(prev)&&isFinished(f.fixture?.status?.short)){finished++;newlyFinished.push(d);}
+    });
+    // Fetch final detailed statistics once for newly completed matches so corners/cards/offsides settle automatically.
+    await Promise.all(newlyFinished.map(async d=>{
+      try{
+        const sr=await getFixStats(d.fixId);
+        d.actStats=_pmBuildActStats(sr,d.m?.goals||{});
+      }catch(e){console.warn('[APEX] final stats',d.fixId,e.message);}
+    }));
+    if(updated){
+      saveToVault(data);
+      // Do NOT rebuild top lists here: cards that were selected pre-match remain visible and are now settled in place.
+      renderTopSections();
+      renderSummaryTable();
+      tickerRefresh();
+      const open=document.getElementById('matchAnalysisDrawer')?.classList.contains('open');
+      if(open){
+        const id=document.getElementById('matchAnalysisDrawer')?.dataset?.fixtureId;
+        if(id) window.openMatchAnalysisDrawer(id);
+      }
+      if(!silent) showOk(`✅ Αποτελέσματα ενημερώθηκαν · ${updated} αγώνες${finished?` · ${finished} ολοκληρώθηκαν`:''}`);
+    }
+    return {updated,finished};
+  }catch(e){
+    if(!silent) showErr('Result sync: '+e.message); else console.warn('[APEX] lifecycle sync:',e.message);
+    return {updated,finished};
+  }finally{_lifecycleSyncRunning=false;}
+};
+function startAutoSync(){
+  if(_autoSyncTimer)clearInterval(_autoSyncTimer);
+  const tick=async()=>{
+    if(isRunning||_lifecycleSyncRunning) return;
+    await window.syncFixtureLifecycle({silent:true,force:false});
+    const hasLive=(window.scannedMatchesData||[]).some(d=>isLive(d.m?.fixture?.status?.short));
+    if(hasLive&&!isRunning) await window.syncLiveScores(true);
+  };
+  _autoSyncTimer=setInterval(tick,60000);
+  setTimeout(tick,1200);
+}
 
 let _tickerRaf=null,_tickerPx=45;
 function tickerRefresh(){
@@ -3505,9 +3597,10 @@ function renderValueBetsTab(bets) {
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:0.6rem;font-weight:800;color:${marketBadgeColor};background:${marketBadgeColor}18;border:1px solid ${marketBadgeColor}33;border-radius:4px;padding:1px 7px;white-space:nowrap;">${esc(b.market)}</span>
           <span style="font-size:0.65rem;color:var(--text-dim);">🇬🇷 ${formatGreeceKickoff(b,{withDate:true})}</span>
-          ${competitionContextHTML(b,{compact:true,showLifecycle:false})}
+          ${competitionContextHTML(b,{compact:true,showLifecycle:true})}
         </div>
-        <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(b.match)}</div>
+        <div style="font-weight:700;font-size:0.95rem;white-space:normal;overflow:visible;">${esc(b.match)}</div>
+        ${globalCompletedResultHTML(b,{compact:true})}
         <div style="font-size:0.8rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(b.label)}</div>
         <div style="display:flex;gap:12px;margin-top:6px;font-size:0.68rem;color:var(--text-muted);flex-wrap:wrap;">
           <span>Μοντέλο: <strong style="color:var(--text-main);">${b.modelProb}%</strong></span>
@@ -3722,7 +3815,7 @@ function renderBombsTab(bombs){
     return `<div onclick="window.openMatchAnalysisDrawer('${b.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="background:var(--bg-base);border:1px solid rgba(74,222,128,0.32);border-radius:8px;overflow:hidden;margin-bottom:10px;cursor:pointer;transition:border-color .15s,transform .15s;" onmouseover="this.style.borderColor='var(--accent-green)'" onmouseout="this.style.borderColor='rgba(74,222,128,0.32)'">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(74,222,128,0.05);flex-wrap:wrap;">
         <div style="font-family:var(--font-mono);color:var(--text-dim);">#${i+1}</div>
-        <div style="flex:1;min-width:190px;"><div style="font-weight:800;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">🇬🇷 ${formatGreeceKickoff(b,{withDate:true})} · ώρα Ελλάδος</div>${competitionContextHTML(b,{compact:true,showLifecycle:false})}</div>
+        <div style="flex:1;min-width:190px;"><div style="font-weight:800;white-space:normal;line-height:1.35;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">🇬🇷 ${formatGreeceKickoff(b,{withDate:true})} · ώρα Ελλάδος</div>${competitionContextHTML(b,{compact:true,showLifecycle:true})}${globalCompletedResultHTML(b,{compact:true})}</div>
         <div style="text-align:center;padding:5px 9px;background:rgba(0,0,0,.18);border-radius:6px;"><div style="font-size:1.25rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-gold);">${b.effectiveOdds.toFixed(2)}</div><div style="font-size:.55rem;color:var(--text-muted);">${esc(b.bestBookmaker||'BEST')}</div></div>
         <div style="text-align:center;min-width:50px;"><div style="font-size:1.2rem;font-weight:900;color:${col};font-family:var(--font-mono);">${b.bombScore}</div><div style="font-size:.55rem;color:var(--text-muted);">SCORE</div></div>
       </div>
@@ -3748,7 +3841,7 @@ function renderBombsTab(bombs){
     <div style="display:flex;flex-direction:column;gap:5px;">${diag.slice(0,8).map(d=>{
       const sc=d.status==='CONFLICT'?'var(--accent-red)':d.status==='HIGH_DIVERGENCE'?'var(--accent-gold)':'var(--text-muted)';
       return `<div onclick="window.openMatchAnalysisDrawer('${d.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="display:grid;grid-template-columns:minmax(190px,2fr) 1fr 1fr 1fr 1fr;gap:8px;align-items:center;padding:7px 9px;background:var(--bg-surface);border-radius:6px;font-size:.65rem;cursor:pointer;">
-        <div><b>${esc(d.ht)}–${esc(d.at)}</b><br><span style="color:var(--text-muted);">${esc(d.label)}</span>${competitionContextHTML(d,{compact:true})}</div>
+        <div><b>${esc(d.ht)}–${esc(d.at)}</b><br><span style="color:var(--text-muted);">${esc(d.label)}</span>${competitionContextHTML(d,{compact:true})}${globalCompletedResultHTML(d,{compact:true})}</div>
         <div>Odds <b>${d.effectiveOdds.toFixed(2)}</b></div>
         <div>Δ <b>${d.gapPP>=0?'+':''}${d.gapPP.toFixed(1)}pp</b></div>
         <div>EV <b>${d.execEdgePct>=0?'+':''}${d.execEdgePct.toFixed(1)}%</b></div>
@@ -3867,8 +3960,9 @@ function renderTopSections(){
         html+=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);transition:border-color 0.18s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border-light)'">
           <div style="font-family:var(--font-mono);font-size:1.1rem;color:var(--text-dim);min-width:28px;text-align:center;flex-shrink:0;">#${j+1}</div>
           <div style="flex:1;min-width:0;cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
-            <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
+            <div style="font-weight:700;font-size:0.95rem;white-space:normal;overflow:visible;line-height:1.35;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
             ${competitionContextHTML(x,{compact:true})}
+            ${globalCompletedResultHTML(x,{compact:true})}
             <div style="font-size:0.82rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(x.omegaPick)}</div>
             ${x.precision?`<div style="font-size:.68rem;margin-top:3px;color:${x.precision.allowed?'var(--accent-green)':x.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'};font-family:var(--font-mono);">🧠 Meta ${Math.round(x.precision.metaProb*100)}% · threshold ${Math.round(x.precision.threshold*100)}% · ${x.precision.tier}</div>`:''}
             ${evBadge}
@@ -3948,8 +4042,10 @@ function renderPlayersTab(players) {
         <div style="font-size:0.7rem;color:var(--text-muted);margin-top:1px;">${teamShort}</div>
       </td>
       <td style="padding:9px 8px;min-width:140px;max-width:180px;">
-        <div style="font-size:0.72rem;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.matchLabel||'')}</div>
+        <div style="font-size:0.72rem;color:var(--text-dim);white-space:normal;line-height:1.3;">${esc(p.matchLabel||'')}</div>
         <div style="font-size:0.65rem;color:var(--text-dim);margin-top:1px;">${esc(p.lg||'')}</div>
+        ${matchLifecycleHTML({fixId:p.matchId},{compact:true})}
+        ${globalCompletedResultHTML({fixId:p.matchId},{compact:true})}
       </td>
       <td style="padding:9px 8px;min-width:100px;">
         <div style="display:flex;align-items:center;gap:6px;">
@@ -4148,6 +4244,7 @@ function renderTop3Certainty(bets) {
         <div style="flex:1;min-width:0;">
           <div style="font-weight:800;font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} vs ${esc(x.at)}</div>
           ${competitionContextHTML(x,{compact:true})}
+          ${globalCompletedResultHTML(x,{compact:true})}
         </div>
         <div style="text-align:right;flex-shrink:0;">
           <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${rankColors[i]};line-height:1;">${certScore}</div>
