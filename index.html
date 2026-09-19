@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.4 — Right-Side Match Analysis + Verified Value Edge</title>
+  <title>APEX OMEGA v5.5 — Adaptive Precision Lab + Verified Value Edge</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260919-market-bombs-novig">
+  <link rel="stylesheet" href="style.css?v=20260919-adaptive-precision-lab">
 </head>
 <body>
 
@@ -15,7 +15,7 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <div class="brand-logo">
       APEX<span>OMEGA</span>
-      <span class="version-tag" id="versionTag">v5.4</span>
+      <span class="version-tag" id="versionTag">v5.5</span>
     </div>
     <div id="lastUpdatedBadge" style="display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.58rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:3px 9px;white-space:nowrap;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
@@ -64,7 +64,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.4 · RIGHT-SIDE MATCH ANALYSIS · VALUE EDGE · NO-VIG MARKET</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.5 · ADAPTIVE PRECISION LAB · WALK-FORWARD · META-CONFIDENCE</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -275,6 +275,34 @@
           <label class="input-label">&nbsp;</label>
           <button class="btn btn-danger" onclick="clearVault()">Purge</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ── ADAPTIVE PRECISION LAB v5.5 ─────────────────────── -->
+    <div class="quant-panel" style="border-color:rgba(45,212,191,0.28);">
+      <div class="panel-title clickable" style="color:var(--teal);" onclick="togglePanel('adaptivePrecisionBody','adaptivePrecisionArrow')">
+        <span style="display:flex;align-items:center;gap:10px;">🧠 Adaptive Precision Lab <span style="font-size:.64rem;color:var(--text-muted);font-family:var(--font-mono);">1X2 · walk-forward · meta-confidence</span></span>
+        <span id="adaptivePrecisionArrow" class="arrow">▼</span>
+      </div>
+      <div id="adaptivePrecisionBody" style="display:none;">
+        <div style="padding:10px 12px;background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.18);border-radius:7px;margin-bottom:12px;font-size:.72rem;color:var(--text-muted);line-height:1.6;">
+          Uses the <b>Audit From / To</b> period and selected league. It recalls final results, trains only on frozen pre-match information, validates chronologically, and may return <b>NO SIGNAL</b> rather than force a 1/X/2 selection.
+        </div>
+        <div class="calib-grid" style="margin-bottom:12px;">
+          <div class="calib-item"><span class="calib-lbl">Prediction Objective</span><select id="aplObjective" class="calib-input" onchange="window.setPrecisionObjective(this.value)"><option value="BALANCED">Balanced</option><option value="HIGH_ACCURACY">High Accuracy</option><option value="ELITE">Elite</option><option value="CUSTOM">Custom</option></select></div>
+          <div class="calib-item"><span class="calib-lbl">Target Accuracy %</span><input type="number" id="aplTarget" class="calib-input" min="55" max="90" step="1" value="70"></div>
+          <div class="calib-item"><span class="calib-lbl">Minimum Coverage %</span><input type="number" id="aplCoverage" class="calib-input" min="5" max="80" step="1" value="15"></div>
+          <div class="calib-item"><span class="calib-lbl">Minimum Learning Sample</span><input type="number" id="aplMinSample" class="calib-input" min="20" max="500" step="5" value="40"></div>
+          <div class="calib-item"><span class="calib-lbl">Rolling Window (days)</span><input type="number" id="aplWindow" class="calib-input" min="30" max="1825" step="30" value="365"></div>
+          <div class="calib-item"><span class="calib-lbl">Recency Half-Life (days)</span><input type="number" id="aplHalfLife" class="calib-input" min="30" max="730" step="15" value="120"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:7px;font-size:.72rem;color:var(--text-sub);"><input type="checkbox" id="aplGuard" checked> Apply precision guard to 1X2 selections</label>
+          <button class="btn btn-primary" onclick="window.runAdaptivePrecisionLab()" style="background:var(--teal);border-color:var(--teal);color:#04110f;font-weight:900;">↻ Recall &amp; Train</button>
+          <button class="btn btn-outline" onclick="window.saveAdaptivePrecisionSettings()">Save Precision Settings</button>
+          <button class="btn btn-outline" onclick="window.resetAdaptivePrecisionModel()" style="color:var(--red);border-color:rgba(251,113,133,.25);">Reset Model</button>
+        </div>
+        <div id="adaptivePrecisionPanel"></div>
       </div>
     </div>
 

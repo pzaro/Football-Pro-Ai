@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.4 — RIGHT-SIDE MATCH ANALYSIS DRAWER + CLICKABLE GREEK INDICATORS + VERIFIED VALUE EDGE + MARKET BOMBS
+// APEX OMEGA v5.5 — ADAPTIVE PRECISION LAB + RIGHT-SIDE MATCH ANALYSIS + VERIFIED VALUE EDGE + MARKET BOMBS
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -116,6 +116,10 @@ Object.assign(ACRONYM_DICT, {
   'CLV':      'Αξία έναντι της τελικής γραμμής (Closing Line Value) — Συγκρίνει την απόδοση που πήρες με την τελική τιμή της αγοράς πριν την έναρξη.',
   'Poisson':  'Κατανομή Poisson — Στατιστικό μοντέλο που χρησιμοποιείται για την εκτίμηση του αριθμού γκολ και των πιθανοτήτων σκορ.',
   'Dixon-Coles':'Μοντέλο Dixon–Coles — Προσαρμογή του Poisson για ποδοσφαιρικά σκορ με έμφαση στα χαμηλά αποτελέσματα.',
+  'Coverage':'Κάλυψη (Coverage) — Ποσοστό των διαθέσιμων αγώνων για τους οποίους το σύστημα επιτρέπει τελικά πρόγνωση αντί να απέχει.',
+  'Wilson LB':'Κατώτερο όριο Wilson — Συντηρητικό κάτω όριο της εκτιμώμενης ακρίβειας που λαμβάνει υπόψη και το μέγεθος δείγματος.',
+  'Meta-Confidence':'Μετα-βεβαιότητα (Meta-Confidence) — Εκτιμώμενη πιθανότητα ότι το βασικό σημείο 1/X/2 του APEX θα επαληθευτεί, με βάση ιστορικά out-of-sample δεδομένα.',
+  'Walk-Forward':'Διαδοχική χρονική επικύρωση (Walk-Forward Validation) — Εκπαίδευση μόνο στο παρελθόν και έλεγχος σε μεταγενέστερους αγώνες ώστε να περιορίζεται το overfitting.',
 });
 
 /**
@@ -153,7 +157,7 @@ let teamStatsCache = new BoundedCache(150),
     liveStatsCache = new BoundedCache(50),
     lineupsCache   = new BoundedCache(100);  // starting XI per fixture (invalidated on sub)
 let isRunning = false, currentCredits = null;
-let latestTopLists = { exact:[], combo1:[], outcomes:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[], valueBets:[] };
+let latestTopLists = { exact:[], combo1:[], outcomes:[], precision:[], over25:[], over35:[], under25:[], corners:[], bombs:[], players:[], valueBets:[] };
 window.scannedMatchesData = [];
 let bankrollData = { current: 0, history: [] };
 
@@ -284,9 +288,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.4';
+const APP_VERSION   = 'v5.5';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'RIGHT-SIDE MATCH ANALYSIS · CLICKABLE GREEK INDICATORS · VALUE EDGE · NO-VIG MARKET';
+const BUILD_TIME    = 'ADAPTIVE PRECISION LAB · WALK-FORWARD · META-CONFIDENCE · HISTORICAL RECALL · VALUE EDGE';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -2136,6 +2140,7 @@ window.runScan=async function(){
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
     }
     
+    window.applyAdaptivePrecisionToCurrentScan?.();
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
     renderBetJournal();
@@ -3082,8 +3087,11 @@ window.fetchAllOdds=async function(force=false){
 
     buildValueBetsList();
     buildBombsList(); // κρίσιμο: πριν υπήρχε market data αλλά τα Bombs δεν ξαναχτίζονταν.
-    saveToVault(window.scannedMatchesData); // κρατά market-bomb snapshot στο ιστορικό.
+    window.applyAdaptivePrecisionToCurrentScan?.(); // market agreement may refine meta-confidence
+    saveToVault(window.scannedMatchesData); // κρατά market-bomb + precision snapshot στο ιστορικό.
+    rebuildTopLists();
     renderTopSections();
+    renderSummaryTable();
 
     const bombN=latestTopLists.bombs?.length||0;
     if(priced>0){
@@ -3397,7 +3405,9 @@ function rebuildTopLists(){
     (x.strength||0) >= MIN_CONF
   );
   latestTopLists.combo1   =sd.filter(x=>x.omegaPick?.includes('⚡')||x.omegaPick?.includes('💣')).sort((a,b)=>b.strength-a.strength).slice(0,6);
-  latestTopLists.outcomes =sd.filter(x=>x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΝΙΚΗ')||x.omegaPick?.includes('ΔΙΠΛΟ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
+  const outcomeRaw=sd.filter(x=>['1','X','2'].includes(_aplPick(x))&&(x.omegaPick?.includes('ΑΣΟΣ')||x.omegaPick?.includes('ΝΙΚΗ')||x.omegaPick?.includes('ΔΙΠΛΟ')||x.omegaPick?.includes('ΙΣΟΠΑΛ')));
+  latestTopLists.precision=outcomeRaw.filter(x=>x.precision?.allowed).sort((a,b)=>(b.precision?.metaProb||0)-(a.precision?.metaProb||0)).slice(0,10);
+  latestTopLists.outcomes =outcomeRaw.filter(x=>_aplAllowsRec(x)).sort((a,b)=>(b.precision?.metaProb||b.strength/100)-(a.precision?.metaProb||a.strength/100)).slice(0,6);
   latestTopLists.exact    =[...sd].sort((a,b)=>(b.exactConf||0)-(a.exactConf||0)).slice(0,6);
   latestTopLists.over25   =sd.filter(x=>x.omegaPick?.includes('ΠΑΝΩ')).sort((a,b)=>b.strength-a.strength).slice(0,6);
   latestTopLists.corners  =sd.filter(x=>x.omegaPick?.includes('ΚΟΡΝΕΡ')).sort((a,b)=>b.cornerConf-a.cornerConf).slice(0,6);
@@ -3443,6 +3453,7 @@ function renderTopSections(){
     {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
+    {id:'precision',lbl:`🧠 Precision 1X2`,                                 d:latestTopLists.precision||[],sk:null,          sl:'META'},
     {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
     {id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'},
@@ -3483,16 +3494,18 @@ function renderTopSections(){
       tab.d.forEach((x,j)=>{
         let val = tab.id==='exact'
           ? (x.exact||'?-?')+(x.exact2&&x.exact2!==x.exact?` / ${x.exact2}`:'')
+          : tab.id==='precision' ? `${((x.precision?.metaProb||0)*100).toFixed(1)}%`
           : Number(x[tab.sk]||0).toFixed(1)+(tab.id==='corners'?'%':'');
         const evBadge = x.ev > 0
           ? `<div style="font-size:0.68rem;color:var(--accent-green);font-weight:700;margin-top:2px;">EV: +${x.ev.toFixed(1)}% @ ${x.odds?.toFixed(2)||''}</div>`
           : '';
         html+=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);transition:border-color 0.18s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border-light)'">
           <div style="font-family:var(--font-mono);font-size:1.1rem;color:var(--text-dim);min-width:28px;text-align:center;flex-shrink:0;">#${j+1}</div>
-          <div style="flex:1;min-width:0;cursor:pointer;" onclick="scrollToMatch('row-${x.fixId}')">
+          <div style="flex:1;min-width:0;cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
             <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
             <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;margin-top:3px;">${esc(x.lg)}</div>
             <div style="font-size:0.82rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(x.omegaPick)}</div>
+            ${x.precision?`<div style="font-size:.68rem;margin-top:3px;color:${x.precision.allowed?'var(--accent-green)':x.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'};font-family:var(--font-mono);">🧠 Meta ${Math.round(x.precision.metaProb*100)}% · threshold ${Math.round(x.precision.threshold*100)}% · ${x.precision.tier}</div>`:''}
             ${evBadge}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">
@@ -3500,7 +3513,7 @@ function renderTopSections(){
               <div style="font-family:var(--font-mono);font-size:1.2rem;font-weight:800;color:var(--accent-blue);">${val}</div>
               <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;">${tab.sl}</div>
             </div>
-            <button onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="font-size:0.65rem;padding:3px 8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:4px;cursor:pointer;white-space:nowrap;" title="Άνοιγμα ανάλυσης">📊 Ανάλυση</button>
+            <button onclick="window.openMatchAnalysisDrawer('${x.fixId}')" style="font-size:0.65rem;padding:3px 8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:4px;cursor:pointer;white-space:nowrap;" title="Άνοιγμα ανάλυσης">📊 Ανάλυση</button>
           </div>
         </div>`;
       });
@@ -3693,10 +3706,12 @@ window.openMatchAnalysisDrawer=function(fixId){
   document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}<span>${esc(rec.lg||'MATCH ANALYSIS')}</span>`;
   document.getElementById('matchDrawerTitle').textContent=`${rec.ht||'—'} vs ${rec.at||'—'}`;
   document.getElementById('matchDrawerMeta').textContent=`${when}${score}`;
+  const precisionQuick=rec.precision?`<div class="match-analysis-stat"><span>Meta-Confidence</span><strong style="color:${rec.precision.allowed?'var(--accent-green)':rec.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'}">${(rec.precision.metaProb*100).toFixed(1)}% · ${rec.precision.tier} · cut ${(rec.precision.threshold*100).toFixed(0)}%</strong></div>`:'';
   document.getElementById('matchDrawerQuick').innerHTML=`
     <div class="match-analysis-stat"><span>1X2</span><strong>1 ${ph.toFixed(1)}% · X ${px.toFixed(1)}% · 2 ${pa.toFixed(1)}%</strong></div>
     <div class="match-analysis-stat"><span>xG</span><strong>${hXG.toFixed(2)} – ${aXG.toFixed(2)} · tXG ${tXG.toFixed(2)}</strong></div>
     <div class="match-analysis-stat"><span>CONF</span><strong>${conf.toFixed(0)}%</strong></div>
+    ${precisionQuick}
     <div class="match-analysis-stat match-analysis-signal"><span>SIGNAL</span><strong>${esc(rec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ')}</strong></div>`;
   const body=document.getElementById('matchDrawerBody');
   body.innerHTML=_drawerBodyFromAccordion(rec) || '<div style="padding:20px;color:var(--text-muted);">Δεν υπάρχει διαθέσιμη λεπτομερής ανάλυση.</div>';
@@ -3783,7 +3798,7 @@ function renderTop3Certainty(bets) {
       </div>
       <!-- Actions -->
       <div style="padding:10px 16px;border-top:1px solid var(--border-light);display:flex;gap:8px;flex-wrap:wrap;">
-        <button onclick="scrollToMatchAndOpen('row-${x.fixId}')" style="flex:1;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📊 Πλήρης Ανάλυση</button>
+        <button onclick="window.openMatchAnalysisDrawer('${x.fixId}')" style="flex:1;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📊 Πλήρης Ανάλυση</button>
         <button onclick="window.openLogBetModal('${x.fixId}')" style="flex:1;padding:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--accent-green);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Log Bet</button>
       </div>
     </div>`;
@@ -5134,6 +5149,8 @@ window.runCustomAudit = async function(autoMode = false) {
       settled++;
       const ah = safeNum(fix.goals.home), aa = safeNum(fix.goals.away);
       const aTot = ah + aa, aExact = `${ah}-${aa}`, aOut = ah>aa?'1':ah<aa?'2':'X', aBtts = ah>0&&aa>0;
+      // Persist the settled outcome once. Future Audit / Precision cycles reuse it without another API call.
+      p.pmActualHome=ah; p.pmActualAway=aa; p.pmActualScore=aExact; p.pmStatus=fix.fixture.status.short; p.actualResult=aOut; p.pmSettledAt=p.pmSettledAt||new Date().toISOString();
       stats.games++;
 
       // Stats μόνο για records με πραγματικό pick (hasPick)
@@ -5261,6 +5278,7 @@ window.runCustomAudit = async function(autoMode = false) {
     </div>`;
 
     document.getElementById('auditSection').innerHTML = html;
+    try{ localStorage.setItem(LS_PREDS, JSON.stringify(store)); }catch{}
 
     // ── Auto-Calibration: τρέχει αμέσως ──────────────────────
     if(calibRecs.length >= CALIB_MIN_N) {
@@ -5288,6 +5306,8 @@ window.runCustomAudit = async function(autoMode = false) {
       }, 350);
     }
 
+    // The same chronological window also refreshes the Adaptive Precision model.
+    try{ window.trainAdaptivePrecisionFromVault?.({background:true,start:s,end:e,league:lgFilter}); renderAdaptivePrecisionLab?.(); }catch(e){console.warn('[APEX] audit precision refresh',e);}
     showOk(`✅ Audit ολοκληρώθηκε — ${settled} αγώνες αξιολογήθηκαν.`);
 
   } catch(e) {
@@ -5296,6 +5316,401 @@ window.runCustomAudit = async function(autoMode = false) {
     isRunning = false; setBtnsDisabled(false); setLoader(false);
   }
 };
+// ================================================================
+//  v5.5 — ADAPTIVE PRECISION LAB
+//  Meta-confidence + walk-forward validation + historical recall
+//  + league/outcome-specific precision thresholds + feature ablation.
+//
+//  Design rule: optimize SELECTIVE 1X2 accuracy, not raw coverage.
+//  The lab may abstain (NO SIGNAL) when the requested accuracy target
+//  is not supported by validated historical evidence.
+// ================================================================
+const LS_APL_MODEL    = 'omega_adaptive_precision_model_v5.5';
+const LS_APL_SETTINGS = 'omega_adaptive_precision_settings_v5.5';
+const LS_APL_LOG      = 'omega_adaptive_precision_log_v5.5';
+const APL_SCHEMA      = 1;
+const APL_FEATURES = [
+  'baseProb','probGap','xgSupport','formSupport','stability',
+  'lineupQuality','injurySafety','marketAgreement','homePick','drawPick','awayPick'
+];
+const APL_FEATURE_LABELS = {
+  baseProb:'Base 1X2 probability', probGap:'Probability gap', xgSupport:'xG direction',
+  formSupport:'Form support', stability:'Recent stability', lineupQuality:'Lineup quality',
+  injurySafety:'Injury safety', marketAgreement:'Market agreement',
+  homePick:'Pick=1', drawPick:'Pick=X', awayPick:'Pick=2'
+};
+const APL_DEFAULT_SETTINGS = {
+  objective:'HIGH_ACCURACY', targetAccuracy:70, minCoverage:15, minSample:40,
+  windowDays:365, recencyHalfLife:120, applyGuard:true
+};
+let adaptivePrecisionModel = null;
+let adaptivePrecisionSettings = {...APL_DEFAULT_SETTINGS};
+let adaptivePrecisionLog = [];
+
+function _aplClamp01(v){ return clamp(Number(v)||0,0,1); }
+function _aplSigmoid(z){
+  const x=clamp(Number(z)||0,-30,30);
+  return 1/(1+Math.exp(-x));
+}
+function _aplLogit(p){ const q=clamp(Number(p)||0.5,0.02,0.98); return Math.log(q/(1-q)); }
+function _aplMean(arr){ const a=(arr||[]).filter(Number.isFinite); return a.length?a.reduce((s,v)=>s+v,0)/a.length:null; }
+function _aplDateMs(x){ const t=Date.parse(String(x||'')); return Number.isFinite(t)?t:0; }
+function _aplDayDiff(a,b){ return Math.abs((a-b)/86400000); }
+function _aplWilson(h,n,z=1.96){
+  if(!n) return 0;
+  const p=h/n, z2=z*z, den=1+z2/n;
+  return Math.max(0,(p+z2/(2*n)-z*Math.sqrt((p*(1-p)+z2/(4*n))/n))/den);
+}
+function _aplBrier(rows,key='pred'){
+  if(!rows?.length) return null;
+  return rows.reduce((s,r)=>s+(clamp(Number(r[key])||0,0.001,0.999)-r.y)**2,0)/rows.length;
+}
+function _aplLogLoss(rows,key='pred'){
+  if(!rows?.length) return null;
+  return rows.reduce((s,r)=>{const p=clamp(Number(r[key])||0,0.001,0.999);return s-(r.y*Math.log(p)+(1-r.y)*Math.log(1-p));},0)/rows.length;
+}
+function _aplActualScore(r){
+  if(Number.isFinite(Number(r?.pmActualHome))&&Number.isFinite(Number(r?.pmActualAway))) return {h:Number(r.pmActualHome),a:Number(r.pmActualAway)};
+  const txt=String(r?.pmActualScore||r?.actualScore||'');
+  const m=txt.match(/(\d+)\s*[-:]\s*(\d+)/); if(m) return {h:Number(m[1]),a:Number(m[2])};
+  return null;
+}
+function _aplActualOutcome(r){
+  if(['1','X','2'].includes(r?.actualResult)) return r.actualResult;
+  const sc=_aplActualScore(r); if(!sc) return null;
+  return sc.h>sc.a?'1':sc.h<sc.a?'2':'X';
+}
+function _aplPick(r){
+  const p=String(r?.outPick||'').trim();
+  if(['1','X','2'].includes(p)) return p;
+  const txt=String(r?.omegaPick||'').toUpperCase();
+  if(txt.includes('ΙΣΟΠΑΛ')||txt.includes('DRAW')) return 'X';
+  if(txt.includes('ΔΙΠΛΟ')||txt.includes('ΝΙΚΗ ΦΙΛΟΞ')||txt.includes('AWAY WIN')) return '2';
+  if(txt.includes('ΑΣΟΣ')||txt.includes('ΝΙΚΗ ΓΗΠΕΔ')||txt.includes('HOME WIN')) return '1';
+  return null;
+}
+function _aplProbTriple(r){
+  const ph=Number(r?.prePHome ?? r?.pp?.pHome), px=Number(r?.prePDraw ?? r?.pp?.pDraw), pa=Number(r?.prePAway ?? r?.pp?.pAway);
+  if([ph,px,pa].every(v=>Number.isFinite(v)&&v>=0&&v<=1)) return {home:ph,draw:px,away:pa};
+  return null;
+}
+function _aplBaseProb(r,pick){
+  const pp=_aplProbTriple(r);
+  if(pp){ return pick==='1'?pp.home:pick==='X'?pp.draw:pp.away; }
+  const s=Number(r?.preStrength ?? r?.strength);
+  if(Number.isFinite(s)&&s>0) return clamp(s/100,0.34,0.94);
+  return 0.50;
+}
+function _aplMarketProbForPick(r,pick){
+  const explicit = pick==='1'?Number(r?.preMarketHome):pick==='X'?Number(r?.preMarketDraw):Number(r?.preMarketAway);
+  if(Number.isFinite(explicit)&&explicit>0&&explicit<1) return explicit;
+  const mk=pick==='1'?'home':pick==='X'?'draw':'away';
+  const v=Number(r?.odds?._market?.[mk]?.noVigProb);
+  return Number.isFinite(v)&&v>0&&v<1?v:null;
+}
+function _aplFeatureVector(r,pickOverride=null){
+  const pick=pickOverride||_aplPick(r); if(!pick) return null;
+  const pp=_aplProbTriple(r), baseProb=_aplBaseProb(r,pick);
+  let probGap=0.10;
+  if(pp){
+    const vals=[pp.home,pp.draw,pp.away].sort((a,b)=>b-a);
+    probGap=clamp(vals[0]-vals[1],0,0.45)/0.45;
+  }else{
+    probGap=clamp((Number(r?.preStrength??r?.strength)||50)-50,0,45)/45;
+  }
+  const xd=Number(r?.xgDiff||r?.preXgDiff||0);
+  let xgSupport=0.5;
+  if(pick==='1') xgSupport=clamp(0.5+xd/2.4,0,1);
+  else if(pick==='2') xgSupport=clamp(0.5-xd/2.4,0,1);
+  else xgSupport=clamp(1-Math.abs(xd)/0.75,0,1);
+
+  const hf=Number(r?.preHForm??r?.hFormRating??r?.hS?.formRating), af=Number(r?.preAForm??r?.aFormRating??r?.aS?.formRating);
+  let formSupport=0.5;
+  if(Number.isFinite(hf)&&Number.isFinite(af)){
+    if(pick==='1') formSupport=clamp(0.5+(hf-af)/120,0,1);
+    else if(pick==='2') formSupport=clamp(0.5+(af-hf)/120,0,1);
+    else formSupport=clamp(1-Math.abs(hf-af)/55,0,1);
+  }
+
+  const hsd=Number(r?.preHSdGoals??r?.hSdGoals??r?.hS?.r6?.sdGoals), asd=Number(r?.preASdGoals??r?.aSdGoals??r?.aS?.r6?.sdGoals);
+  let stability=0.5;
+  if(Number.isFinite(hsd)||Number.isFinite(asd)){
+    const vals=[hsd,asd].filter(Number.isFinite); const avg=vals.reduce((s,v)=>s+v,0)/vals.length;
+    stability=clamp(1-avg/1.65,0,1);
+  }
+
+  const cov=Number(r?.preLineupCoverage);
+  let lineupQuality=Number.isFinite(cov)?clamp(cov,0,1):(r?.lineupData?.available?clamp(((Number(r?.hInjAdj?.coverage)||0.85)+(Number(r?.aInjAdj?.coverage)||0.85))/2,0,1):0.68);
+  const hid=Number((r?.preHInjuryDelta ?? r?.hInjAdj?.delta) ?? 0), aid=Number((r?.preAInjuryDelta ?? r?.aInjAdj?.delta) ?? 0);
+  const injuryLoad=Math.abs(Math.min(0,hid))+Math.abs(Math.min(0,aid));
+  const injurySafety=clamp(1-injuryLoad/0.75,0,1);
+  const marketProb=_aplMarketProbForPick(r,pick);
+  const marketAgreement=marketProb===null?0.50:clamp(1-Math.abs(baseProb-marketProb)/0.25,0,1);
+
+  return [
+    _aplClamp01(baseProb),_aplClamp01(probGap),_aplClamp01(xgSupport),_aplClamp01(formSupport),
+    _aplClamp01(stability),_aplClamp01(lineupQuality),_aplClamp01(injurySafety),_aplClamp01(marketAgreement),
+    pick==='1'?1:0,pick==='X'?1:0,pick==='2'?1:0
+  ];
+}
+function _aplExampleFromRecord(r){
+  const pick=_aplPick(r), actual=_aplActualOutcome(r); if(!pick||!actual) return null;
+  const features=_aplFeatureVector(r,pick); if(!features) return null;
+  const baseProb=_aplBaseProb(r,pick);
+  return {
+    fixtureId:r.fixtureId||r.fixId, date:String(r.date||r?.m?.fixture?.date||''), leagueId:Number(r.leagueId||0),
+    league:r.league||r.lg||'', homeTeam:r.homeTeam||r.ht||'', awayTeam:r.awayTeam||r.at||'',
+    pick, actual, y:pick===actual?1:0, features, baseProb:clamp(baseProb,0.05,0.95), source:r
+  };
+}
+function _aplExamplesFromStore(store,opts={}){
+  const start=opts.start||'0000-01-01', end=opts.end||'9999-12-31', lid=String(opts.league||'ALL');
+  return (store||[]).map(_aplExampleFromRecord).filter(Boolean).filter(x=>{
+    const d=String(x.date||'').slice(0,10); if(!d||d<start||d>end) return false;
+    return lid==='ALL'||String(x.leagueId)===lid;
+  }).sort((a,b)=>_aplDateMs(a.date)-_aplDateMs(b.date));
+}
+function _aplTrainLogistic(examples,halfLife=120,indexes=null,iterations=420){
+  const idx=indexes||APL_FEATURES.map((_,i)=>i), d=idx.length;
+  const w=Array(d+1).fill(0);
+  const hit=examples.reduce((s,e)=>s+e.y,0)/Math.max(1,examples.length);
+  w[0]=_aplLogit(clamp(hit,0.15,0.85));
+  const latest=Math.max(...examples.map(e=>_aplDateMs(e.date)),Date.now());
+  const lr0=0.16, l2=0.018;
+  for(let it=0;it<iterations;it++){
+    const g=Array(d+1).fill(0); let sw=0;
+    for(const e of examples){
+      const age=_aplDayDiff(latest,_aplDateMs(e.date)||latest);
+      const rw=Math.pow(0.5,age/Math.max(30,halfLife));
+      let z=w[0]; for(let j=0;j<d;j++) z+=w[j+1]*(e.features[idx[j]]-0.5);
+      const p=_aplSigmoid(z), err=(p-e.y)*rw; g[0]+=err; sw+=rw;
+      for(let j=0;j<d;j++) g[j+1]+=err*(e.features[idx[j]]-0.5);
+    }
+    const lr=lr0/(1+it/260);
+    w[0]-=lr*g[0]/Math.max(sw,1);
+    for(let j=1;j<w.length;j++) w[j]-=lr*(g[j]/Math.max(sw,1)+l2*w[j]);
+  }
+  return {weights:w,indexes:idx};
+}
+function _aplPredict(model,features){
+  if(!model?.weights?.length) return 0.5;
+  let z=model.weights[0]; const idx=model.indexes||APL_FEATURES.map((_,i)=>i);
+  for(let j=0;j<idx.length;j++) z+=model.weights[j+1]*((features[idx[j]]??0.5)-0.5);
+  return clamp(_aplSigmoid(z),0.05,0.95);
+}
+function _aplWalkForward(examples,settings){
+  const n=examples.length, bounds=[0.55,0.70,0.85,1.00], preds=[];
+  if(n<Math.max(settings.minSample,50)) return {preds,folds:0};
+  let folds=0;
+  for(let i=0;i<bounds.length-1;i++){
+    const trainEnd=Math.floor(n*bounds[i]), testEnd=Math.floor(n*bounds[i+1]);
+    const train=examples.slice(0,trainEnd), test=examples.slice(trainEnd,testEnd);
+    if(train.length<settings.minSample||test.length<8) continue;
+    const model=_aplTrainLogistic(train,settings.recencyHalfLife);
+    test.forEach(e=>preds.push({...e,pred:_aplPredict(model,e.features),basePred:e.baseProb,fold:i+1}));
+    folds++;
+  }
+  return {preds,folds};
+}
+function _aplThresholdSearch(rows,settings){
+  const target=settings.targetAccuracy/100, minCov=settings.minCoverage/100;
+  const minN=Math.max(8,Math.min(settings.minSample,Math.floor(rows.length*0.35)));
+  const all=[];
+  for(let t=0.50;t<=0.90+1e-9;t+=0.01){
+    const sel=rows.filter(r=>r.pred>=t); if(!sel.length) continue;
+    const hits=sel.reduce((s,r)=>s+r.y,0), accuracy=hits/sel.length, coverage=sel.length/rows.length, wilson=_aplWilson(hits,sel.length);
+    all.push({threshold:+t.toFixed(2),n:sel.length,hits,accuracy,coverage,wilson});
+  }
+  const feasible=all.filter(x=>x.n>=minN&&x.coverage>=minCov&&x.accuracy>=target);
+  let chosen=null, targetMet=false;
+  if(feasible.length){
+    // Highest coverage first; Wilson lower bound breaks ties.
+    chosen=[...feasible].sort((a,b)=>b.coverage-a.coverage||b.wilson-a.wilson)[0]; targetMet=true;
+  }else{
+    const viable=all.filter(x=>x.n>=Math.max(8,Math.floor(minN*0.65))&&x.coverage>=Math.min(minCov,0.10));
+    chosen=(viable.length?viable:all).sort((a,b)=>b.wilson-a.wilson||b.accuracy-a.accuracy||b.n-a.n)[0]||{threshold:0.70,n:0,hits:0,accuracy:0,coverage:0,wilson:0};
+  }
+  return {...chosen,targetMet,target:target,frontier:all};
+}
+function _aplScopePolicies(preds,settings){
+  const global=_aplThresholdSearch(preds,settings), outcomes={}, leagues={};
+  ['1','X','2'].forEach(p=>{const rows=preds.filter(r=>r.pick===p);if(rows.length>=16) outcomes[p]={..._aplThresholdSearch(rows,{...settings,minCoverage:Math.min(settings.minCoverage,12),minSample:Math.max(16,Math.floor(settings.minSample*0.6))}),sample:rows.length};});
+  const byLeague={}; preds.forEach(r=>{(byLeague[r.leagueId]??=[]).push(r);});
+  Object.entries(byLeague).forEach(([lid,rows])=>{if(rows.length>=24) leagues[lid]={..._aplThresholdSearch(rows,{...settings,minCoverage:Math.min(settings.minCoverage,12),minSample:Math.max(18,Math.floor(settings.minSample*0.65))}),sample:rows.length,league:rows[0]?.league||`League ${lid}`};});
+  return {global,outcomes,leagues};
+}
+function _aplEffectiveThreshold(model,leagueId,pick){
+  const g=Number(model?.policies?.global?.threshold)||0.70;
+  let t=g;
+  const op=model?.policies?.outcomes?.[pick];
+  if(op?.targetMet){const w=op.sample/(op.sample+45);t+=w*(op.threshold-g)*0.55;}
+  const lp=model?.policies?.leagues?.[String(leagueId)];
+  if(lp?.targetMet){const w=lp.sample/(lp.sample+60);t+=w*(lp.threshold-g)*0.55;}
+  return clamp(t,0.50,0.92);
+}
+function _aplAblation(examples,settings){
+  if(examples.length<60) return [];
+  const cut=Math.max(settings.minSample,Math.floor(examples.length*0.80)); if(cut>=examples.length-8) return [];
+  const train=examples.slice(0,cut), test=examples.slice(cut);
+  const allIdx=APL_FEATURES.map((_,i)=>i), full=_aplTrainLogistic(train,settings.recencyHalfLife,allIdx,320);
+  const fullRows=test.map(e=>({...e,pred:_aplPredict(full,e.features)})); const fullB=_aplBrier(fullRows);
+  return APL_FEATURES.slice(0,8).map((name,j)=>{
+    const idx=allIdx.filter(i=>i!==j), m=_aplTrainLogistic(train,settings.recencyHalfLife,idx,260);
+    const rows=test.map(e=>({...e,pred:_aplPredict(m,e.features)}));
+    return {name,label:APL_FEATURE_LABELS[name]||name,deltaBrier:(_aplBrier(rows)??fullB)-fullB};
+  }).sort((a,b)=>b.deltaBrier-a.deltaBrier);
+}
+function _aplCalibrationBins(rows){
+  const bins=[{lo:.50,hi:.60},{lo:.60,hi:.70},{lo:.70,hi:.80},{lo:.80,hi:.90},{lo:.90,hi:1.01}];
+  return bins.map(b=>{const r=rows.filter(x=>x.pred>=b.lo&&x.pred<b.hi);const hits=r.reduce((s,x)=>s+x.y,0);return {label:`${Math.round(b.lo*100)}–${Math.round(Math.min(1,b.hi)*100)}%`,n:r.length,pred:_aplMean(r.map(x=>x.pred))||0,actual:r.length?hits/r.length:0};});
+}
+function _aplLoadState(){
+  try{adaptivePrecisionSettings={...APL_DEFAULT_SETTINGS,...JSON.parse(localStorage.getItem(LS_APL_SETTINGS)||'{}')};}catch{adaptivePrecisionSettings={...APL_DEFAULT_SETTINGS};}
+  try{adaptivePrecisionModel=JSON.parse(localStorage.getItem(LS_APL_MODEL)||'null');}catch{adaptivePrecisionModel=null;}
+  try{adaptivePrecisionLog=JSON.parse(localStorage.getItem(LS_APL_LOG)||'[]')||[];}catch{adaptivePrecisionLog=[];}
+}
+function _aplSaveSettings(){try{localStorage.setItem(LS_APL_SETTINGS,JSON.stringify(adaptivePrecisionSettings));}catch{}}
+function _aplSaveModel(){try{localStorage.setItem(LS_APL_MODEL,JSON.stringify(adaptivePrecisionModel));}catch{}}
+function _aplSaveLog(){try{localStorage.setItem(LS_APL_LOG,JSON.stringify(adaptivePrecisionLog.slice(0,30)));}catch{}}
+window.setPrecisionObjective=function(v){
+  const map={BALANCED:{targetAccuracy:65,minCoverage:25},HIGH_ACCURACY:{targetAccuracy:70,minCoverage:15},ELITE:{targetAccuracy:72,minCoverage:10}};
+  adaptivePrecisionSettings.objective=v||'CUSTOM'; if(map[v]) Object.assign(adaptivePrecisionSettings,map[v]);
+  _aplSaveSettings(); _aplSyncUI();
+};
+window.saveAdaptivePrecisionSettings=function(){
+  adaptivePrecisionSettings={...adaptivePrecisionSettings,
+    objective:document.getElementById('aplObjective')?.value||'CUSTOM',
+    targetAccuracy:clamp(Number(document.getElementById('aplTarget')?.value)||70,55,90),
+    minCoverage:clamp(Number(document.getElementById('aplCoverage')?.value)||15,5,80),
+    minSample:clamp(Math.round(Number(document.getElementById('aplMinSample')?.value)||40),20,500),
+    windowDays:clamp(Math.round(Number(document.getElementById('aplWindow')?.value)||365),30,1825),
+    recencyHalfLife:clamp(Math.round(Number(document.getElementById('aplHalfLife')?.value)||120),30,730),
+    applyGuard:!!document.getElementById('aplGuard')?.checked
+  };
+  _aplSaveSettings(); window.applyAdaptivePrecisionToCurrentScan(); rebuildTopLists(); renderTopSections(); renderSummaryTable(); renderAdaptivePrecisionLab();
+  showOk(`🧠 Precision settings saved · target ${adaptivePrecisionSettings.targetAccuracy}%`);
+};
+function _aplSyncUI(){
+  const s=adaptivePrecisionSettings;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
+  set('aplObjective',s.objective);set('aplTarget',s.targetAccuracy);set('aplCoverage',s.minCoverage);set('aplMinSample',s.minSample);set('aplWindow',s.windowDays);set('aplHalfLife',s.recencyHalfLife);
+  const g=document.getElementById('aplGuard');if(g)g.checked=!!s.applyGuard;
+}
+async function _aplRecallHistoricalResults(store,selected){
+  const unresolved=selected.filter(r=>!_aplActualOutcome(r)&&r.fixtureId&&String(r.date||'').slice(0,10));
+  if(!unresolved.length) return {store,updated:0,dates:0};
+  const byDate={}; unresolved.forEach(r=>{const d=String(r.date).slice(0,10);(byDate[d]??=[]).push(r);});
+  const dates=Object.keys(byDate).sort(), map=new Map(store.map(r=>[String(r.fixtureId),r]));
+  let cursor=0,updated=0; const workers=Math.min(4,dates.length);
+  const work=Array.from({length:workers},async()=>{
+    while(true){const i=cursor++;if(i>=dates.length)return;const date=dates[i];
+      try{
+        const res=await apiReq(`fixtures?date=${date}`); const fixtures=res?.response||[]; const fm=new Map(fixtures.map(f=>[String(f.fixture?.id),f]));
+        for(const r of byDate[date]){const f=fm.get(String(r.fixtureId));if(!f||!isFinished(f?.fixture?.status?.short))continue;const h=Number(f.goals?.home),a=Number(f.goals?.away);if(!Number.isFinite(h)||!Number.isFinite(a))continue;
+          const prev=map.get(String(r.fixtureId))||r;map.set(String(r.fixtureId),{...prev,pmActualHome:h,pmActualAway:a,pmActualScore:`${h}-${a}`,pmStatus:f.fixture.status.short,pmSettledAt:prev.pmSettledAt||new Date().toISOString(),actualResult:h>a?'1':h<a?'2':'X'});updated++;
+        }
+      }catch(e){console.warn('[APEX] Precision recall date',date,e.message);}
+      setProgress(10+Math.round((Math.min(cursor,dates.length)/dates.length)*30),`Historical recall: ${Math.min(cursor,dates.length)}/${dates.length} dates`);
+    }
+  });
+  await Promise.all(work); const next=[...map.values()]; try{localStorage.setItem(LS_PREDS,JSON.stringify(next));}catch{}
+  return {store:next,updated,dates:dates.length};
+}
+function _aplTrainFromExamples(examples,settings,scopeMeta={}){
+  if(examples.length<Math.max(settings.minSample,50)) return {ok:false,reason:`Need at least ${Math.max(settings.minSample,50)} settled 1X2 predictions`,examples};
+  const wf=_aplWalkForward(examples,settings); if(wf.preds.length<20) return {ok:false,reason:'Not enough chronological hold-out observations',examples};
+  const modelB=_aplBrier(wf.preds), baseB=_aplBrier(wf.preds,'basePred'), modelLL=_aplLogLoss(wf.preds), baseLL=_aplLogLoss(wf.preds,'basePred');
+  const accepted=(modelB??1) <= (baseB??1)+0.002;
+  // If meta-model does not improve calibration, keep a safe fallback based on the frozen base confidence.
+  const policyRows=accepted?wf.preds:wf.preds.map(r=>({...r,pred:r.basePred}));
+  const policies=_aplScopePolicies(policyRows,settings), final=_aplTrainLogistic(examples,settings.recencyHalfLife);
+  const ablation=_aplAblation(examples,settings), calibration=_aplCalibrationBins(policyRows);
+  const last=examples[examples.length-1], first=examples[0];
+  return {ok:true,model:{
+    schema:APL_SCHEMA,trainedAt:new Date().toISOString(),sample:examples.length,validationN:wf.preds.length,folds:wf.folds,
+    period:{start:String(first.date).slice(0,10),end:String(last.date).slice(0,10)},scope:scopeMeta,
+    settings:{...settings},metaModelAccepted:accepted,weights:final.weights,indexes:final.indexes,
+    metrics:{brier:modelB,baseBrier:baseB,logLoss:modelLL,baseLogLoss:baseLL},policies,ablation,calibration
+  },preds:policyRows};
+}
+window.trainAdaptivePrecisionFromVault=function(opts={}){
+  const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]'); const s=adaptivePrecisionSettings;
+  const end=opts.end||todayISO(); const st=new Date(`${end}T00:00:00`);st.setDate(st.getDate()-s.windowDays);const start=opts.start||st.toISOString().slice(0,10);
+  const league=opts.league||'ALL', examples=_aplExamplesFromStore(store,{start,end,league}); const trained=_aplTrainFromExamples(examples,s,{start,end,league});
+  if(!trained.ok){if(!opts.background)showErr(`Precision Lab: ${trained.reason}`);return trained;}
+  adaptivePrecisionModel=trained.model; _aplSaveModel();
+  adaptivePrecisionLog.unshift({trainedAt:adaptivePrecisionModel.trainedAt,sample:adaptivePrecisionModel.sample,validationN:adaptivePrecisionModel.validationN,target:s.targetAccuracy,threshold:adaptivePrecisionModel.policies.global.threshold,hit:adaptivePrecisionModel.policies.global.accuracy,coverage:adaptivePrecisionModel.policies.global.coverage,targetMet:adaptivePrecisionModel.policies.global.targetMet});_aplSaveLog();
+  window.applyAdaptivePrecisionToCurrentScan(); if(!opts.background){renderAdaptivePrecisionLab();rebuildTopLists();renderTopSections();renderSummaryTable();}
+  return trained;
+};
+window.runAdaptivePrecisionLab=async function(opts={}){
+  if(isRunning&&!opts.background){showErr('Another process is running.');return;}
+  const background=!!opts.background; if(!background){isRunning=true;setBtnsDisabled(true);setLoader(true,'Adaptive Precision Lab…');}
+  try{
+    window.saveAdaptivePrecisionSettings?.();
+    let store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]'); const sInput=document.getElementById('auditStart')?.value, eInput=document.getElementById('auditEnd')?.value;
+    const end=sInput&&eInput?eInput:todayISO(); let start=sInput;
+    if(!start){const d=new Date(`${end}T00:00:00`);d.setDate(d.getDate()-adaptivePrecisionSettings.windowDays);start=d.toISOString().slice(0,10);}
+    const league=document.getElementById('auditLeague')?.value||'ALL';
+    let selected=store.filter(r=>{const d=String(r.date||'').slice(0,10);return d&&d>=start&&d<=end&&(league==='ALL'||String(r.leagueId)===String(league));});
+    if(!opts.skipSync){setProgress(8,'Recalling historical final results…');const recalled=await _aplRecallHistoricalResults(store,selected);store=recalled.store;if(!background&&recalled.updated)showOk(`↻ Historical Recall: ${recalled.updated} results restored.`);}
+    setProgress(48,'Building frozen 1X2 learning set…'); const examples=_aplExamplesFromStore(store,{start,end,league});
+    const trained=_aplTrainFromExamples(examples,adaptivePrecisionSettings,{start,end,league});
+    if(!trained.ok){renderAdaptivePrecisionLab({error:trained.reason,sample:examples.length});if(!background)showErr(`Precision Lab: ${trained.reason}`);return trained;}
+    setProgress(80,'Walk-forward validation + feature ablation…');adaptivePrecisionModel=trained.model;_aplSaveModel();
+    adaptivePrecisionLog.unshift({trainedAt:adaptivePrecisionModel.trainedAt,sample:adaptivePrecisionModel.sample,validationN:adaptivePrecisionModel.validationN,target:adaptivePrecisionSettings.targetAccuracy,threshold:adaptivePrecisionModel.policies.global.threshold,hit:adaptivePrecisionModel.policies.global.accuracy,coverage:adaptivePrecisionModel.policies.global.coverage,targetMet:adaptivePrecisionModel.policies.global.targetMet});_aplSaveLog();
+    window.applyAdaptivePrecisionToCurrentScan();rebuildTopLists();renderTopSections();renderSummaryTable();renderAdaptivePrecisionLab();
+    if(!background){const body=document.getElementById('adaptivePrecisionBody'),ar=document.getElementById('adaptivePrecisionArrow');if(body)body.style.display='block';if(ar)ar.textContent='▲';const g=adaptivePrecisionModel.policies.global;showOk(`🧠 Precision Lab trained · n=${examples.length} · validated ${(g.accuracy*100).toFixed(1)}% @ ${(g.coverage*100).toFixed(1)}% coverage${g.targetMet?' · target supported':' · target not yet supported'}`);}
+    return trained;
+  }catch(e){console.warn('[APEX] Precision Lab',e);if(!background)showErr(`Precision Lab: ${e.message}`);return {ok:false,reason:e.message};}
+  finally{if(!background){isRunning=false;setBtnsDisabled(false);setLoader(false);}}
+};
+window.applyAdaptivePrecisionToCurrentScan=function(){
+  const model=adaptivePrecisionModel; if(!model?.weights?.length) return 0; let n=0;
+  (window.scannedMatchesData||[]).forEach(r=>{
+    const pick=_aplPick(r); if(!pick){r.precision=null;return;} const f=_aplFeatureVector(r,pick);if(!f){r.precision=null;return;}
+    const meta=model.metaModelAccepted?_aplPredict(model,f):_aplBaseProb(r,pick); const threshold=_aplEffectiveThreshold(model,r.leagueId,pick), allowed=meta>=threshold;
+    let tier=allowed?(meta>=Math.max(0.72,threshold+0.06)?'ELITE':'STRONG'):(meta>=threshold-0.05?'STANDARD':'NO SIGNAL');
+    r.precision={metaProb:meta,threshold,allowed,tier,target:model.settings?.targetAccuracy||adaptivePrecisionSettings.targetAccuracy,modelAccepted:!!model.metaModelAccepted};n++;
+  }); return n;
+};
+function _aplAllowsRec(r){return !adaptivePrecisionSettings.applyGuard||!adaptivePrecisionModel||!r?.precision||r.precision.allowed;}
+function _aplPct(v){return Number.isFinite(v)?`${(v*100).toFixed(1)}%`:'—';}
+function _aplCol(v){const p=v*100;return p>75?'var(--accent-green)':p<60?'var(--accent-red)':'var(--text-main)';}
+window.resetAdaptivePrecisionModel=function(){
+  if(!confirm('Reset Adaptive Precision model and training history? Settings will be kept.')) return;
+  adaptivePrecisionModel=null; adaptivePrecisionLog=[];
+  try{localStorage.removeItem(LS_APL_MODEL);localStorage.removeItem(LS_APL_LOG);}catch{}
+  (window.scannedMatchesData||[]).forEach(r=>{r.precision=null;});
+  rebuildTopLists();renderTopSections();renderSummaryTable();renderAdaptivePrecisionLab();showOk('Adaptive Precision model reset.');
+};
+function renderAdaptivePrecisionLab(extra={}){
+  const el=document.getElementById('adaptivePrecisionPanel'); if(!el)return; _aplSyncUI(); const m=adaptivePrecisionModel;
+  if(!m){el.innerHTML=`<div style="text-align:center;color:var(--text-muted);padding:22px;line-height:1.7;">No trained precision model yet. Choose an Audit period and press <b>↻ Recall & Train</b>.<br>${extra.error?`<span style="color:var(--accent-gold);">${esc(extra.error)}</span>`:'Historical results can be recalled, but only predictions that existed before kickoff are eligible for learning.'}</div>`;return;}
+  const g=m.policies.global, target=m.settings.targetAccuracy, status=g.targetMet?`✅ TARGET SUPPORTED`:`⚠ TARGET NOT YET SUPPORTED`;
+  const statusCol=g.targetMet?'var(--accent-green)':'var(--accent-gold)';
+  const outcomes=['1','X','2'].map(k=>{const p=m.policies.outcomes?.[k];if(!p)return `<tr><td>${k}</td><td colspan="5">insufficient validation sample</td></tr>`;return `<tr><td style="font-weight:900;">${k}</td><td>${p.sample}</td><td>${(p.threshold*100).toFixed(0)}%</td><td style="color:${_aplCol(p.accuracy)};font-weight:800;">${_aplPct(p.accuracy)}</td><td>${_aplPct(p.coverage)}</td><td>${(p.wilson*100).toFixed(1)}%</td></tr>`;}).join('');
+  const leagues=Object.entries(m.policies.leagues||{}).sort((a,b)=>(b[1].wilson||0)-(a[1].wilson||0)).slice(0,10).map(([lid,p])=>`<tr><td class="left-align">${esc(p.league||`League ${lid}`)}</td><td>${p.sample}</td><td>${(p.threshold*100).toFixed(0)}%</td><td style="color:${_aplCol(p.accuracy)};font-weight:800;">${_aplPct(p.accuracy)}</td><td>${_aplPct(p.coverage)}</td><td>${(p.wilson*100).toFixed(1)}%</td></tr>`).join('');
+  const abl=(m.ablation||[]).map(a=>{const good=a.deltaBrier>0.001,col=good?'var(--accent-green)':a.deltaBrier<-0.001?'var(--accent-red)':'var(--text-muted)';return `<div style="display:grid;grid-template-columns:1fr 80px;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);"><span>${esc(a.label)}</span><span style="font-family:var(--font-mono);text-align:right;color:${col};">${a.deltaBrier>=0?'+':''}${a.deltaBrier.toFixed(4)}</span></div>`;}).join('');
+  const cal=(m.calibration||[]).map(b=>`<div style="display:grid;grid-template-columns:70px 45px 1fr;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);"><span>${b.label}</span><span>n=${b.n}</span><span style="font-family:var(--font-mono);">pred ${_aplPct(b.pred)} → actual <b style="color:${_aplCol(b.actual)}">${b.n?_aplPct(b.actual):'—'}</b></span></div>`).join('');
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-bottom:14px;">
+      <div class="apl-kpi"><span>Learning sample</span><b>${m.sample}</b></div><div class="apl-kpi"><span>Walk-forward validation</span><b>${m.validationN} · ${m.folds} folds</b></div>
+      <div class="apl-kpi"><span>Selected accuracy</span><b style="color:${_aplCol(g.accuracy)}">${_aplPct(g.accuracy)}</b></div><div class="apl-kpi"><span>Coverage</span><b>${_aplPct(g.coverage)}</b></div>
+      <div class="apl-kpi"><span>Meta threshold</span><b>${(g.threshold*100).toFixed(0)}%</b></div><div class="apl-kpi"><span>Brier</span><b>${m.metrics.brier?.toFixed(3)||'—'} <small>vs ${m.metrics.baseBrier?.toFixed(3)||'—'}</small></b></div>
+    </div>
+    <div style="padding:9px 12px;border:1px solid ${g.targetMet?'rgba(74,222,128,.3)':'rgba(252,211,77,.3)'};background:${g.targetMet?'rgba(74,222,128,.06)':'rgba(252,211,77,.06)'};border-radius:7px;margin-bottom:14px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><b style="color:${statusCol};">${status} · requested ${target}%</b><span style="font-size:.7rem;color:var(--text-muted);">${m.period.start} → ${m.period.end} · meta-model ${m.metaModelAccepted?'accepted':'fallback to base confidence'}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+      <div><div class="apl-subtitle">Outcome-specific policy</div><div class="data-table-wrapper"><table class="summary-table"><thead><tr><th>1X2</th><th>n</th><th>Threshold</th><th>Accuracy</th><th>Coverage</th><th>Wilson LB</th></tr></thead><tbody>${outcomes}</tbody></table></div></div>
+      <div><div class="apl-subtitle">Top league policies</div><div class="data-table-wrapper"><table class="summary-table"><thead><tr><th class="left-align">League</th><th>n</th><th>Threshold</th><th>Accuracy</th><th>Coverage</th><th>Wilson LB</th></tr></thead><tbody>${leagues||'<tr><td colspan="6">Need more league-level data.</td></tr>'}</tbody></table></div></div>
+      <div><div class="apl-subtitle">Feature ablation · Δ Brier when removed</div><div class="apl-box">${abl||'Need ≥60 records.'}<div style="font-size:.62rem;color:var(--text-muted);margin-top:7px;">Positive Δ = feature improved hold-out prediction; negative Δ = candidate for down-weighting.</div></div></div>
+      <div><div class="apl-subtitle">Meta-confidence calibration</div><div class="apl-box">${cal}</div></div>
+    </div>
+    <div style="font-size:.65rem;color:var(--text-muted);line-height:1.6;margin-top:12px;">The accuracy target is a selection objective, not a guarantee. The guard raises abstention when historical walk-forward evidence does not support the requested precision.</div>`;
+}
+window.renderAdaptivePrecisionLab=renderAdaptivePrecisionLab;
+
+
 function buildMiniCurve(currentThreshold,data){if(!data.length)return'';let thresholds=[2.0,2.2,2.4,2.6,2.8,3.0,3.2];let bars='';thresholds.forEach(th=>{const valid=data.filter(d=>d.tXG>=th);const hits=valid.filter(d=>d.hitO25===1).length;const rate=valid.length>0?(hits/valid.length)*100:0;const h=Math.max(Math.round((rate/100)*40),2);const isCurrent=Math.abs(th-currentThreshold)<0.1;bars+=`<div title="Thresh: ${th} | Rate: ${rate.toFixed(1)}%" style="display:inline-block; width:12%; height:${h}px; background:${isCurrent?'var(--accent-blue)':'rgba(255,255,255,0.1)'}; margin-right:2px; border-radius:2px 2px 0 0; position:relative;"><span style="position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:0.65rem; color:var(--text-muted);">${th}</span></div>`;});return`<div style="height:60px; display:flex; align-items:flex-end; border-bottom:1px solid var(--border-light); padding-bottom:5px; margin-bottom:25px;">${bars}</div>`;}
 function saveToVault(data){
   try{
@@ -5329,6 +5744,26 @@ function saveToVault(data){
         xgDiff:d.xgDiff || 0,
         strength:d.strength || 0,
         isBomb:!!d.isBomb,
+        // v5.5 frozen pre-match snapshot for Adaptive Precision Lab
+        preSnapshotVersion:APL_SCHEMA,
+        prePHome:Number.isFinite(Number(d.pp?.pHome))?Number(d.pp.pHome):(prev.prePHome??null),
+        prePDraw:Number.isFinite(Number(d.pp?.pDraw))?Number(d.pp.pDraw):(prev.prePDraw??null),
+        prePAway:Number.isFinite(Number(d.pp?.pAway))?Number(d.pp.pAway):(prev.prePAway??null),
+        preStrength:Number.isFinite(Number(d.strength))?Number(d.strength):(prev.preStrength??null),
+        preXgDiff:Number.isFinite(Number(d.xgDiff))?Number(d.xgDiff):(prev.preXgDiff??null),
+        preHForm:Number.isFinite(Number(d.hS?.formRating))?Number(d.hS.formRating):(prev.preHForm??null),
+        preAForm:Number.isFinite(Number(d.aS?.formRating))?Number(d.aS.formRating):(prev.preAForm??null),
+        preHSdGoals:Number.isFinite(Number(d.hS?.r6?.sdGoals))?Number(d.hS.r6.sdGoals):(prev.preHSdGoals??null),
+        preASdGoals:Number.isFinite(Number(d.aS?.r6?.sdGoals))?Number(d.aS.r6.sdGoals):(prev.preASdGoals??null),
+        preLineupCoverage:d.lineupData?.available?clamp(((Number(d.hInjAdj?.coverage)||0.85)+(Number(d.aInjAdj?.coverage)||0.85))/2,0,1):(prev.preLineupCoverage??null),
+        preHInjuryDelta:Number.isFinite(Number(d.hInjAdj?.delta))?Number(d.hInjAdj.delta):(prev.preHInjuryDelta??null),
+        preAInjuryDelta:Number.isFinite(Number(d.aInjAdj?.delta))?Number(d.aInjAdj.delta):(prev.preAInjuryDelta??null),
+        preMarketHome:Number.isFinite(Number(d.odds?._market?.home?.noVigProb))?Number(d.odds._market.home.noVigProb):(prev.preMarketHome??null),
+        preMarketDraw:Number.isFinite(Number(d.odds?._market?.draw?.noVigProb))?Number(d.odds._market.draw.noVigProb):(prev.preMarketDraw??null),
+        preMarketAway:Number.isFinite(Number(d.odds?._market?.away?.noVigProb))?Number(d.odds._market.away.noVigProb):(prev.preMarketAway??null),
+        preMetaConfidence:Number.isFinite(Number(d.precision?.metaProb))?Number(d.precision.metaProb):(prev.preMetaConfidence??null),
+        prePrecisionThreshold:Number.isFinite(Number(d.precision?.threshold))?Number(d.precision.threshold):(prev.prePrecisionThreshold??null),
+        prePrecisionAllowed:d.precision?!!d.precision.allowed:(prev.prePrecisionAllowed??null),
         marketBomb:d.marketBomb ? {
           marketKey:d.marketBomb.marketKey,
           market:d.marketBomb.market,
@@ -5366,7 +5801,7 @@ function saveToVault(data){
     localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));
   }catch(e){ console.warn('[APEX] saveToVault:',e.message); }
 }
-window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);showOk("Vault Purged.");updateAuditLeagueFilter();}};
+window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);try{localStorage.removeItem(LS_APL_MODEL);localStorage.removeItem(LS_APL_LOG);}catch{} adaptivePrecisionModel=null;adaptivePrecisionLog=[];showOk("Vault + Precision learning history purged.");updateAuditLeagueFilter();renderAdaptivePrecisionLab?.();}};
 function updateAuditLeagueFilter() {
   const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
   const sel = document.getElementById('auditLeague');
@@ -6730,6 +7165,9 @@ window.runHourlySelfImprove=async function(manual=false){
       // Existing application path, but silent: same persistence/log/re-simulation, no intrusive toast.
       applied=window.applyCalibAdjustments(adjustments,{silent:true})||0;
     }
+    if(sync.newSettled>0){
+      try{window.trainAdaptivePrecisionFromVault?.({background:true});}catch(e){console.warn('[APEX] precision background retrain',e);}
+    }
     _saveSelfImproveState({...state,lastRun:new Date().toISOString(),lastFingerprint:fp,lastSettledCount:calib.length,lastAppliedLeagues:applied,lastStatus:applied?'applied':'stable'});
     _selfImproveStatus(applied?`✅ Auto-Learn: ${applied} πρωτ. βελτιώθηκαν · ${calib.length} settled`:`✓ Έλεγχος ολοκληρώθηκε · μοντέλο σταθερό · ${calib.length} settled`,'var(--accent-green)');
     renderSummaryTable();
@@ -7287,6 +7725,8 @@ window.addEventListener('DOMContentLoaded',()=>{
       window.loadBetJournal();
       loadCalibLog();
       renderCalibLog();
+      _aplLoadState();
+      renderAdaptivePrecisionLab();
 
       // Version display στο header
       const vtEl = document.getElementById('versionTag');
