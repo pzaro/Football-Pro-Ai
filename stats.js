@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.6 — COMPOSITE MATCH INTELLIGENCE + ADAPTIVE PRECISION LAB + VERIFIED VALUE EDGE + MARKET BOMBS
+// APEX OMEGA v5.7 — PROFESSIONAL UI + COMPETITION CONTEXT + COMPOSITE MATCH INTELLIGENCE
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -293,9 +293,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.6';
+const APP_VERSION   = 'v5.7';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'COMPOSITE MATCH INTELLIGENCE · DOUBLE CHANCE · ADAPTIVE PRECISION · MARKET SAFETY';
+const BUILD_TIME    = 'PROFESSIONAL UI · LEAGUE CONTEXT · CUP TEAM CATEGORIES · COMPACT DRAWER · CMI';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -871,7 +871,52 @@ window.initCredits=async function(){
 };
 
 // Cup league IDs — δεν έχουν season statistics, χρησιμοποιούμε primary league
-const CUP_LEAGUE_IDS = new Set([45,48,137,3,848]); // FA Cup, EFL Cup, Coppa Italia, EL, UECL
+const CUP_LEAGUE_IDS = new Set([2,3,45,48,137,848]); // UCL, UEL, FA Cup, EFL Cup, Coppa Italia, UECL
+const CUP_NAME_RE = /(cup|copa|coppa|pokal|coupe|taça|taca|trophy|shield|knockout|champions league|europa league|conference league)/i;
+function isCupCompetitionMeta(leagueId, leagueName=''){
+  return CUP_LEAGUE_IDS.has(Number(leagueId)) || CUP_NAME_RE.test(String(leagueName||''));
+}
+function inferPrimaryCompetition(fixtures,currentLeagueId,currentLeagueName=''){
+  const counts=new Map();
+  for(const f of (fixtures||[])){
+    const id=Number(f?.league?.id||0), name=String(f?.league?.name||'').trim(), country=String(f?.league?.country||'').trim();
+    if(!id || id===Number(currentLeagueId) || !name) continue;
+    if(isCupCompetitionMeta(id,name) || /friendly/i.test(name)) continue;
+    const k=String(id), prev=counts.get(k)||{id,name,country,n:0};
+    prev.n++; counts.set(k,prev);
+  }
+  return [...counts.values()].sort((a,b)=>b.n-a.n)[0]||null;
+}
+const primaryCompetitionCache=new BoundedCache(180);
+async function getPrimaryCompetitionForTeam(teamId,season,currentLeagueId,seedFixtures=[]){
+  const k=`${teamId}_${season||'CUR'}_${currentLeagueId}`;
+  if(primaryCompetitionCache.has(k)) return primaryCompetitionCache.get(k);
+  let primary=inferPrimaryCompetition(seedFixtures,currentLeagueId,'');
+  if(!primary){
+    try{
+      const d=await apiReq(`fixtures?team=${teamId}&last=30&status=FT`);
+      primary=inferPrimaryCompetition(d?.response||[],currentLeagueId,'');
+    }catch{}
+  }
+  primaryCompetitionCache.set(k,primary||null);
+  return primary||null;
+}
+function competitionContextHTML(rec,{compact=false}={}){
+  if(!rec) return '';
+  const lg=rec.lg||rec.m?.league?.name||'—';
+  const cup=!!(rec.isCup||isCupCompetitionMeta(rec.leagueId||rec.m?.league?.id,lg));
+  const h=rec.homeCategory||rec.hS?.primaryCompetition||null;
+  const a=rec.awayCategory||rec.aS?.primaryCompetition||null;
+  const cls=compact?'competition-context compact':'competition-context';
+  let html=`<div class="${cls}"><span class="competition-league-badge">🏆 ${esc(lg)}</span>`;
+  if(cup){
+    html+=`<span class="competition-cup-badge">CUP</span>`;
+    html+=`<span class="competition-team-level" title="Κατηγορία ${esc(rec.ht||'γηπεδούχου')}">🏠 ${h?.name?esc(h.name):'Κατηγορία μη διαθέσιμη'}</span>`;
+    html+=`<span class="competition-team-level" title="Κατηγορία ${esc(rec.at||'φιλοξενούμενου')}">✈️ ${a?.name?esc(a.name):'Κατηγορία μη διαθέσιμη'}</span>`;
+  }
+  return html+`</div>`;
+}
+
 
 async function getTStats(t,lg,s){
   const k=`${t}_${lg}_${s}`;
@@ -1168,6 +1213,9 @@ async function _buildIntelImpl(tId,lg,s,isHome){
   try{
     // Άντληση δεδομένων σεζόν 2026 — cross-season fallback αν λίγα ματς
     const[ss,allFix]=await Promise.all([getTStats(tId,lg,s),getLFix(tId,lg,s)]);
+    const primaryCompetition=isCupCompetitionMeta(lg,'')
+      ? await getPrimaryCompetitionForTeam(tId,s,lg,allFix)
+      : inferPrimaryCompetition(allFix,lg,'');
     const gen=allFix.slice(0,8);
     const split=allFix.filter(f=>(isHome?f.teams.home.id:f.teams.away.id)===tId).slice(0,6);
     const recent6=allFix.slice(0,6);
@@ -1246,6 +1294,7 @@ async function _buildIntelImpl(tId,lg,s,isHome){
       off:safeNum(fData.off, isHome?1.8:1.5), // avg offsides per match
       uiXG:fData.xg,uiXGA:fData.xga,uiSXG:sData.xg,uiSXGA:sData.xga,
       history:getFormHistory(gen,tId),
+      primaryCompetition,
       totalTeamGoalsSeason,
       // Last-6 variance (empirical)
       r6:{
@@ -1273,7 +1322,7 @@ async function _buildIntelImpl(tId,lg,s,isHome){
     return{
       fXG:1.35,fXGA:1.35,sXG:1.35,formRating:50,corRatio:0.40,cor:5.0,corAgainst:4.5,
       shotsCor:0.22,crd:2.0,shotsOn:4.5,shotsOff:3.5,oppShotsOn:4.0,
-      uiXG:'1.35',uiXGA:'1.35',uiSXG:'1.35',uiSXGA:'1.35',history:[],totalTeamGoalsSeason:0,
+      uiXG:'1.35',uiXGA:'1.35',uiSXG:'1.35',uiSXGA:'1.35',history:[],primaryCompetition:null,totalTeamGoalsSeason:0,
       r6:{n:0,sdGoals:null,sdGoalsAgainst:null,sdCorners:null,sdCards:null,goalsArr:[],cornersArr:[],cardsArr:[]},
       // Fallback: Poisson για goals (σ=√λ), NegBin για κάρτες (σ=√(μ+μ²/k)), Poisson για κόρνερ
       sea:{n:0,avgGoals:1.35,avgGoalsAgainst:1.35,sdGoals:1.16,sdGoalsAgainst:1.16,
@@ -2228,6 +2277,7 @@ async function analyzeMatchSafe(m,index,total){
 
     window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
+      isCup:isCupCompetitionMeta(m.league.id,m.league.name),homeCategory:hS?.primaryCompetition||null,awayCategory:aS?.primaryCompetition||null,
       tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,outcomeMarket:result.outcomeMarket,outcomeProb:result.outcomeProb,xgDiff:result.xgDiff,
       matchPicture:result.matchPicture,rawPP:result.rawPP,
       hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,
@@ -2253,6 +2303,7 @@ async function analyzeMatchSafe(m,index,total){
     });
     window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
+      isCup:isCupCompetitionMeta(m.league.id,m.league.name),homeCategory:null,awayCategory:null,
       omegaPick:'NO BET',reason:`Analysis error: ${err?.message||'unknown'}`,strength:0,tXG:0,outPick:'X',exact:'0-0',cornerConf:0,
       analysisError:err?.message||String(err)
     });
@@ -3192,7 +3243,7 @@ function extractValueBets(rec, odds) {
     bets.push({
       fixId:rec.fixId,
       match:`${rec.ht} vs ${rec.at}`,
-      lg:rec.lg,
+      lg:rec.lg,leagueId:rec.leagueId,isCup:rec.isCup,homeCategory:rec.homeCategory||null,awayCategory:rec.awayCategory||null,ht:rec.ht,at:rec.at,
       date:rec.m?.fixture?.date?.split('T')[0]||'',
       time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||'',
       market,label,marketKey:key,
@@ -3342,8 +3393,8 @@ function renderValueBetsTab(bets) {
       <div style="flex:1;padding:12px 14px;min-width:0;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:0.6rem;font-weight:800;color:${marketBadgeColor};background:${marketBadgeColor}18;border:1px solid ${marketBadgeColor}33;border-radius:4px;padding:1px 7px;white-space:nowrap;">${esc(b.market)}</span>
-          <span style="font-size:0.65rem;color:var(--text-muted);">${esc(b.lg)}</span>
           <span style="font-size:0.65rem;color:var(--text-dim);">${b.date} ${b.time}</span>
+          ${competitionContextHTML(b,{compact:true})}
         </div>
         <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(b.match)}</div>
         <div style="font-size:0.8rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(b.label)}</div>
@@ -3523,7 +3574,7 @@ function buildBombsList(){
   sd.forEach(rec=>{
     const bomb=computeBombScore(rec);
     (rec.bombMarketDiagnostics||[]).forEach(c=>diagnostics.push({
-      ...c,fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,date:rec.m?.fixture?.date?.split('T')[0]||'',time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||''
+      ...c,fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,leagueId:rec.leagueId,isCup:rec.isCup,homeCategory:rec.homeCategory||null,awayCategory:rec.awayCategory||null,date:rec.m?.fixture?.date?.split('T')[0]||'',time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||''
     }));
     rec.marketBomb=bomb||null;
     rec.marketBombVerified=!!bomb;
@@ -3531,7 +3582,7 @@ function buildBombsList(){
     rec.isBomb=!!((rec.omegaPick||'').includes('💣')||bomb);
     if(!bomb) return;
     bombs.push({
-      fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,
+      fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,leagueId:rec.leagueId,isCup:rec.isCup,homeCategory:rec.homeCategory||null,awayCategory:rec.awayCategory||null,
       date:rec.m?.fixture?.date?.split('T')[0]||'',
       time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||'',
       tXG:rec.tXG,omegaPick:rec.omegaPick,
@@ -3560,7 +3611,7 @@ function renderBombsTab(bombs){
     return `<div onclick="window.openMatchAnalysisDrawer('${b.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="background:var(--bg-base);border:1px solid rgba(74,222,128,0.32);border-radius:8px;overflow:hidden;margin-bottom:10px;cursor:pointer;transition:border-color .15s,transform .15s;" onmouseover="this.style.borderColor='var(--accent-green)'" onmouseout="this.style.borderColor='rgba(74,222,128,0.32)'">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(74,222,128,0.05);flex-wrap:wrap;">
         <div style="font-family:var(--font-mono);color:var(--text-dim);">#${i+1}</div>
-        <div style="flex:1;min-width:190px;"><div style="font-weight:800;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">${esc(b.lg)} · ${b.date} ${b.time}</div></div>
+        <div style="flex:1;min-width:190px;"><div style="font-weight:800;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">${b.date} ${b.time}</div>${competitionContextHTML(b,{compact:true})}</div>
         <div style="text-align:center;padding:5px 9px;background:rgba(0,0,0,.18);border-radius:6px;"><div style="font-size:1.25rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-gold);">${b.effectiveOdds.toFixed(2)}</div><div style="font-size:.55rem;color:var(--text-muted);">${esc(b.bestBookmaker||'BEST')}</div></div>
         <div style="text-align:center;min-width:50px;"><div style="font-size:1.2rem;font-weight:900;color:${col};font-family:var(--font-mono);">${b.bombScore}</div><div style="font-size:.55rem;color:var(--text-muted);">SCORE</div></div>
       </div>
@@ -3586,7 +3637,7 @@ function renderBombsTab(bombs){
     <div style="display:flex;flex-direction:column;gap:5px;">${diag.slice(0,8).map(d=>{
       const sc=d.status==='CONFLICT'?'var(--accent-red)':d.status==='HIGH_DIVERGENCE'?'var(--accent-gold)':'var(--text-muted)';
       return `<div onclick="window.openMatchAnalysisDrawer('${d.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="display:grid;grid-template-columns:minmax(190px,2fr) 1fr 1fr 1fr 1fr;gap:8px;align-items:center;padding:7px 9px;background:var(--bg-surface);border-radius:6px;font-size:.65rem;cursor:pointer;">
-        <div><b>${esc(d.ht)}–${esc(d.at)}</b><br><span style="color:var(--text-muted);">${esc(d.label)}</span></div>
+        <div><b>${esc(d.ht)}–${esc(d.at)}</b><br><span style="color:var(--text-muted);">${esc(d.label)}</span>${competitionContextHTML(d,{compact:true})}</div>
         <div>Odds <b>${d.effectiveOdds.toFixed(2)}</b></div>
         <div>Δ <b>${d.gapPP>=0?'+':''}${d.gapPP.toFixed(1)}pp</b></div>
         <div>EV <b>${d.execEdgePct>=0?'+':''}${d.execEdgePct.toFixed(1)}%</b></div>
@@ -3706,7 +3757,7 @@ function renderTopSections(){
           <div style="font-family:var(--font-mono);font-size:1.1rem;color:var(--text-dim);min-width:28px;text-align:center;flex-shrink:0;">#${j+1}</div>
           <div style="flex:1;min-width:0;cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
             <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>
-            <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;margin-top:3px;">${esc(x.lg)}</div>
+            ${competitionContextHTML(x,{compact:true})}
             <div style="font-size:0.82rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(x.omegaPick)}</div>
             ${x.precision?`<div style="font-size:.68rem;margin-top:3px;color:${x.precision.allowed?'var(--accent-green)':x.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'};font-family:var(--font-mono);">🧠 Meta ${Math.round(x.precision.metaProb*100)}% · threshold ${Math.round(x.precision.threshold*100)}% · ${x.precision.tier}</div>`:''}
             ${evBadge}
@@ -3906,9 +3957,9 @@ window.openMatchAnalysisDrawer=function(fixId){
   const score=live ? ` · LIVE ${rec.m?.goals?.home??0}-${rec.m?.goals?.away??0}` : '';
   const liveBadge=live?'<span class="match-analysis-live-badge">● LIVE</span>':'';
 
-  document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}<span>${esc(rec.lg||'MATCH ANALYSIS')}</span>`;
-  document.getElementById('matchDrawerTitle').textContent=`${rec.ht||'—'} vs ${rec.at||'—'}`;
-  document.getElementById('matchDrawerMeta').textContent=`${when}${score}`;
+  document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}<span>ΑΝΑΛΥΣΗ ΑΓΩΝΑ</span>`;
+  document.getElementById('matchDrawerTitle').innerHTML=`<span>${esc(rec.ht||'—')}</span><span class="match-analysis-vs">vs</span><span>${esc(rec.at||'—')}</span>`;
+  document.getElementById('matchDrawerMeta').innerHTML=`<span>${when}${score}</span>${competitionContextHTML(rec,{compact:false})}`;
   const precisionQuick=rec.precision?`<div class="match-analysis-stat"><span>Meta-Confidence</span><strong style="color:${rec.precision.allowed?'var(--accent-green)':rec.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'}">${(rec.precision.metaProb*100).toFixed(1)}% · ${rec.precision.tier} · cut ${(rec.precision.threshold*100).toFixed(0)}%</strong></div>`:'';
   const mp=rec.matchPicture||null;
   const dcQuick=mp?`<div class="match-analysis-stat"><span>${acr('DC')}</span><strong>1X ${(mp.p1X*100).toFixed(1)}% · X2 ${(mp.pX2*100).toFixed(1)}% · 12 ${(mp.p12*100).toFixed(1)}%</strong></div>`:'';
@@ -5107,6 +5158,7 @@ function renderSummaryTable() {
               <span style="font-size:0.95rem;">${esc(x.at)}</span>
               ${injBadge}${lineupSrcBadge}${subFlash}
             </div>
+            ${competitionContextHTML(x,{compact:true})}
             ${(() => {
               const hPos = x.hr, aPos = x.ar;
               if(!hPos || hPos >= 99) return '';
