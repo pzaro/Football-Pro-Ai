@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.2 — VERIFIED VALUE EDGE + MARKET BOMBS
+// APEX OMEGA v5.3 — CLICKABLE GREEK INDICATORS + VERIFIED VALUE EDGE + MARKET BOMBS
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -68,6 +68,56 @@ const ACRONYM_DICT = {
   'LRU':      'Least Recently Used — Στρατηγική cache: αφαιρείται πρώτο το παλαιότερο/ανενεργό entry',
 };
 
+// v5.3 — Ελληνική, click-first ερμηνεία δεικτών.
+// Τα descriptions είναι Greek-first ώστε ο χρήστης να βλέπει αμέσως τι δηλώνει ο δείκτης.
+Object.assign(ACRONYM_DICT, {
+  '1X2':      'Τελικό αποτέλεσμα αγώνα (1X2) — 1 = νίκη γηπεδούχου, X = ισοπαλία, 2 = νίκη φιλοξενούμενου.',
+  'AH':       'Ασιατικό Χάντικαπ (Asian Handicap) — Εικονικό πλεονέκτημα ή μειονέκτημα γκολ που εφαρμόζεται πριν κριθεί το στοίχημα.',
+  'BTTS':     'Να σκοράρουν και οι δύο ομάδες (Both Teams To Score) — Εκτιμά αν και οι δύο ομάδες θα πετύχουν τουλάχιστον ένα γκολ.',
+  'O2.5':     'Πάνω από 2,5 γκολ (Over 2.5) — Επιβεβαιώνεται όταν ο αγώνας έχει συνολικά τουλάχιστον 3 γκολ.',
+  'O3.5':     'Πάνω από 3,5 γκολ (Over 3.5) — Επιβεβαιώνεται όταν ο αγώνας έχει συνολικά τουλάχιστον 4 γκολ.',
+  'U2.5':     'Κάτω από 2,5 γκολ (Under 2.5) — Επιβεβαιώνεται όταν ο αγώνας έχει συνολικά 0, 1 ή 2 γκολ.',
+  'HT':       'Ημίχρονο (Half-Time) — Πρόβλεψη ή αποτέλεσμα μόνο για το πρώτο ημίχρονο.',
+  'FT':       'Τελικό αποτέλεσμα (Full-Time) — Πρόβλεψη ή αποτέλεσμα μετά την ολοκλήρωση του κανονικού αγώνα.',
+  'xG':       'Αναμενόμενα Γκολ (Expected Goals) — Εκτίμηση της ποιότητας και της ποσότητας των ευκαιριών που αναμένεται να μετατραπούν σε γκολ.',
+  'tXG':      'Συνολικά Αναμενόμενα Γκολ (Total xG) — Άθροισμα των αναμενόμενων γκολ γηπεδούχου και φιλοξενούμενου. Χρησιμοποιείται κυρίως για Over/Under.',
+  'xGA':      'Αναμενόμενα Γκολ Κατά (Expected Goals Against) — Εκτιμά την ποιότητα των ευκαιριών που επιτρέπει μια ομάδα στον αντίπαλο.',
+  'xG%':      'Ποσοστιαία συνεισφορά σε xG — Δείχνει το μερίδιο επιθετικής συνεισφοράς παίκτη ή ομάδας στο αναμενόμενο επιθετικό αποτέλεσμα.',
+  'xG Adj':   'Διορθωμένα Αναμενόμενα Γκολ (Adjusted xG) — xG μετά τις διορθώσεις για απουσίες, ενδεκάδα ή άλλους παράγοντες του αγώνα.',
+  'xG Diff':  'Διαφορά Αναμενόμενων Γκολ (xG Difference) — xG γηπεδούχου μείον xG φιλοξενούμενου. Θετικό ευνοεί τη γηπεδούχο, αρνητικό τη φιλοξενούμενη.',
+  'Conf%':    'Βεβαιότητα μοντέλου (Confidence %) — Συνοπτικός δείκτης ισχύος της πρόβλεψης. Δεν είναι από μόνος του πραγματική πιθανότητα επιτυχίας.',
+  'D-C':      'Διόρθωση Dixon–Coles — Προσαρμόζει το μοντέλο Poisson για τα χαμηλά σκορ, ιδιαίτερα 0-0, 1-0, 0-1 και 1-1.',
+  'GAP':      'Βαθμοί Γκολ–Ασίστ (Goal-Assist Points) — Συνδυαστικός δείκτης επιθετικής συνεισφοράς παίκτη από γκολ και ασίστ.',
+  'H2H':      'Προϊστορία μεταξύ των δύο ομάδων (Head-to-Head) — Συνοψίζει προηγούμενες μεταξύ τους αναμετρήσεις και χρησιμοποιείται επικουρικά.',
+  'INJ':      'Ένδειξη τραυματισμών/απουσιών (Injury) — Δηλώνει ότι σημαντικές απουσίες επηρεάζουν την εκτίμηση του αγώνα.',
+  'Card%':    'Πιθανότητα κάρτας — Εκτίμηση της πιθανότητας ένας παίκτης ή ομάδα να δεχθεί κάρτα.',
+  'Adj🟨%':   'Διορθωμένη πιθανότητα κίτρινης κάρτας — Η αρχική πιθανότητα κάρτας μετά από προσαρμογές για αντίπαλο και ένταση αγώνα.',
+  'Volatility':'Αστάθεια πρόβλεψης (Volatility) — Μετρά πόσο μεταβάλλονται οι πρόσφατες επιδόσεις. Υψηλή αστάθεια σημαίνει χαμηλότερη εμπιστοσύνη.',
+  'SQD':      'Διαφορά Ποιότητας Σουτ (Shot Quality Differential) — Συγκρίνει την ποιότητα των ευκαιριών ανά σουτ των δύο ομάδων στο live.',
+  'MSI':      'Δείκτης Μετατόπισης Ορμής (Momentum Shift Index) — Μετρά πόσο διαφέρει η live εικόνα κυριαρχίας από αυτή που αναμενόταν πριν τον αγώνα.',
+  'Edge':     'Πλεονέκτημα μοντέλου (Edge) — Δείχνει πόσο ισχυρό θεωρεί το APEX το πλεονέκτημα μιας επιλογής έναντι του αντιπάλου ή της αγοράς, ανά module.',
+  'EV%':      'Αναμενόμενη Αξία (Expected Value %) — Πόσο κέρδος ή ζημία αναμένει θεωρητικά το μοντέλο ανά μονάδα πονταρίσματος με βάση πιθανότητα και απόδοση.',
+  'EV':       'Αναμενόμενη Αξία (Expected Value) — Σύγκριση της πιθανότητας του APEX με την προσφερόμενη απόδοση. Θετικό EV σημαίνει θεωρητική αξία, όχι εγγυημένο κέρδος.',
+  'Kelly':    'Κριτήριο Kelly — Μαθηματική μέθοδος υπολογισμού μεγέθους πονταρίσματος με βάση πιθανότητα, απόδοση και bankroll.',
+  'Vault':    'Αποθήκη προβλέψεων (Vault) — Τοπικό ιστορικό προβλέψεων που χρησιμοποιείται από Audit και βαθμονόμηση.',
+  'xG Mult':  'Πολλαπλασιαστής xG — Συντελεστής βαθμονόμησης που αυξάνει ή μειώνει τα xG ανά πρωτάθλημα.',
+  'LRU':      'Λιγότερο πρόσφατα χρησιμοποιημένο (Least Recently Used) — Κανόνας cache που απομακρύνει πρώτα τα παλαιότερα αχρησιμοποίητα δεδομένα.',
+  'ROI':      'Απόδοση επί των πονταρισμένων μονάδων (Return on Investment) — Καθαρό κέρδος ή ζημία ως ποσοστό του συνολικού stake.',
+  'P/L':      'Κέρδος / Ζημία (Profit / Loss) — Καθαρό αποτέλεσμα σε μονάδες μετά τα κερδισμένα και χαμένα στοιχήματα.',
+  'V-Score':  'Βαθμός Επαλήθευσης (Verification Score) — Συνθετικός βαθμός που δείχνει πόσο καλά επιβεβαιώνεται ένα σημείο από τους διαθέσιμους ελέγχους.',
+  'DQ':       'Ποιότητα Δεδομένων (Data Quality) — Δείχνει πόσο πλήρη και αξιόπιστα είναι τα δεδομένα που χρησιμοποιήθηκαν για την πρόβλεψη.',
+  'No-vig':   'Πιθανότητα αγοράς χωρίς γκανιότα (No-vig probability) — Η πιθανότητα που προκύπτει από τις αποδόσεις αφού αφαιρεθεί το περιθώριο του bookmaker.',
+  'Brier':    'Brier Score — Μέτρο σφάλματος πιθανοτήτων. Όσο χαμηλότερο, τόσο καλύτερα ταιριάζουν οι προβλεπόμενες πιθανότητες στα πραγματικά αποτελέσματα.',
+  'Log Loss': 'Λογαριθμική Απώλεια (Log Loss) — Τιμωρεί ιδιαίτερα τις λανθασμένες προβλέψεις υψηλής βεβαιότητας. Χαμηλότερη τιμή είναι καλύτερη.',
+  'MAE':      'Μέσο Απόλυτο Σφάλμα (Mean Absolute Error) — Μέση απόλυτη απόσταση μεταξύ πρόβλεψης και πραγματικής τιμής. Χαμηλότερο είναι καλύτερο.',
+  'Bias':     'Συστηματική Απόκλιση (Bias) — Δείχνει αν το μοντέλο τείνει σταθερά να υπερεκτιμά ή να υποεκτιμά έναν δείκτη.',
+  'SoT':      'Σουτ στην εστία (Shots on Target) — Πλήθος τελικών προσπαθειών που κατευθύνθηκαν εντός εστίας.',
+  'GK':       'Τερματοφύλακας (Goalkeeper) — Δείκτες που σχετίζονται με αποκρούσεις ή πίεση στον τερματοφύλακα.',
+  'CLV':      'Αξία έναντι της τελικής γραμμής (Closing Line Value) — Συγκρίνει την απόδοση που πήρες με την τελική τιμή της αγοράς πριν την έναρξη.',
+  'Poisson':  'Κατανομή Poisson — Στατιστικό μοντέλο που χρησιμοποιείται για την εκτίμηση του αριθμού γκολ και των πιθανοτήτων σκορ.',
+  'Dixon-Coles':'Μοντέλο Dixon–Coles — Προσαρμογή του Poisson για ποδοσφαιρικά σκορ με έμφαση στα χαμηλά αποτελέσματα.',
+});
+
 /**
  * Τυλίγει ένα ακρώνυμο σε <span class="acr"> για tooltip.
  * Χρησιμοποιείται inline στα template literals του UI.
@@ -76,7 +126,7 @@ function acr(term) {
   const tip = ACRONYM_DICT[term];
   if (!tip) return term;
   const safeT = tip.replace(/"/g, '&quot;');
-  return `<span class="acr" data-tip="${safeT}">${term}</span>`;
+  return `<span class="acr" data-acr="${term}" data-tip="${safeT}" title="Πατήστε για εξήγηση στα Ελληνικά">${term}</span>`;
 }
 
 // ----------------------------------------------------------------
@@ -234,9 +284,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.2';
+const APP_VERSION   = 'v5.3';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'VERIFIED VALUE EDGE · NO-VIG MARKET';
+const BUILD_TIME    = 'CLICKABLE GREEK INDICATORS · VERIFIED VALUE EDGE · NO-VIG MARKET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -6919,7 +6969,7 @@ window.addEventListener('DOMContentLoaded',()=>{
     .acr {
       border-bottom: 1px dashed rgba(56,189,248,0.55);
       color: var(--accent-blue);
-      cursor: help;
+      cursor: pointer;
       font-weight: inherit;
       transition: opacity 0.15s;
     }
@@ -6999,13 +7049,13 @@ window.addEventListener('DOMContentLoaded',()=>{
       border: 1px solid rgba(56,189,248,0.4);
       border-radius: 10px;
       padding: 12px 16px;
-      max-width: 300px;
+      max-width: 380px;
       min-width: 160px;
       font-size: 0.82rem;
       line-height: 1.55;
       color: var(--text-main);
       box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(56,189,248,0.08);
-      pointer-events: none;
+      pointer-events: auto;
       display: none;
       font-family: var(--font-sans);
       backdrop-filter: blur(8px);
@@ -7027,6 +7077,16 @@ window.addEventListener('DOMContentLoaded',()=>{
     }
     #apex-tip .tip-desc {
       color: var(--text-main);
+      white-space: pre-line;
+    }
+    #apex-tip .tip-label {
+      display:block;
+      margin-bottom:4px;
+      color:var(--accent-green);
+      font-size:0.64rem;
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
     }
   `;
   document.head.appendChild(tipStyle);
@@ -7042,17 +7102,19 @@ window.addEventListener('DOMContentLoaded',()=>{
     if (!el) { tipEl.style.display = 'none'; return; }
     e.stopPropagation();
 
-    const raw = el.dataset.tip || ACRONYM_DICT[el.textContent] || '';
+    const key = el.dataset.acr || el.textContent.trim();
+    const raw = ACRONYM_DICT[key] || el.dataset.tip || '';
     if (!raw) return;
 
-    // Parse "TERM — Description" format
+    // Greek-first format: "Ελληνικός όρος (English) — τι δηλώνει"
     const dashIdx = raw.indexOf(' — ');
-    const termFull = dashIdx > -1 ? raw.slice(0, dashIdx) : el.textContent;
+    const termFull = dashIdx > -1 ? raw.slice(0, dashIdx) : key;
     const descText = dashIdx > -1 ? raw.slice(dashIdx + 3) : raw;
 
     tipEl.innerHTML =
-      `<span class="tip-term">${el.textContent}</span>` +
-      (termFull !== el.textContent ? `<span class="tip-full">${termFull}</span>` : '') +
+      `<span class="tip-label">Τι δηλώνει ο δείκτης</span>` +
+      `<span class="tip-term">${key}</span>` +
+      (termFull !== key ? `<span class="tip-full">${termFull}</span>` : '') +
       `<span class="tip-desc">${descText}</span>`;
 
     // Position: below the element, stay within viewport
@@ -7066,6 +7128,80 @@ window.addEventListener('DOMContentLoaded',()=>{
     tipEl.style.top  = top  + 'px';
     tipEl.style.left = left + 'px';
   });
+  // ── v5.3 AUTO-LINK: κάνει clickable τα ακρώνυμα σε όλο το UI ─────
+  // Δεν χρειάζεται κάθε renderer να θυμάται να καλεί acr().
+  const _acrCanonical = new Map(Object.keys(ACRONYM_DICT).map(k => [k.toLowerCase(), k]));
+  const _acrKeys = Object.keys(ACRONYM_DICT)
+    .sort((a,b) => b.length - a.length);
+  const _acrEsc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const _acrPattern = new RegExp('(^|[^A-Za-z0-9_])(' + _acrKeys.map(_acrEsc).join('|') + ')(?=$|[^A-Za-z0-9_])', 'gi');
+  const _acrSkipTags = new Set(['SCRIPT','STYLE','TEXTAREA','INPUT','SELECT','OPTION','CODE','PRE']);
+
+  function _decorateAcrTextNode(node) {
+    const parent = node?.parentElement;
+    if(!node || !parent || !node.nodeValue?.trim()) return;
+    if(_acrSkipTags.has(parent.tagName) || parent.closest('.acr,#apex-tip,#glossaryModal,[contenteditable="true"]')) return;
+    const text = node.nodeValue;
+    _acrPattern.lastIndex = 0;
+    let m, last = 0, found = false;
+    const frag = document.createDocumentFragment();
+    while((m = _acrPattern.exec(text)) !== null) {
+      const prefix = m[1] || '';
+      const shown = m[2];
+      const start = m.index + prefix.length;
+      const end = start + shown.length;
+      const canonical = _acrCanonical.get(shown.toLowerCase());
+      if(!canonical) continue;
+      found = true;
+      if(start > last) frag.appendChild(document.createTextNode(text.slice(last,start)));
+      const span = document.createElement('span');
+      span.className = 'acr';
+      span.dataset.acr = canonical;
+      span.dataset.tip = ACRONYM_DICT[canonical];
+      span.title = 'Πατήστε για εξήγηση στα Ελληνικά';
+      span.textContent = shown;
+      frag.appendChild(span);
+      last = end;
+      // Αποφυγή zero-length loop σε edge cases
+      if(_acrPattern.lastIndex <= m.index) _acrPattern.lastIndex = m.index + m[0].length;
+    }
+    if(found) {
+      if(last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.replaceWith(frag);
+    }
+  }
+
+  function decorateAcronyms(root=document.getElementById('app')) {
+    if(!root) return;
+    if(root.nodeType === Node.TEXT_NODE) { _decorateAcrTextNode(root); return; }
+    if(root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
+    if(root.nodeType === Node.ELEMENT_NODE && (root.matches('.acr,#apex-tip,#glossaryModal') || _acrSkipTags.has(root.tagName))) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while(walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(_decorateAcrTextNode);
+  }
+  window.decorateAcronyms = decorateAcronyms;
+
+  const appRoot = document.getElementById('app');
+  if(appRoot) {
+    decorateAcronyms(appRoot);
+    let scheduled = false;
+    const pendingNodes = new Set();
+    const observer = new MutationObserver(mutations => {
+      mutations.forEach(mu => mu.addedNodes.forEach(n => pendingNodes.add(n)));
+      if(scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        const nodes = [...pendingNodes];
+        pendingNodes.clear();
+        nodes.forEach(n => decorateAcronyms(n));
+      });
+    });
+    observer.observe(appRoot, {childList:true, subtree:true});
+  }
+
   document.getElementById('pin')?.addEventListener('input',function(){
     if(this.value==='106014'){
       document.getElementById('auth').style.display='none';document.getElementById('app').style.display='block';
