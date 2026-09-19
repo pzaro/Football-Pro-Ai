@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.1 — VERIFIED MARKET BOMBS · NO-VIG CONSENSUS
+// APEX OMEGA v5.2 — VERIFIED VALUE EDGE + MARKET BOMBS
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -164,7 +164,10 @@ const DEFAULT_SETTINGS = {
   tXG_O25:3.10,  tXG_O35:3.80,   tXG_U25:1.80,  tBTTS_U25:0.65,
   // xG_Diff >= 0.65 → P(home)~53% (ελάχιστο edge) | tBTTS >= 1.20 → αμφότερες ομάδες ≥1.2 xG
   xG_Diff:0.65,  tBTTS:1.20,     modTrap:0.90,  modTight:0.95,  modGold:1.12,
-  minCorners:11.0, minCards:6.1
+  minCorners:11.0, minCards:6.1,
+  // VALUE EDGE: APEX probability πρέπει να υπερβαίνει το no-vig market consensus
+  // κατά τουλάχιστον 5 ποσοστιαίες μονάδες, με executable EV τουλάχιστον +8%.
+  valueGapPP:5.0, valueMinEVPct:8.0, valueMinBooks:2
 };
 let engineConfig = { ...DEFAULT_SETTINGS };
 let leagueMods   = {};
@@ -173,7 +176,8 @@ const SETTINGS_MAP = {
   cfg_wShotsOn:'wShotsOn', cfg_wShotsOff:'wShotsOff', cfg_wCorners:'wCorners', cfg_wGoals:'wGoals',
   cfg_tXG_O25:'tXG_O25',   cfg_tXG_O35:'tXG_O35',     cfg_tXG_U25:'tXG_U25',  cfg_tBTTS_U25:'tBTTS_U25',
   cfg_xG_Diff:'xG_Diff',   cfg_tBTTS:'tBTTS',         cfg_minCorners:'minCorners', cfg_minCards:'minCards',
-  cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold'
+  cfg_modTrap:'modTrap',   cfg_modTight:'modTight',   cfg_modGold:'modGold',
+  cfg_valueGapPP:'valueGapPP', cfg_valueMinEVPct:'valueMinEVPct', cfg_valueMinBooks:'valueMinBooks'
 };
 
 const _apiQueue = [];
@@ -230,9 +234,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.1';
+const APP_VERSION   = 'v5.2';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'VERIFIED MARKET BOMBS · NO-VIG CONSENSUS';
+const BUILD_TIME    = 'VERIFIED VALUE EDGE · NO-VIG MARKET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -2710,7 +2714,7 @@ function tickerRefresh(){
 // ================================================================
 //  ODDS ENGINE — Market consensus + no-vig + Value Bet ranking
 // ================================================================
-// v5.1 MARKET BOMBS FIX:
+// v5.2 MARKET VALUE + BOMBS:
 // - Δεν εξαρτάται πλέον από έναν bookmaker.
 // - Φέρνει ΟΛΟΥΣ τους διαθέσιμους bookmakers για κάθε fixture.
 // - Υπολογίζει no-vig consensus πιθανότητες μόνο από complete markets.
@@ -2879,42 +2883,64 @@ async function fetchOddsForFixture(fixtureId, force=false) {
 }
 
 /**
- * Value Bets με no-vig market probability όταν είναι διαθέσιμη.
+ * VERIFIED VALUE BETS — πραγματική απόκλιση APEX έναντι no-vig αγοράς.
+ *
+ * Value υπάρχει μόνο όταν ισχύουν ΟΛΑ:
+ *  1) APEX probability > no-vig market probability κατά >= valueGapPP
+ *  2) Η καλύτερη διαθέσιμη απόδοση δίνει EV >= valueMinEVPct
+ *  3) Η no-vig αγορά έχει >= valueMinBooks πλήρεις bookmakers
+ *  4) Η διασπορά της αγοράς δεν είναι υπερβολική
+ *  5) Πολύ μεγάλη απόκλιση APEX/market αντιμετωπίζεται ως conflict, όχι ως value
+ *
+ * Σημαντικό: δεν κάνουμε πλέον artificial cap στην πιθανότητα του μοντέλου.
+ * Το edge μετριέται πάνω στην πραγματική APEX probability και ελέγχεται με
+ * market-consensus guardrails.
  */
+const VALUE_MAX_MARKET_ODDS = 15.0;
+const VALUE_MAX_SPREAD_PP = 12.0;
+const VALUE_CONFLICT_GAP_PP = 25.0;
+
 function extractValueBets(rec, odds) {
   if(!rec?.pp || !odds) return [];
   const { pp, strength, omegaPick }=rec;
   const bankroll=bankrollData.current||0;
   const bets=[];
+  const minGapPP=Math.max(0,Number(engineConfig.valueGapPP??5));
+  const minEVPct=Math.max(0,Number(engineConfig.valueMinEVPct??8));
+  const minBooks=Math.max(1,Math.round(Number(engineConfig.valueMinBooks??2)));
 
   const assess=(market,modelProb,decOdds,label,key)=>{
-    if(!decOdds||decOdds<=1.01||modelProb<=0) return;
+    modelProb=Number(modelProb);
+    decOdds=Number(decOdds);
+    if(!Number.isFinite(modelProb)||modelProb<=0||modelProb>=1) return;
+    if(!Number.isFinite(decOdds)||decOdds<=1.01||decOdds>VALUE_MAX_MARKET_ODDS) return;
+
     const meta=odds?._market?.[key];
-    const marketProb=Number.isFinite(meta?.noVigProb)?meta.noVigProb:(1/decOdds);
-    if(!(marketProb>0)) return;
+    // Value Bet απαιτεί πραγματικό complete no-vig market — όχι απλό 1/odds fallback.
+    const marketProb=Number(meta?.noVigProb);
+    const books=Number(meta?.books||0);
+    const spreadPP=Number(meta?.spreadPP??Infinity);
+    if(!Number.isFinite(marketProb)||marketProb<=0||marketProb>=1) return;
+    if(books<minBooks) return;
+    if(!Number.isFinite(spreadPP)||spreadPP>VALUE_MAX_SPREAD_PP) return;
 
-    // Ακραίες longshots χωρίς αξιόπιστη αγορά απορρίπτονται.
-    if(decOdds>15 || marketProb<0.067) return;
+    const gapPP=(modelProb-marketProb)*100;
+    if(gapPP<minGapPP) return;
+    // Ακραία ασυμφωνία = πιθανό model/data issue, όχι αυτόματα ευκαιρία.
+    if(gapPP>=VALUE_CONFLICT_GAP_PP) return;
 
-    let maxEdgePP;
-    if(decOdds<2.0) maxEdgePP=0.08;
-    else if(decOdds<3.5) maxEdgePP=0.10;
-    else if(decOdds<6.0) maxEdgePP=0.08;
-    else maxEdgePP=0.06;
+    const ev=(modelProb*decOdds)-1;
+    const evPct=ev*100;
+    if(evPct<minEVPct) return;
 
-    const cappedModelProb=Math.min(modelProb,marketProb+maxEdgePP);
-    const ev=cappedModelProb*decOdds-1;
-    if(ev<MIN_EV_THRESHOLD) return;
+    const apexFairOdds=1/modelProb;
+    const marketFairOdds=1/marketProb;
+    // Για πραγματικό value η αγορά πρέπει να πληρώνει περισσότερο από το APEX fair price.
+    if(!(decOdds>apexFairOdds)) return;
 
-    const pickStr=omegaPick||'';
-    if(label.includes('ΠΑΝΩ ΑΠΟ 3.5')&&!pickStr.includes('3.5')&&!pickStr.includes('OVER 3')) return;
-    if(label.includes('ΠΑΝΩ ΑΠΟ 2.5')&&!pickStr.includes('2.5')&&!pickStr.includes('3.5')) return;
-    if(label.includes('ΚΑΤΩ ΑΠΟ')&&!pickStr.includes('ΚΑΤΩ')) return;
-    if(label.includes('ΓΚΟΛ/ΓΚΟΛ')&&!pickStr.includes('ΓΚΟΛ')&&!pickStr.includes('GG')) return;
-
-    const edge=(cappedModelProb-marketProb)*100;
+    const pricePremiumPct=(decOdds/apexFairOdds-1)*100;
     const kelly=bankroll>0
-      ? clamp((cappedModelProb*(decOdds-1)-(1-cappedModelProb))/(decOdds-1)*KELLY_FRACTION*bankroll,0,bankroll*0.10)
+      ? clamp((modelProb*(decOdds-1)-(1-modelProb))/(decOdds-1)*KELLY_FRACTION*bankroll,0,bankroll*0.10)
       : 0;
 
     bets.push({
@@ -2924,17 +2950,23 @@ function extractValueBets(rec, odds) {
       date:rec.m?.fixture?.date?.split('T')[0]||'',
       time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||'',
       market,label,marketKey:key,
-      modelProb:parseFloat((cappedModelProb*100).toFixed(1)),
-      impliedProb:parseFloat((marketProb*100).toFixed(1)),
+      modelProb:parseFloat((modelProb*100).toFixed(1)),
+      impliedProb:parseFloat((marketProb*100).toFixed(1)), // no-vig consensus
+      marketProb:parseFloat((marketProb*100).toFixed(1)),
+      apexFairOdds:parseFloat(apexFairOdds.toFixed(2)),
+      marketFairOdds:parseFloat(marketFairOdds.toFixed(2)),
       decOdds:parseFloat(decOdds.toFixed(2)),
-      ev:parseFloat((ev*100).toFixed(2)),
-      edge:parseFloat(edge.toFixed(1)),
+      ev:parseFloat(evPct.toFixed(2)),
+      edge:parseFloat(gapPP.toFixed(1)),
+      pricePremiumPct:parseFloat(pricePremiumPct.toFixed(1)),
       kelly:parseFloat(kelly.toFixed(2)),
       omegaPick,pickConf:strength||0,
       bookmaker:meta?.bestBookmaker||'Best available',
-      marketBooks:meta?.books||0,
-      marketSpreadPP:meta?.spreadPP??null,
-      noVig:true
+      marketBooks:books,
+      marketSpreadPP:parseFloat(spreadPP.toFixed(1)),
+      noVig:true,
+      valueVerified:true,
+      valueRule:{minGapPP,minEVPct,minBooks,maxSpreadPP:VALUE_MAX_SPREAD_PP,conflictGapPP:VALUE_CONFLICT_GAP_PP}
     });
   };
 
@@ -3013,7 +3045,7 @@ window.fetchAllOdds=async function(force=false){
     showErr('Σφάλμα market scan: '+e.message);
   }finally{
     setLoader(false);
-    if(btn){btn.disabled=false;btn.textContent='💣 Market Odds / Bombs';}
+    if(btn){btn.disabled=false;btn.textContent='💎 Market Value / Bombs';}
   }
 };
 
@@ -3023,10 +3055,10 @@ function buildValueBetsList() {
   sd.forEach(rec => {
     if(rec.valueBets?.length) allBets.push(...rec.valueBets);
   });
-  // Ταξινόμηση κατά EV% DESC → top 10
+  // Verified Value: πρώτα η πραγματική πιθανoτική απόκλιση APEX-market, μετά το executable EV.
   latestTopLists.valueBets = allBets
-    .sort((a, b) => b.ev - a.ev)
-    .slice(0, 10);
+    .sort((a,b)=>(b.edge-a.edge)||(b.ev-a.ev))
+    .slice(0,15);
 }
 
 function renderValueBetsTab(bets) {
@@ -3034,7 +3066,7 @@ function renderValueBetsTab(bets) {
     return `<div style="text-align:center;color:var(--text-muted);padding:30px 20px;">
       <div style="font-size:2rem;margin-bottom:10px;">💰</div>
       <div style="font-weight:700;margin-bottom:6px;">Δεν υπάρχουν Value Bets ακόμα</div>
-      <div style="font-size:0.82rem;">Πατήστε <b>Αποδόσεις</b> για φόρτωση από ${ODDS_BOOKMAKER_NAME}</div>
+      <div style="font-size:0.82rem;">Πατήστε <b>💎 Market Value / Bombs</b> για no-vig σύγκριση APEX ↔ αγορά</div>
     </div>`;
   }
 
@@ -3065,8 +3097,10 @@ function renderValueBetsTab(bets) {
         <div style="font-size:0.8rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(b.label)}</div>
         <div style="display:flex;gap:12px;margin-top:6px;font-size:0.68rem;color:var(--text-muted);flex-wrap:wrap;">
           <span>Μοντέλο: <strong style="color:var(--text-main);">${b.modelProb}%</strong></span>
-          <span>Implied: <strong>${b.impliedProb}%</strong></span>
-          <span>Edge: <strong style="color:${edgeColor};">+${b.edge}%</strong></span>
+          <span>Market no-vig: <strong>${b.impliedProb}%</strong></span>
+          <span>Δ APEX–Market: <strong style="color:${edgeColor};">+${b.edge}pp</strong></span>
+          <span>APEX fair: <strong>${b.apexFairOdds?.toFixed?.(2)||'—'}</strong></span>
+          <span>Books: <strong>${b.marketBooks||0}</strong></span>
           <span style="font-size:0.62rem;color:var(--text-muted);">via ${b.bookmaker}</span>
         </div>
       </div>
@@ -3111,7 +3145,7 @@ function renderValueBetsTab(bets) {
       </div>
     </div>
     <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.15);border-radius:6px;">
-      💡 <strong>Value Bet</strong> = αγορά όπου η πιθανότητα του μοντέλου είναι υψηλότερη από την implied probability του bookmaker. EV ≥ +${(MIN_EV_THRESHOLD*100).toFixed(0)}% για εμφάνιση.
+      💎 <strong>Verified Value Bet</strong> = APEX probability ≥ market no-vig probability + <strong>${Number(engineConfig.valueGapPP??5).toFixed(1)}pp</strong>, executable EV ≥ <strong>+${Number(engineConfig.valueMinEVPct??8).toFixed(1)}%</strong>, τουλάχιστον <strong>${Math.round(Number(engineConfig.valueMinBooks??2))}</strong> bookmakers και spread αγοράς ≤ ${VALUE_MAX_SPREAD_PP.toFixed(0)}pp. Απόκλιση ≥ ${VALUE_CONFLICT_GAP_PP.toFixed(0)}pp θεωρείται conflict, όχι value.
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>`;
 }
@@ -5563,7 +5597,13 @@ window.saveLeagueMods = function() {
 //  SETTINGS & INIT
 // ================================================================
 window.loadSettings=function(){try{const s=JSON.parse(localStorage.getItem(LS_SETTINGS));if(s)engineConfig={...DEFAULT_SETTINGS,...s};}catch{}try{const lm=JSON.parse(localStorage.getItem(LS_LGMODS));if(lm)leagueMods=lm;}catch{}for(const[id,key]of Object.entries(SETTINGS_MAP)){const el=document.getElementById(id);if(el)el.value=engineConfig[key];}};
-window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}showOk('Saved Καθολικές Ρυθμίσεις!');};
+window.saveSettings=function(){for(const[id,key]of Object.entries(SETTINGS_MAP)){const v=parseFloat(document.getElementById(id)?.value);if(!isNaN(v))engineConfig[key]=v;}try{localStorage.setItem(LS_SETTINGS,JSON.stringify(engineConfig));}catch{}
+  // Αν υπάρχουν ήδη market odds, οι νέες Value thresholds εφαρμόζονται αμέσως χωρίς νέο API call.
+  let rebuilt=0;
+  (window.scannedMatchesData||[]).forEach(rec=>{if(rec?.odds){rec.valueBets=extractValueBets(rec,rec.odds);rebuilt++;}});
+  if(rebuilt){buildValueBetsList();renderTopSections();}
+  showOk(`Saved Καθολικές Ρυθμίσεις!${rebuilt?` · Value re-check ${rebuilt} αγώνων`:''}`);
+};
 // ================================================================
 //  DIXON-COLES ATTACK/DEFENSE RATINGS
 //  Υπολογίζει attack strength / defense strength από season totals.

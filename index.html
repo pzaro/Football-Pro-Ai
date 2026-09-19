@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.1 — Verified Market Bombs</title>
+  <title>APEX OMEGA v5.2 — Verified Value Edge + Market Bombs</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=20260919-market-bombs-novig">
@@ -15,7 +15,7 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <div class="brand-logo">
       APEX<span>OMEGA</span>
-      <span class="version-tag" id="versionTag">v5.1</span>
+      <span class="version-tag" id="versionTag">v5.2</span>
     </div>
     <div id="lastUpdatedBadge" style="display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.58rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:3px 9px;white-space:nowrap;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
@@ -64,7 +64,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.1 · VERIFIED MARKET BOMBS · NO-VIG</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.2 · VERIFIED VALUE EDGE · NO-VIG MARKET</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -103,6 +103,9 @@
           <div class="calib-item"><span class="calib-lbl">Min xG (BTTS)</span><input type="number" step="0.05" id="cfg_tBTTS" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Max btts (U2.5)</span><input type="number" step="0.05" id="cfg_tBTTS_U25" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">xG Diff (1X2)</span><input type="number" step="0.05" id="cfg_xG_Diff" class="calib-input"></div>
+          <div class="calib-item"><span class="calib-lbl" style="color:var(--green)">Value Gap APEX–Market (pp)</span><input type="number" min="0" max="24" step="0.5" id="cfg_valueGapPP" class="calib-input" title="Ελάχιστη διαφορά APEX probability με no-vig market probability. Default 5pp."></div>
+          <div class="calib-item"><span class="calib-lbl" style="color:var(--green)">Min Value EV (%)</span><input type="number" min="0" max="100" step="1" id="cfg_valueMinEVPct" class="calib-input" title="Ελάχιστο Expected Value στην καλύτερη διαθέσιμη απόδοση. Default +8%."></div>
+          <div class="calib-item"><span class="calib-lbl" style="color:var(--green)">Min Market Books</span><input type="number" min="1" max="20" step="1" id="cfg_valueMinBooks" class="calib-input" title="Ελάχιστοι bookmakers με πλήρη αγορά για no-vig consensus. Default 2."></div>
           <div class="calib-item"><span class="calib-lbl" style="color:var(--gold)">Min Corners (Avg)</span><input type="number" step="0.5" id="cfg_minCorners" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl" style="color:var(--gold)">Min Cards (Avg)</span><input type="number" step="0.1" id="cfg_minCards" class="calib-input"></div>
           <div class="calib-item"><span class="calib-lbl">Trap Leagues Mod</span><input type="number" step="0.01" id="cfg_modTrap" class="calib-input"></div>
@@ -164,7 +167,7 @@
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
         <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">↑ Import</button>
         <button class="btn btn-outline" id="btnFetchLineups" onclick="window.fetchAllLineups()" style="color:var(--teal);border-color:rgba(45,212,191,0.3);">📋 Fetch Lineups</button>
-        <button class="btn btn-outline" id="btnFetchOdds" onclick="window.fetchAllOdds(true)" style="color:var(--gold);border-color:rgba(252,211,77,0.35);" title="Market-wide odds, no-vig consensus και επανέλεγχος Bombs">💣 Market Odds / Bombs</button>
+        <button class="btn btn-outline" id="btnFetchOdds" onclick="window.fetchAllOdds(true)" style="color:var(--gold);border-color:rgba(252,211,77,0.35);" title="Market-wide odds, no-vig consensus, Verified Value Bets και επανέλεγχος Bombs">💎 Market Value / Bombs</button>
         <button class="btn btn-primary" id="btnPre" onclick="runScan()">▶ Run Scan</button>
       </div>
     </div>
