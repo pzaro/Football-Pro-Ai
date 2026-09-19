@@ -1713,3 +1713,130 @@ body {
   .match-analysis-quick { grid-template-columns:1fr 1fr; }
   .competition-team-level { max-width:100%; }
 }
+
+/* ================================================================
+   v5.8 — SETTLED RESULTS + GREECE-TIME VISUAL SYSTEM
+   ================================================================ */
+.match-greece-time,
+.match-completed-badge,
+.match-final-score-badge,
+.match-live-badge {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:2px 7px;
+  border-radius:999px;
+  font-family:var(--font-mono);
+  font-size:.58rem;
+  font-weight:800;
+  line-height:1.35;
+  white-space:nowrap;
+}
+.match-greece-time {
+  color:#334155;
+  background:#f8fafc;
+  border:1px solid #d9e2ec;
+}
+.match-completed-badge {
+  color:#166534;
+  background:#ecfdf3;
+  border:1px solid #bbf7d0;
+}
+.match-final-score-badge {
+  color:#0f172a;
+  background:#ffffff;
+  border:1px solid #cbd5e1;
+  box-shadow:0 1px 2px rgba(15,23,42,.05);
+}
+.match-live-badge {
+  color:#991b1b;
+  background:#fff1f2;
+  border:1px solid #fecdd3;
+}
+.postmatch-final-label {
+  color:#64748b;
+  font-family:var(--font-cond);
+  font-size:.58rem;
+  font-weight:900;
+  letter-spacing:.10em;
+  text-transform:uppercase;
+}
+.postmatch-final-score {
+  margin-top:1px;
+  color:#0f172a;
+  font-family:var(--font-mono);
+  font-size:1.55rem;
+  font-weight:950;
+  line-height:1.05;
+}
+.settled-market-grid {
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+  align-items:flex-start;
+}
+.settled-market-grid.compact { gap:4px; }
+.settled-signal-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  border-radius:6px;
+  padding:4px 7px;
+  font-family:var(--font-mono);
+  font-size:.60rem;
+  font-weight:750;
+  line-height:1.25;
+  border:1px solid #d8e1ec;
+  background:#f8fafc;
+  color:#475569;
+  white-space:normal;
+}
+.settled-market-grid.compact .settled-signal-chip { padding:3px 6px;font-size:.57rem; }
+.settled-signal-chip.won {
+  color:#166534;
+  background:#ecfdf3;
+  border-color:#86efac;
+}
+.settled-signal-chip.lost {
+  color:#b91c1c;
+  background:#fff1f2;
+  border-color:#fda4af;
+}
+.settled-signal-chip.unknown,
+.settled-signal-chip.neutral {
+  color:#92400e;
+  background:#fffbeb;
+  border-color:#fde68a;
+}
+.match-analysis-completed-badge {
+  display:inline-flex;
+  align-items:center;
+  border:1px solid rgba(134,239,172,.34);
+  background:rgba(22,101,52,.32);
+  color:#dcfce7;
+  border-radius:6px;
+  padding:2px 6px;
+  font-size:.56rem;
+  font-weight:900;
+  letter-spacing:.05em;
+}
+.match-analysis-settled {
+  grid-column:1/-1;
+  padding:8px 9px;
+  border:1px solid #d8e1ec;
+  border-radius:8px;
+  background:#fff;
+}
+.match-analysis-settled-title {
+  margin-bottom:5px;
+  color:#52647b;
+  font-family:var(--font-cond);
+  font-size:.56rem;
+  font-weight:900;
+  letter-spacing:.09em;
+}
+.summary-table td { vertical-align:middle; }
+@media (max-width:720px){
+  .postmatch-final-score { font-size:1.25rem; }
+  .settled-signal-chip { font-size:.57rem; }
+}

@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.7 — PROFESSIONAL UI + COMPETITION CONTEXT + COMPOSITE MATCH INTELLIGENCE
+// APEX OMEGA v5.8 — SETTLED MARKET RESULTS + GREECE TIME + PROFESSIONAL UI + CMI
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -293,9 +293,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.7';
+const APP_VERSION   = 'v5.8';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'PROFESSIONAL UI · LEAGUE CONTEXT · CUP TEAM CATEGORIES · COMPACT DRAWER · CMI';
+const BUILD_TIME    = 'SETTLED MARKETS · FINAL SCORE · GREECE TIME · PROFESSIONAL UI · CMI';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -901,20 +901,131 @@ async function getPrimaryCompetitionForTeam(teamId,season,currentLeagueId,seedFi
   primaryCompetitionCache.set(k,primary||null);
   return primary||null;
 }
-function competitionContextHTML(rec,{compact=false}={}){
+const GREECE_TIME_ZONE = 'Europe/Athens';
+function _displayRecord(rec){
+  if(!rec) return null;
+  if(rec.m?.fixture) return rec;
+  const id=String(rec.fixId??rec.fixtureId??'');
+  return (window.scannedMatchesData||[]).find(x=>String(x?.fixId??x?.m?.fixture?.id??'')===id) || rec;
+}
+function formatGreeceKickoff(rec,{withDate=false}={}){
+  const src=_displayRecord(rec)||rec;
+  const raw=src?.m?.fixture?.date || rec?.fixtureDate || rec?.date || null;
+  if(!raw) return '—';
+  const d=new Date(raw);
+  if(Number.isNaN(d.getTime())) return String(raw);
+  const opts={timeZone:GREECE_TIME_ZONE,hour:'2-digit',minute:'2-digit',hour12:false};
+  if(withDate){opts.day='2-digit';opts.month='2-digit';}
+  return d.toLocaleString('el-GR',opts);
+}
+function _fixtureState(rec){
+  const src=_displayRecord(rec)||rec;
+  const status=src?.m?.fixture?.status?.short || rec?.status || rec?.pmStatus || '';
+  const home=src?.m?.goals?.home ?? rec?.pmActualHome;
+  const away=src?.m?.goals?.away ?? rec?.pmActualAway;
+  return {src,status,home,away,finished:isFinished(status),live:isLive(status)};
+}
+function matchLifecycleHTML(rec,{compact=false}={}){
+  const st=_fixtureState(rec);
+  const time=formatGreeceKickoff(rec,{withDate:!compact});
+  if(st.finished){
+    const score=(st.home!==null&&st.home!==undefined&&st.away!==null&&st.away!==undefined)?`${st.home}–${st.away}`:'—';
+    return `<span class="match-completed-badge">✓ ΟΛΟΚΛΗΡΩΘΗΚΕ</span><span class="match-final-score-badge">FT ${score}</span><span class="match-greece-time" title="Ώρα έναρξης Ελλάδος">🇬🇷 ${time}</span>`;
+  }
+  if(st.live){
+    const score=(st.home!==null&&st.home!==undefined&&st.away!==null&&st.away!==undefined)?`${st.home}–${st.away}`:'0–0';
+    return `<span class="match-live-badge">● LIVE ${score}</span><span class="match-greece-time" title="Ώρα έναρξης Ελλάδος">🇬🇷 ${time}</span>`;
+  }
+  return `<span class="match-greece-time" title="Ώρα έναρξης Ελλάδος">🕒 🇬🇷 ${time}</span>`;
+}
+function competitionContextHTML(rec,{compact=false,showLifecycle=true}={}){
   if(!rec) return '';
-  const lg=rec.lg||rec.m?.league?.name||'—';
-  const cup=!!(rec.isCup||isCupCompetitionMeta(rec.leagueId||rec.m?.league?.id,lg));
-  const h=rec.homeCategory||rec.hS?.primaryCompetition||null;
-  const a=rec.awayCategory||rec.aS?.primaryCompetition||null;
+  const src=_displayRecord(rec)||rec;
+  const lg=rec.lg||src?.lg||src?.m?.league?.name||'—';
+  const cup=!!(rec.isCup||src?.isCup||isCupCompetitionMeta(rec.leagueId||src?.leagueId||src?.m?.league?.id,lg));
+  const h=rec.homeCategory||src?.homeCategory||src?.hS?.primaryCompetition||null;
+  const a=rec.awayCategory||src?.awayCategory||src?.aS?.primaryCompetition||null;
   const cls=compact?'competition-context compact':'competition-context';
   let html=`<div class="${cls}"><span class="competition-league-badge">🏆 ${esc(lg)}</span>`;
+  if(showLifecycle) html+=matchLifecycleHTML(src,{compact});
   if(cup){
     html+=`<span class="competition-cup-badge">CUP</span>`;
-    html+=`<span class="competition-team-level" title="Κατηγορία ${esc(rec.ht||'γηπεδούχου')}">🏠 ${h?.name?esc(h.name):'Κατηγορία μη διαθέσιμη'}</span>`;
-    html+=`<span class="competition-team-level" title="Κατηγορία ${esc(rec.at||'φιλοξενούμενου')}">✈️ ${a?.name?esc(a.name):'Κατηγορία μη διαθέσιμη'}</span>`;
+    html+=`<span class="competition-team-level" title="Κατηγορία ${esc(rec.ht||src?.ht||'γηπεδούχου')}">🏠 ${h?.name?esc(h.name):'Κατηγορία μη διαθέσιμη'}</span>`;
+    html+=`<span class="competition-team-level" title="Κατηγορία ${esc(rec.at||src?.at||'φιλοξενούμενου')}">✈️ ${a?.name?esc(a.name):'Κατηγορία μη διαθέσιμη'}</span>`;
   }
   return html+`</div>`;
+}
+
+// v5.8 — frozen list of model-confirmed markets + post-match settlement.
+function collectConfirmedMarketSignals(rec){
+  if(!rec) return [];
+  if(Array.isArray(rec.preConfirmedSignals) && rec.preConfirmedSignals.length) return rec.preConfirmedSignals;
+  const out=[], seen=new Set();
+  const add=(key,label,market,confidence,extra={})=>{
+    if(!key||seen.has(key)) return; seen.add(key);
+    out.push({key,label,market,confidence:Number.isFinite(Number(confidence))?Number(confidence):null,...extra});
+  };
+  const pp=rec.pp||{};
+  const mp=rec.matchPicture||null;
+  const lp=typeof getLeagueParams==='function'?getLeagueParams(rec.leagueId||rec.m?.league?.id):{};
+  const tXG=Number(rec.tXG ?? ((Number(rec.hXGfinal)||0)+(Number(rec.aXGfinal)||0)));
+  const hXG=Number(rec.hXGfinal||rec.hExp||0), aXG=Number(rec.aXGfinal||rec.aExp||0);
+  const market=mp?.recommendedMarket||rec.outcomeMarket;
+  const marketProb=Number(mp?.recommendedProb??rec.outcomeProb??0);
+  if(['1','X','2','1X','X2','12'].includes(market) && marketProb>=0.65) add(`OUT_${market}`,`Σημείο ${market}`,'1X2 / DC',marketProb*100,{selection:market});
+  if(Number(pp.pO35)>=0.52 && tXG>=Number(lp.minXGO35??3.8)) add('O35','Over 3.5','Γκολ',Number(pp.pO35)*100);
+  if(Number(pp.pO25)>=0.62 && tXG>=Number(lp.minXGO25??3.1)) add('O25','Over 2.5','Γκολ',Number(pp.pO25)*100);
+  if(Number(pp.pU25)>=0.58 && tXG<=Number(lp.maxU25??1.8)) add('U25','Under 2.5','Γκολ',Number(pp.pU25)*100);
+  if(Number(pp.pBTTS)>=0.68 && hXG>=1.10 && aXG>=1.10) add('BTTS','GG','BTTS',Number(pp.pBTTS)*100);
+  if(Number(rec.cornerConf)>=72) add('COR85','Over 8.5','Κόρνερ',Number(rec.cornerConf));
+  const cards=Number(rec.hS?.crd||0)+Number(rec.aS?.crd||0);
+  if(cards>=Number(engineConfig?.minCards??6.1) && Math.abs(Number(rec.xgDiff||0))<0.45) add('CRD55','Over 5.5','Κάρτες',Math.min(99,Math.max(0,(cards-5)*20)));
+  if(rec.exact && Number(rec.exactConf||0)>=70) add('EXACT','Ακριβές σκορ','Σκορ',Number(rec.exactConf),{scores:[rec.exact,rec.exact2].filter(Boolean)});
+  if(rec.htAnalysis?.htBest && Number(rec.htAnalysis?.htConf||0)>=70) add('HTEXACT','Σκορ ΗΤ','Ημίχρονο',Number(rec.htAnalysis.htConf),{scores:[`${rec.htAnalysis.htBest.h}-${rec.htAnalysis.htBest.a}`,rec.htAnalysis.htSecond?`${rec.htAnalysis.htSecond.h}-${rec.htAnalysis.htSecond.a}`:null].filter(Boolean)});
+  if(Number(rec.offside?.pTotOff35)>=70) add('OFF35','Over 3.5','Οφσάιντ',Number(rec.offside.pTotOff35));
+  // Ensure the primary signal is represented even when it has a special wording.
+  const pick=String(rec.omegaPick||'');
+  if(pick && !pick.includes('ΧΩΡΙΣ') && !pick.includes('NO BET')){
+    if(pick.includes('ΚΟΡΝΕΡ')) add('COR85','Over 8.5','Κόρνερ',rec.cornerConf);
+    else if(pick.includes('ΚΑΡΤΕΣ')) add('CRD55','Over 5.5','Κάρτες',rec.strength);
+    else if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) add('O35','Over 3.5','Γκολ',rec.strength);
+    else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) add('O25','Over 2.5','Γκολ',rec.strength);
+    else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')) add('U25','Under 2.5','Γκολ',rec.strength);
+    else if(pick.includes('ΓΚΟΛ/ΓΚΟΛ')||pick.includes('GG')) add('BTTS','GG','BTTS',rec.strength);
+  }
+  return out;
+}
+function settleConfirmedMarketSignal(rec,sig){
+  const st=_fixtureState(rec); if(!st.finished) return null;
+  const h=Number(st.home), a=Number(st.away); if(!Number.isFinite(h)||!Number.isFinite(a)) return null;
+  const total=h+a, outcome=h>a?'1':h<a?'2':'X';
+  const act=rec.actStats||null;
+  switch(sig.key){
+    case 'OUT_1': return outcome==='1'; case 'OUT_X': return outcome==='X'; case 'OUT_2': return outcome==='2';
+    case 'OUT_1X': return outcome==='1'||outcome==='X'; case 'OUT_X2': return outcome==='X'||outcome==='2'; case 'OUT_12': return outcome==='1'||outcome==='2';
+    case 'O25': return total>=3; case 'O35': return total>=4; case 'U25': return total<=2; case 'BTTS': return h>0&&a>0;
+    case 'COR85': {const v=act&&_pmHasNum(act.hCor)&&_pmHasNum(act.aCor)?Number(act.hCor)+Number(act.aCor):null; return v===null?null:v>=9;}
+    case 'CRD55': {const v=act&&_pmHasNum(act.hCrd)&&_pmHasNum(act.aCrd)?Number(act.hCrd)+Number(act.aCrd):null; return v===null?null:v>=6;}
+    case 'OFF35': {const v=act&&_pmHasNum(act.hOff)&&_pmHasNum(act.aOff)?Number(act.hOff)+Number(act.aOff):null; return v===null?null:v>=4;}
+    case 'EXACT': {const sc=`${h}-${a}`; return (sig.scores||[]).includes(sc);}
+    case 'HTEXACT': {
+      const hh=rec.m?.score?.halftime?.home, ha=rec.m?.score?.halftime?.away;
+      if(!_pmHasNum(hh)||!_pmHasNum(ha)) return null;
+      return (sig.scores||[]).includes(`${Number(hh)}-${Number(ha)}`);
+    }
+    default:return null;
+  }
+}
+function confirmedMarketsSettlementHTML(rec,{compact=false}={}){
+  const sigs=collectConfirmedMarketSignals(rec);
+  if(!sigs.length) return `<span class="settled-signal-chip neutral">Δεν υπήρχαν επιβεβαιωμένα markets</span>`;
+  return `<div class="settled-market-grid ${compact?'compact':''}">${sigs.map(sig=>{
+    const hit=settleConfirmedMarketSignal(rec,sig);
+    const cls=hit===true?'won':hit===false?'lost':'unknown';
+    const icon=hit===true?'✓':hit===false?'✕':'?';
+    const cf=Number.isFinite(sig.confidence)?` · ${sig.confidence.toFixed(0)}%`:'';
+    return `<span class="settled-signal-chip ${cls}" title="${esc(sig.market)}${cf}"><b>${icon}</b> ${esc(sig.market)}: ${esc(sig.label)}${cf}</span>`;
+  }).join('')}</div>`;
 }
 
 
@@ -2676,7 +2787,7 @@ async function _liveTrackerTick(){
       }
       const prev=liveMatchesState[fixId];
       if(prev&&inPlay&&prev.inPlayPick!==inPlay.inPlayPick){
-        const alert={time:new Date().toLocaleTimeString('el-GR'),fixId,ht:lf.teams.home.name,at:lf.teams.away.name,elapsed:lf.fixture.status.elapsed,from:prev.inPlayPick,to:inPlay.inPlayPick,score:`${lf.goals.home}-${lf.goals.away}`};
+        const alert={time:new Date().toLocaleTimeString('el-GR',{timeZone:GREECE_TIME_ZONE,hour:'2-digit',minute:'2-digit'}),fixId,ht:lf.teams.home.name,at:lf.teams.away.name,elapsed:lf.fixture.status.elapsed,from:prev.inPlayPick,to:inPlay.inPlayPick,score:`${lf.goals.home}-${lf.goals.away}`};
         liveAlerts.unshift(alert);if(liveAlerts.length>20)liveAlerts.pop();
         _flashSignalAlert(alert);
         try{localStorage.setItem(LS_LIVE_ALERTS,JSON.stringify(liveAlerts.slice(0,20)));}catch{}
@@ -2685,7 +2796,7 @@ async function _liveTrackerTick(){
     }
     _renderLiveDashboard(liveRecs);_renderLiveAlerts();
     if(statusEl)statusEl.textContent=`Ενεργό — poll σε ${LIVE_POLL_MS/1000}s`;
-    if(lastEl)lastEl.textContent=new Date().toLocaleTimeString('el-GR');
+    if(lastEl)lastEl.textContent=new Date().toLocaleTimeString('el-GR',{timeZone:GREECE_TIME_ZONE,hour:'2-digit',minute:'2-digit'});
   }catch(e){if(statusEl)statusEl.textContent=`Poll error: ${e.message}`;}
 }
 
@@ -2734,7 +2845,7 @@ function _renderLiveDashboard(liveRecs){
     return`<div class="match-card${isStrong?' live-strong-signal':''}" id="live-card-${lf.fixture.id}" style="border-color:${cardBorder};${isStrong?'border-width:2px;':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:160px;">
-          <div class="match-league"><span class="live-dot"></span><span class="league-badge">${esc(status)}</span><span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span></div>
+          <div class="match-league"><span class="live-dot"></span><span class="league-badge">${esc(status)}</span><span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span><span class="match-greece-time">🇬🇷 ${formatGreeceKickoff({m:lf},{withDate:false})}</span></div>
           <div style="font-weight:700;font-size:0.95rem;margin:6px 0 2px;">${esc(lf.teams.home.name)}</div>
           <div style="font-weight:600;font-size:0.85rem;color:var(--text-muted);">${esc(lf.teams.away.name)}</div>
         </div>
@@ -3393,8 +3504,8 @@ function renderValueBetsTab(bets) {
       <div style="flex:1;padding:12px 14px;min-width:0;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:0.6rem;font-weight:800;color:${marketBadgeColor};background:${marketBadgeColor}18;border:1px solid ${marketBadgeColor}33;border-radius:4px;padding:1px 7px;white-space:nowrap;">${esc(b.market)}</span>
-          <span style="font-size:0.65rem;color:var(--text-dim);">${b.date} ${b.time}</span>
-          ${competitionContextHTML(b,{compact:true})}
+          <span style="font-size:0.65rem;color:var(--text-dim);">🇬🇷 ${formatGreeceKickoff(b,{withDate:true})}</span>
+          ${competitionContextHTML(b,{compact:true,showLifecycle:false})}
         </div>
         <div style="font-weight:700;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(b.match)}</div>
         <div style="font-size:0.8rem;color:var(--accent-green);font-weight:600;margin-top:3px;">${esc(b.label)}</div>
@@ -3611,7 +3722,7 @@ function renderBombsTab(bombs){
     return `<div onclick="window.openMatchAnalysisDrawer('${b.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="background:var(--bg-base);border:1px solid rgba(74,222,128,0.32);border-radius:8px;overflow:hidden;margin-bottom:10px;cursor:pointer;transition:border-color .15s,transform .15s;" onmouseover="this.style.borderColor='var(--accent-green)'" onmouseout="this.style.borderColor='rgba(74,222,128,0.32)'">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(74,222,128,0.05);flex-wrap:wrap;">
         <div style="font-family:var(--font-mono);color:var(--text-dim);">#${i+1}</div>
-        <div style="flex:1;min-width:190px;"><div style="font-weight:800;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">${b.date} ${b.time}</div>${competitionContextHTML(b,{compact:true})}</div>
+        <div style="flex:1;min-width:190px;"><div style="font-weight:800;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">🇬🇷 ${formatGreeceKickoff(b,{withDate:true})} · ώρα Ελλάδος</div>${competitionContextHTML(b,{compact:true,showLifecycle:false})}</div>
         <div style="text-align:center;padding:5px 9px;background:rgba(0,0,0,.18);border-radius:6px;"><div style="font-size:1.25rem;font-weight:900;font-family:var(--font-mono);color:var(--accent-gold);">${b.effectiveOdds.toFixed(2)}</div><div style="font-size:.55rem;color:var(--text-muted);">${esc(b.bestBookmaker||'BEST')}</div></div>
         <div style="text-align:center;min-width:50px;"><div style="font-size:1.2rem;font-weight:900;color:${col};font-family:var(--font-mono);">${b.bombScore}</div><div style="font-size:.55rem;color:var(--text-muted);">SCORE</div></div>
       </div>
@@ -3903,10 +4014,19 @@ window.switchTab=function(id){document.querySelectorAll('.tab-btn').forEach(b=>b
 // ================================================================
 function _drawerRecord(fixId){
   const id=String(fixId??'');
-  return (window.scannedMatchesData||[]).find(x=>String(x?.fixId??x?.m?.fixture?.id??'')===id) || null;
+  const active=(window.scannedMatchesData||[]).find(x=>String(x?.fixId??x?.m?.fixture?.id??'')===id);
+  if(active) return active;
+  try{
+    const v=_pmVault().find(x=>String(x?.fixtureId??'')===id && _pmParseScore(x?.pmActualScore));
+    return v?_pmVaultToMatch(v):null;
+  }catch{return null;}
 }
 function _drawerBodyFromAccordion(rec){
-  if(!rec || typeof buildAccordionHTML!=='function') return '';
+  if(!rec) return '';
+  if(rec._fromVault){
+    return `<div class="accordion-card" style="margin:0;"><h4>🏁 Αποτελέσματα & επιβεβαιώσεις</h4><div style="padding:10px 12px;">${confirmedMarketsSettlementHTML(rec)}</div></div>`;
+  }
+  if(typeof buildAccordionHTML!=='function') return '';
   const html=String(buildAccordionHTML(rec)||'');
   // Το accordion renderer επιστρέφει <td colspan=...>. Στο drawer χρειαζόμαστε μόνο το εσωτερικό περιεχόμενο.
   return html
@@ -3944,22 +4064,23 @@ window.closeMatchAnalysisDrawer=function(){
 };
 window.openMatchAnalysisDrawer=function(fixId){
   const rec=_drawerRecord(fixId);
-  if(!rec){ showErr('Δεν βρέθηκε η ανάλυση του συγκεκριμένου αγώνα στο ενεργό scan.'); return; }
+  if(!rec){ showErr('Δεν βρέθηκε αποθηκευμένη ανάλυση για τον συγκεκριμένο αγώνα.'); return; }
   _ensureMatchAnalysisDrawer();
   const sh=rec.m?.fixture?.status?.short||'';
   const live=typeof isLive==='function' && isLive(sh);
-  const date=rec.m?.fixture?.date ? new Date(rec.m.fixture.date) : null;
-  const when=date && !Number.isNaN(date.getTime())
-    ? date.toLocaleString('el-GR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
-  const ph=Number(rec.pp?.pHome||0)*100, px=Number(rec.pp?.pDraw||0)*100, pa=Number(rec.pp?.pAway||0)*100;
+  const finished=isFinished(sh);
+  const when=formatGreeceKickoff(rec,{withDate:true});
+  const ph=Number(rec.pp?.pHome||rec.prePHome||0)*100, px=Number(rec.pp?.pDraw||rec.prePDraw||0)*100, pa=Number(rec.pp?.pAway||rec.prePAway||0)*100;
   const hXG=Number(rec.hXGfinal||0), aXG=Number(rec.aXGfinal||0), tXG=Number(rec.tXG ?? (hXG+aXG));
   const conf=Number(rec.strength||0);
-  const score=live ? ` · LIVE ${rec.m?.goals?.home??0}-${rec.m?.goals?.away??0}` : '';
+  const finalScore=finished?`${rec.m?.goals?.home??rec.pmActualHome??'—'}–${rec.m?.goals?.away??rec.pmActualAway??'—'}`:null;
+  const score=live ? ` · LIVE ${rec.m?.goals?.home??0}-${rec.m?.goals?.away??0}` : finished?` · FT ${finalScore}`:'';
   const liveBadge=live?'<span class="match-analysis-live-badge">● LIVE</span>':'';
+  const completedBadge=finished?'<span class="match-analysis-completed-badge">✓ ΟΛΟΚΛΗΡΩΘΗΚΕ</span>':'';
 
-  document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}<span>ΑΝΑΛΥΣΗ ΑΓΩΝΑ</span>`;
+  document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}${completedBadge}<span>ΑΝΑΛΥΣΗ ΑΓΩΝΑ</span>`;
   document.getElementById('matchDrawerTitle').innerHTML=`<span>${esc(rec.ht||'—')}</span><span class="match-analysis-vs">vs</span><span>${esc(rec.at||'—')}</span>`;
-  document.getElementById('matchDrawerMeta').innerHTML=`<span>${when}${score}</span>${competitionContextHTML(rec,{compact:false})}`;
+  document.getElementById('matchDrawerMeta').innerHTML=`<span>🇬🇷 ${when} · ώρα Ελλάδος${score}</span>${competitionContextHTML(rec,{compact:false,showLifecycle:false})}`;
   const precisionQuick=rec.precision?`<div class="match-analysis-stat"><span>Meta-Confidence</span><strong style="color:${rec.precision.allowed?'var(--accent-green)':rec.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'}">${(rec.precision.metaProb*100).toFixed(1)}% · ${rec.precision.tier} · cut ${(rec.precision.threshold*100).toFixed(0)}%</strong></div>`:'';
   const mp=rec.matchPicture||null;
   const dcQuick=mp?`<div class="match-analysis-stat"><span>${acr('DC')}</span><strong>1X ${(mp.p1X*100).toFixed(1)}% · X2 ${(mp.pX2*100).toFixed(1)}% · 12 ${(mp.p12*100).toFixed(1)}%</strong></div>`:'';
@@ -3971,7 +4092,8 @@ window.openMatchAnalysisDrawer=function(fixId){
     <div class="match-analysis-stat"><span>xG</span><strong>${hXG.toFixed(2)} – ${aXG.toFixed(2)} · tXG ${tXG.toFixed(2)}</strong></div>
     <div class="match-analysis-stat"><span>CONF</span><strong>${conf.toFixed(0)}%</strong></div>
     ${precisionQuick}
-    <div class="match-analysis-stat match-analysis-signal"><span>SIGNAL</span><strong>${esc(rec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ')}</strong></div>`;
+    <div class="match-analysis-stat match-analysis-signal"><span>SIGNAL</span><strong>${esc(rec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ')}</strong></div>
+    ${finished?`<div class="match-analysis-settled"><div class="match-analysis-settled-title">ΕΠΙΒΕΒΑΙΩΜΕΝΕΣ ΠΡΟΤΑΣΕΙΣ · ΤΕΛΙΚΗ ΕΚΒΑΣΗ</div>${confirmedMarketsSettlementHTML(rec,{compact:true})}</div>`:''}`;
   const body=document.getElementById('matchDrawerBody');
   body.innerHTML=_drawerBodyFromAccordion(rec) || '<div style="padding:20px;color:var(--text-muted);">Δεν υπάρχει διαθέσιμη λεπτομερής ανάλυση.</div>';
   if(typeof window.decorateAcronyms==='function') window.decorateAcronyms(body);
@@ -4025,7 +4147,7 @@ function renderTop3Certainty(bets) {
         <div style="font-size:2rem;flex-shrink:0;">${rankEmoji[i]}</div>
         <div style="flex:1;min-width:0;">
           <div style="font-weight:800;font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(x.ht)} vs ${esc(x.at)}</div>
-          <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">${esc(x.lg)} · ${x.date||''}</div>
+          ${competitionContextHTML(x,{compact:true})}
         </div>
         <div style="text-align:right;flex-shrink:0;">
           <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:${rankColors[i]};line-height:1;">${certScore}</div>
@@ -4936,11 +5058,16 @@ function _pmVaultToMatch(v){
     hXGfinal:hPred, aXGfinal:aPred, tXG:_pmHasNum(v.tXG)?Number(v.tXG):null,
     xgDiff:_pmHasNum(v.xgDiff)?Number(v.xgDiff):null,
     expCor:_pmHasNum(v.pmExpCor)?Number(v.pmExpCor):null,
+    cornerConf:_pmHasNum(v.preCornerConf)?Number(v.preCornerConf):null,
     hS:_pmHasNum(v.pmCardH)?{crd:Number(v.pmCardH)}:{},
     aS:_pmHasNum(v.pmCardA)?{crd:Number(v.pmCardA)}:{},
     actStats:v.pmActStats||null,
-    outPick:v.outPick||'-', exact:v.exactScorePred||'?-?', exact2:v.exactScorePred2||null,
-    omegaPick:v.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ', strength:Number(v.strength||0), isBomb:!!v.isBomb
+    outPick:v.outPick||'-', outcomeMarket:v.preOutcomeMarket||v.outPick||'-', outcomeProb:_pmHasNum(v.preOutcomeProb)?Number(v.preOutcomeProb):null,
+    exact:v.exactScorePred||'?-?', exact2:v.exactScorePred2||null, exactConf:_pmHasNum(v.preExactConf)?Number(v.preExactConf):null,
+    omegaPick:v.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ', strength:Number(v.strength||0), isBomb:!!v.isBomb,
+    prePHome:v.prePHome, prePDraw:v.prePDraw, prePAway:v.prePAway,
+    preConfirmedSignals:Array.isArray(v.preConfirmedSignals)?v.preConfirmedSignals:[],
+    isCup:!!v.isCup, homeCategory:v.homeCategory||null, awayCategory:v.awayCategory||null
   };
 }
 function _pmDataset(currentFinished){
@@ -5190,7 +5317,7 @@ function renderSummaryTable() {
     }
     finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;">
       <div style="padding:15px 20px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:1px;">📊 Match Dashboard (Active) — ${activeMatches.length} αγώνες</span>
+        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:1px;">📊 Match Dashboard (Active) — ${activeMatches.length} αγώνες</span><span style="font-size:.64rem;color:var(--text-muted);font-family:var(--font-mono);">🕒 όλες οι ώρες: Ελλάδα (Europe/Athens)</span>
       </div>${rows}</div>`;
   }
 
@@ -5252,31 +5379,34 @@ function renderSummaryTable() {
           if(pick.includes('ΔΙΠΛΟ')) hit=(aa-ah)>=2;
         }
         if(hit!==null) hitHtml=hit
-          ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">✅ WON</span>`
-          : `<span style="background:rgba(251,113,133,0.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">❌ LOST</span>`;
+          ? `<span style="background:rgba(74,222,128,0.15);color:var(--accent-green);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">✅ ΕΠΙΒΕΒΑΙΩΘΗΚΕ</span>`
+          : `<span style="background:rgba(251,113,133,0.15);color:var(--accent-red);padding:3px 8px;border-radius:5px;font-weight:800;font-size:0.72rem;">❌ ΔΕΝ ΕΠΙΒΕΒΑΙΩΘΗΚΕ</span>`;
       }
 
       const pvA=(pred,actual,col='var(--text-main)')=>`<div style="font-family:var(--font-mono);line-height:1.4;"><div style="font-size:0.72rem;color:var(--text-muted);">📐 ${pred}</div><div style="font-size:0.92rem;font-weight:800;color:${col};">✔ ${actual}</div></div>`;
-      const dateTxt=String(x.m?.fixture?.date||'').slice(0,10);
-      const rowAttrs=x._fromVault?'':`onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;" onmouseover="this.style.background='rgba(77,184,255,0.04)'" onmouseout="this.style.background=''"`;
+      const dateTxt=formatGreeceKickoff(x,{withDate:true});
+      const rowAttrs=x._fromVault?`onclick="window.openMatchAnalysisDrawer('${x.fixId}')" style="cursor:pointer;" onmouseover="this.style.background='rgba(77,184,255,0.04)'" onmouseout="this.style.background=''"`:`onclick="window.openMatchAnalysisDrawer('${x.fixId}')" style="cursor:pointer;" onmouseover="this.style.background='rgba(77,184,255,0.04)'" onmouseout="this.style.background=''"`;
+      const settlements=confirmedMarketsSettlementHTML(x,{compact:true});
       const strength=Number(x.strength||0);
 
       fRows += `<tr id="row-${x.fixId}" ${rowAttrs}>
-        <td class="left-align" style="font-weight:700;font-size:0.95rem;min-width:140px;">
-          ${esc(x.ht)}<span style="color:var(--text-dim);"> vs </span>${esc(x.at)}
-          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:1px;">${esc(x.lg||'')}${dateTxt?` · ${dateTxt}`:''}${x._fromVault?' · Vault':''}</div>
+        <td class="left-align" style="font-weight:700;font-size:0.95rem;min-width:190px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span>${esc(x.ht)}</span><span style="color:var(--text-dim);">vs</span><span>${esc(x.at)}</span></div>
+          ${competitionContextHTML(x,{compact:true})}
+          ${x._fromVault?'<div style="font-size:.6rem;color:var(--text-muted);margin-top:2px;">Vault history</div>':''}
         </td>
-        <td style="text-align:center;"><div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--text-main);">${ah}-${aa}</div><div style="font-size:0.6rem;color:var(--text-muted);">${aTot} γκολ</div></td>
+        <td style="text-align:center;"><div class="postmatch-final-label">ΤΕΛΙΚΟ</div><div class="postmatch-final-score">${ah}–${aa}</div><div style="font-size:0.6rem;color:var(--text-muted);">${aTot} γκολ</div></td>
         <td>${pvA(`${hXGPred}–${aXGPred} (${tXGPred})`,hasXGAct?`${hXGAct}–${aXGAct}`:'—',xgCol)}</td>
         <td style="text-align:center;font-family:var(--font-mono);"><div style="font-size:0.72rem;color:var(--text-muted);">—</div><div style="font-size:0.9rem;font-weight:700;">${hPoss==='—'?'—':`${hPoss}%–${aPoss}%`}</div></td>
         <td>${pvA(hasCorPred?`${hCorPred}–${aCorPred} (${expCorPred})`:'—',hasCorAct?`${hCorAct}–${aCorAct} (${hCorAct+aCorAct})`:'—',corCol)}</td>
         <td>${pvA(hasCardPred?`${hCrdPred}–${aCrdPred} (${totCrdPred})`:'—',hasCrdAct?`${hCrdAct}–${aCrdAct} (${totCrdAct})`:'—',crdCol)}</td>
         <td style="font-size:0.78rem;font-weight:700;color:${strength>=70?'var(--accent-green)':'var(--text-muted)'};max-width:140px;">${esc(pick.split(' ').slice(0,4).join(' ')||'—')}${strength>=70?`<div style="font-size:0.6rem;color:var(--text-muted);">${strength.toFixed(0)}% conf</div>`:''}</td>
+        <td style="min-width:240px;">${settlements}</td>
         <td>${hitHtml}</td>
-      </tr>${x._fromVault?'':`<tr id="details-${x.fixId}" style="display:none;background:var(--bg-surface);">${buildAccordionHTML(x)}</tr>`}`;
+      </tr>`;
     });
 
-    if(!fRows) fRows=`<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);">Δεν υπάρχουν ακόμη συγχρονισμένοι ολοκληρωμένοι αγώνες σε αυτό το εύρος.</td></tr>`;
+    if(!fRows) fRows=`<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text-muted);">Δεν υπάρχουν ακόμη συγχρονισμένοι ολοκληρωμένοι αγώνες σε αυτό το εύρος.</td></tr>`;
 
     // ── Model Accuracy Analysis — per-metric valid samples, never fill missing values with zero
     const metrics={
@@ -5337,7 +5467,7 @@ function renderSummaryTable() {
     const syncDisabled=postMatchRange==='CURRENT'||postMatchSyncing||postMeta.pendingCount===0;
     const syncTxt=postMatchSyncing?'⏳ Sync…':postMeta.pendingCount>0?`↻ Sync (${Math.min(postMeta.pendingCount,60)})`:'✓ Συγχρονισμένο';
     const legacyNote=postMeta.legacyCount>0?`<div style="font-size:0.62rem;color:var(--accent-gold);margin-top:4px;">⚠ ${postMeta.legacyCount} παλιές εγγραφές Vault: όπου δεν είχε αποθηκευτεί πρόβλεψη κόρνερ/καρτών εμφανίζεται «—» — δεν γίνεται τεχνητή ανακατασκευή.</div>`:'';
-    finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(74,222,128,0.35);"><div style="background:rgba(74,222,128,0.07);padding:12px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;"><div><span style="font-size:0.82rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-cond);">🏁 Post-Match Evolution — ${finishedMatches.length} αγώνες</span><div style="font-size:0.62rem;color:var(--text-muted);margin-top:3px;">Πηγή: ${postMeta.label}${postMatchRange==='CURRENT'?'':` · Vault ${postMeta.settledCount}/${postMeta.totalRecords} settled · ${postMeta.fullStatsCount} με πλήρη stats`}</div>${legacyNote}</div><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;"><select class="quant-input" style="height:32px;padding:4px 28px 4px 9px;width:auto;min-width:135px;font-size:0.72rem;" onchange="window.setPostMatchRange(this.value)">${opt('CURRENT','Current Scan')}${opt('7','7 ημέρες')}${opt('30','30 ημέρες')}${opt('90','90 ημέρες')}${opt('ALL','All Vault')}</select><button class="btn btn-outline" style="font-size:0.7rem;padding:6px 10px;" onclick="window.syncPostMatchHistory()" ${syncDisabled?'disabled':''}>${syncTxt}</button><span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">📐 Πρόβλεψη · ✔ Πραγματικό</span></div></div><div class="data-table-wrapper" style="border:none;margin:0;"><table class="summary-table"><thead><tr><th class="left-align">Αγώνας</th><th>Σκορ</th><th>xG (Π→Α)</th><th>Possession</th><th>Κόρνερ (Π→Α)</th><th>Κάρτες (Π→Α)</th><th>Signal</th><th>Result</th></tr></thead><tbody>${fRows}</tbody></table></div></div>${accuracyHtml}`;
+    finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;margin-top:24px;border-color:rgba(74,222,128,0.35);"><div style="background:rgba(74,222,128,0.07);padding:12px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;"><div><span style="font-size:0.82rem;font-weight:800;color:var(--accent-green);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-cond);">🏁 Post-Match Evolution — ${finishedMatches.length} αγώνες</span><div style="font-size:0.62rem;color:var(--text-muted);margin-top:3px;">Πηγή: ${postMeta.label}${postMatchRange==='CURRENT'?'':` · Vault ${postMeta.settledCount}/${postMeta.totalRecords} settled · ${postMeta.fullStatsCount} με πλήρη stats`}</div>${legacyNote}</div><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;"><select class="quant-input" style="height:32px;padding:4px 28px 4px 9px;width:auto;min-width:135px;font-size:0.72rem;" onchange="window.setPostMatchRange(this.value)">${opt('CURRENT','Current Scan')}${opt('7','7 ημέρες')}${opt('30','30 ημέρες')}${opt('90','90 ημέρες')}${opt('ALL','All Vault')}</select><button class="btn btn-outline" style="font-size:0.7rem;padding:6px 10px;" onclick="window.syncPostMatchHistory()" ${syncDisabled?'disabled':''}>${syncTxt}</button><span style="font-size:0.62rem;color:var(--text-muted);font-family:var(--font-mono);">📐 Πρόβλεψη · ✔ Πραγματικό</span></div></div><div class="data-table-wrapper" style="border:none;margin:0;"><table class="summary-table"><thead><tr><th class="left-align">Αγώνας</th><th>Σκορ</th><th>xG (Π→Α)</th><th>Possession</th><th>Κόρνερ (Π→Α)</th><th>Κάρτες (Π→Α)</th><th>Signal</th><th>Επιβεβαιώσεις Αγορών</th><th>Result</th></tr></thead><tbody>${fRows}</tbody></table></div></div>${accuracyHtml}`;
   }
 
   sec.innerHTML = finalHtml;
@@ -6036,6 +6166,14 @@ function saveToVault(data){
         outPick:d.outPick,
         exactScorePred:d.exact,
         exactScorePred2:d.exact2,
+        preExactConf:Number.isFinite(Number(d.exactConf))?Number(d.exactConf):(prev.preExactConf??null),
+        preOutcomeMarket:d.matchPicture?.recommendedMarket||d.outcomeMarket||prev.preOutcomeMarket||null,
+        preOutcomeProb:Number.isFinite(Number(d.matchPicture?.recommendedProb??d.outcomeProb))?Number(d.matchPicture?.recommendedProb??d.outcomeProb):(prev.preOutcomeProb??null),
+        preCornerConf:Number.isFinite(Number(d.cornerConf))?Number(d.cornerConf):(prev.preCornerConf??null),
+        preConfirmedSignals:collectConfirmedMarketSignals(d),
+        isCup:!!d.isCup,
+        homeCategory:d.homeCategory||prev.homeCategory||null,
+        awayCategory:d.awayCategory||prev.awayCategory||null,
         predOver25:d.omegaPick?.includes('ΠΑΝΩ ΑΠΟ 2') || d.omegaPick?.includes('ΠΑΝΩ ΑΠΟ 3'),
         predOver35:d.omegaPick?.includes('ΠΑΝΩ ΑΠΟ 3'),
         predUnder25:d.omegaPick?.includes('ΚΑΤΩ ΑΠΟ 2'),
@@ -6717,8 +6855,8 @@ function renderBetJournal() {
 
   const rows = betJournalData.slice(0, 50).map(b => {
     const pnlCol = b.pnl > 0 ? 'var(--accent-green)' : b.pnl < 0 ? 'var(--accent-red)' : 'var(--text-muted)';
-    const resultBadge = b.result === 'won'    ? `<span style="color:var(--accent-green);font-weight:800;">✅ WON</span>`
-                      : b.result === 'lost'   ? `<span style="color:var(--accent-red);font-weight:800;">❌ LOST</span>`
+    const resultBadge = b.result === 'won'    ? `<span style="color:var(--accent-green);font-weight:800;">✅ ΕΠΙΒΕΒΑΙΩΘΗΚΕ</span>`
+                      : b.result === 'lost'   ? `<span style="color:var(--accent-red);font-weight:800;">❌ ΔΕΝ ΕΠΙΒΕΒΑΙΩΘΗΚΕ</span>`
                       : b.result === 'void'   ? `<span style="color:var(--text-muted);">VOID</span>`
                       : `<span style="color:var(--accent-gold);">⏳ Pending</span>`;
     const clvBadge = b.clv !== null ? `<span style="font-size:0.65rem;color:${b.clv>0?'var(--accent-green)':'var(--accent-red)'};">${b.clv>0?'+':''}${b.clv}%</span>` : '';
