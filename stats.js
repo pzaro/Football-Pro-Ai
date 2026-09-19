@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.3 — CLICKABLE GREEK INDICATORS + VERIFIED VALUE EDGE + MARKET BOMBS
+// APEX OMEGA v5.4 — RIGHT-SIDE MATCH ANALYSIS DRAWER + CLICKABLE GREEK INDICATORS + VERIFIED VALUE EDGE + MARKET BOMBS
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -284,9 +284,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.3';
+const APP_VERSION   = 'v5.4';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'CLICKABLE GREEK INDICATORS · VERIFIED VALUE EDGE · NO-VIG MARKET';
+const BUILD_TIME    = 'RIGHT-SIDE MATCH ANALYSIS · CLICKABLE GREEK INDICATORS · VALUE EDGE · NO-VIG MARKET';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3312,7 +3312,7 @@ function buildBombsList(){
   sd.forEach(rec=>{
     const bomb=computeBombScore(rec);
     (rec.bombMarketDiagnostics||[]).forEach(c=>diagnostics.push({
-      ...c,ht:rec.ht,at:rec.at,lg:rec.lg,date:rec.m?.fixture?.date?.split('T')[0]||'',time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||''
+      ...c,fixId:rec.fixId,ht:rec.ht,at:rec.at,lg:rec.lg,date:rec.m?.fixture?.date?.split('T')[0]||'',time:rec.m?.fixture?.date?.split('T')[1]?.slice(0,5)||''
     }));
     rec.marketBomb=bomb||null;
     rec.marketBombVerified=!!bomb;
@@ -3346,7 +3346,7 @@ function renderBombsTab(bombs){
 
   const cards=(bombs||[]).map((b,i)=>{
     const col=b.bombScore>=75?'var(--accent-green)':b.bombScore>=60?'var(--accent-gold)':'var(--accent-blue)';
-    return `<div style="background:var(--bg-base);border:1px solid rgba(74,222,128,0.32);border-radius:8px;overflow:hidden;margin-bottom:10px;">
+    return `<div onclick="window.openMatchAnalysisDrawer('${b.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="background:var(--bg-base);border:1px solid rgba(74,222,128,0.32);border-radius:8px;overflow:hidden;margin-bottom:10px;cursor:pointer;transition:border-color .15s,transform .15s;" onmouseover="this.style.borderColor='var(--accent-green)'" onmouseout="this.style.borderColor='rgba(74,222,128,0.32)'">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(74,222,128,0.05);flex-wrap:wrap;">
         <div style="font-family:var(--font-mono);color:var(--text-dim);">#${i+1}</div>
         <div style="flex:1;min-width:190px;"><div style="font-weight:800;">${esc(b.ht)} vs ${esc(b.at)}</div><div style="font-size:0.65rem;color:var(--text-muted);">${esc(b.lg)} · ${b.date} ${b.time}</div></div>
@@ -3374,7 +3374,7 @@ function renderBombsTab(bombs){
     <div style="font-size:.72rem;font-weight:800;color:var(--text-muted);margin-bottom:7px;">🔬 MARKET DIAGNOSTICS — απορριφθέντα mispricing candidates</div>
     <div style="display:flex;flex-direction:column;gap:5px;">${diag.slice(0,8).map(d=>{
       const sc=d.status==='CONFLICT'?'var(--accent-red)':d.status==='HIGH_DIVERGENCE'?'var(--accent-gold)':'var(--text-muted)';
-      return `<div style="display:grid;grid-template-columns:minmax(190px,2fr) 1fr 1fr 1fr 1fr;gap:8px;align-items:center;padding:7px 9px;background:var(--bg-surface);border-radius:6px;font-size:.65rem;">
+      return `<div onclick="window.openMatchAnalysisDrawer('${d.fixId}')" title="Άνοιγμα πλήρους ανάλυσης δεξιά" style="display:grid;grid-template-columns:minmax(190px,2fr) 1fr 1fr 1fr 1fr;gap:8px;align-items:center;padding:7px 9px;background:var(--bg-surface);border-radius:6px;font-size:.65rem;cursor:pointer;">
         <div><b>${esc(d.ht)}–${esc(d.at)}</b><br><span style="color:var(--text-muted);">${esc(d.label)}</span></div>
         <div>Odds <b>${d.effectiveOdds.toFixed(2)}</b></div>
         <div>Δ <b>${d.gapPP>=0?'+':''}${d.gapPP.toFixed(1)}pp</b></div>
@@ -3623,29 +3623,106 @@ function renderPlayersTab(players) {
       <span>🟥 Red card % (ηπιότερη διόρθωση ×0.6)</span>
       <span>▲▼ = διόρθωση αντιπάλου</span>
       <span>🔴 = κίνδυνος αποβολής</span>
-      <span>Κλικ σε γραμμή → μεταβαίνει στον αγώνα</span>
+      <span>Κλικ σε γραμμή → ανοίγει ανάλυση δεξιά</span>
     </div>`;
 }
 
 window.switchTab=function(id){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelectorAll('.pred-tab-panel').forEach(p=>p.style.display='none');document.getElementById('tab-btn-'+id)?.classList.add('active');const panel=document.getElementById('tabpanel-'+id);if(panel)panel.style.display='block';};
-window.scrollToMatch=function(id){const el=document.getElementById(id);if(!el)return;el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='2px solid var(--accent-blue)';setTimeout(()=>el.style.outline='',2000);};
 
-// Scroll + αυτόματο άνοιγμα accordion
-window.scrollToMatchAndOpen=function(id){
-  const el=document.getElementById(id);if(!el)return;
-  el.scrollIntoView({behavior:'smooth',block:'center'});
-  el.style.outline='2px solid var(--accent-gold)';
-  setTimeout(()=>{
-    // Ο summary table χρησιμοποιεί toggleMatchDetails(fixId)
-    const fixId = id.replace('row-','');
-    const detailRow = document.getElementById('detail-'+fixId);
-    // Αν δεν είναι ήδη ανοιχτό, το ανοίγουμε
-    if(!detailRow || detailRow.style.display==='none' || detailRow.style.display==='') {
-      if(typeof window.toggleMatchDetails === 'function') window.toggleMatchDetails(fixId);
-    }
-    setTimeout(()=>el.style.outline='',2500);
-  },450);
+// ================================================================
+//  v5.4 — RIGHT-SIDE MATCH ANALYSIS DRAWER
+//  Οι επιλογές Value/Bombs/Top Picks/Players ανοίγουν την πλήρη ανάλυση
+//  σε σταθερό panel δεξιά, χωρίς scroll στο Match Dashboard.
+// ================================================================
+function _drawerRecord(fixId){
+  const id=String(fixId??'');
+  return (window.scannedMatchesData||[]).find(x=>String(x?.fixId??x?.m?.fixture?.id??'')===id) || null;
+}
+function _drawerBodyFromAccordion(rec){
+  if(!rec || typeof buildAccordionHTML!=='function') return '';
+  const html=String(buildAccordionHTML(rec)||'');
+  // Το accordion renderer επιστρέφει <td colspan=...>. Στο drawer χρειαζόμαστε μόνο το εσωτερικό περιεχόμενο.
+  return html
+    .replace(/^\s*<td\b[^>]*>/i,'')
+    .replace(/<\/td>\s*$/i,'');
+}
+function _ensureMatchAnalysisDrawer(){
+  let host=document.getElementById('matchAnalysisDrawerHost');
+  if(host) return host;
+  host=document.createElement('div');
+  host.id='matchAnalysisDrawerHost';
+  host.innerHTML=`
+    <div id="matchAnalysisBackdrop" class="match-analysis-backdrop" onclick="window.closeMatchAnalysisDrawer()"></div>
+    <aside id="matchAnalysisDrawer" class="match-analysis-drawer" role="dialog" aria-modal="true" aria-label="Ανάλυση αγώνα">
+      <div class="match-analysis-drawer-head">
+        <div style="min-width:0;flex:1;">
+          <div id="matchDrawerLeague" class="match-analysis-kicker">MATCH ANALYSIS</div>
+          <div id="matchDrawerTitle" class="match-analysis-title">—</div>
+          <div id="matchDrawerMeta" class="match-analysis-meta">—</div>
+        </div>
+        <button type="button" class="match-analysis-close" onclick="window.closeMatchAnalysisDrawer()" aria-label="Κλείσιμο ανάλυσης">✕</button>
+      </div>
+      <div id="matchDrawerQuick" class="match-analysis-quick"></div>
+      <div id="matchDrawerBody" class="match-analysis-drawer-body"></div>
+    </aside>`;
+  document.body.appendChild(host);
+  return host;
+}
+window.closeMatchAnalysisDrawer=function(){
+  const drawer=document.getElementById('matchAnalysisDrawer');
+  const back=document.getElementById('matchAnalysisBackdrop');
+  if(drawer) drawer.classList.remove('open');
+  if(back) back.classList.remove('open');
+  document.body.classList.remove('match-analysis-open');
 };
+window.openMatchAnalysisDrawer=function(fixId){
+  const rec=_drawerRecord(fixId);
+  if(!rec){ showErr('Δεν βρέθηκε η ανάλυση του συγκεκριμένου αγώνα στο ενεργό scan.'); return; }
+  _ensureMatchAnalysisDrawer();
+  const sh=rec.m?.fixture?.status?.short||'';
+  const live=typeof isLive==='function' && isLive(sh);
+  const date=rec.m?.fixture?.date ? new Date(rec.m.fixture.date) : null;
+  const when=date && !Number.isNaN(date.getTime())
+    ? date.toLocaleString('el-GR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+  const ph=Number(rec.pp?.pHome||0)*100, px=Number(rec.pp?.pDraw||0)*100, pa=Number(rec.pp?.pAway||0)*100;
+  const hXG=Number(rec.hXGfinal||0), aXG=Number(rec.aXGfinal||0), tXG=Number(rec.tXG ?? (hXG+aXG));
+  const conf=Number(rec.strength||0);
+  const score=live ? ` · LIVE ${rec.m?.goals?.home??0}-${rec.m?.goals?.away??0}` : '';
+  const liveBadge=live?'<span class="match-analysis-live-badge">● LIVE</span>':'';
+
+  document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}<span>${esc(rec.lg||'MATCH ANALYSIS')}</span>`;
+  document.getElementById('matchDrawerTitle').textContent=`${rec.ht||'—'} vs ${rec.at||'—'}`;
+  document.getElementById('matchDrawerMeta').textContent=`${when}${score}`;
+  document.getElementById('matchDrawerQuick').innerHTML=`
+    <div class="match-analysis-stat"><span>1X2</span><strong>1 ${ph.toFixed(1)}% · X ${px.toFixed(1)}% · 2 ${pa.toFixed(1)}%</strong></div>
+    <div class="match-analysis-stat"><span>xG</span><strong>${hXG.toFixed(2)} – ${aXG.toFixed(2)} · tXG ${tXG.toFixed(2)}</strong></div>
+    <div class="match-analysis-stat"><span>CONF</span><strong>${conf.toFixed(0)}%</strong></div>
+    <div class="match-analysis-stat match-analysis-signal"><span>SIGNAL</span><strong>${esc(rec.omegaPick||'ΧΩΡΙΣ ΣΥΣΤΑΣΗ')}</strong></div>`;
+  const body=document.getElementById('matchDrawerBody');
+  body.innerHTML=_drawerBodyFromAccordion(rec) || '<div style="padding:20px;color:var(--text-muted);">Δεν υπάρχει διαθέσιμη λεπτομερής ανάλυση.</div>';
+  if(typeof window.decorateAcronyms==='function') window.decorateAcronyms(body);
+  body.scrollTop=0;
+  requestAnimationFrame(()=>{
+    document.getElementById('matchAnalysisBackdrop')?.classList.add('open');
+    document.getElementById('matchAnalysisDrawer')?.classList.add('open');
+    document.body.classList.add('match-analysis-open');
+  });
+};
+
+// Legacy navigation API: αντί για scroll, ανοίγει το δεξί analysis drawer.
+window.scrollToMatch=function(id){
+  const fixId=String(id||'').replace(/^row-/,'');
+  window.openMatchAnalysisDrawer(fixId);
+};
+window.scrollToMatchAndOpen=function(id){
+  const fixId=String(id||'').replace(/^row-/,'');
+  window.openMatchAnalysisDrawer(fixId);
+};
+
+if(!window.__apexDrawerEscBound){
+  window.__apexDrawerEscBound=true;
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') window.closeMatchAnalysisDrawer?.(); });
+}
 
 function renderTop3Certainty(bets) {
   if(!bets?.length) return `<div style="text-align:center;color:var(--text-muted);padding:30px;"><div style="font-size:2rem;margin-bottom:8px;">🥇</div><div>Εκτελέστε scan για να εμφανιστεί η Σίγουρη Τριάδα.</div></div>`;
