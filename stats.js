@@ -1,5 +1,5 @@
 // ==========================================================================
-// APEX OMEGA v5.5 — ADAPTIVE PRECISION LAB + RIGHT-SIDE MATCH ANALYSIS + VERIFIED VALUE EDGE + MARKET BOMBS
+// APEX OMEGA v5.6 — COMPOSITE MATCH INTELLIGENCE + ADAPTIVE PRECISION LAB + VERIFIED VALUE EDGE + MARKET BOMBS
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
@@ -120,6 +120,11 @@ Object.assign(ACRONYM_DICT, {
   'Wilson LB':'Κατώτερο όριο Wilson — Συντηρητικό κάτω όριο της εκτιμώμενης ακρίβειας που λαμβάνει υπόψη και το μέγεθος δείγματος.',
   'Meta-Confidence':'Μετα-βεβαιότητα (Meta-Confidence) — Εκτιμώμενη πιθανότητα ότι το βασικό σημείο 1/X/2 του APEX θα επαληθευτεί, με βάση ιστορικά out-of-sample δεδομένα.',
   'Walk-Forward':'Διαδοχική χρονική επικύρωση (Walk-Forward Validation) — Εκπαίδευση μόνο στο παρελθόν και έλεγχος σε μεταγενέστερους αγώνες ώστε να περιορίζεται το overfitting.',
+  'CMI':'Συνθετική Νοημοσύνη Αγώνα (Composite Match Intelligence) — Μαθηματικός δείκτης που συνδυάζει Poisson 1X2, projected xG, form xG, xGA, home/away split, φόρμα, H2H, σουτ στην εστία, κατάταξη, ενδεκάδα/απουσίες και αγωνιστικό context.',
+  'DC':'Διπλή Ευκαιρία (Double Chance) — 1X = γηπεδούχος ή ισοπαλία, X2 = ισοπαλία ή φιλοξενούμενος, 12 = οποιαδήποτε ομάδα κερδίζει.',
+  '1X':'Διπλή Ευκαιρία 1X — επιβεβαιώνεται αν κερδίσει η γηπεδούχος ή ο αγώνας λήξει ισόπαλος.',
+  'X2':'Διπλή Ευκαιρία X2 — επιβεβαιώνεται αν ο αγώνας λήξει ισόπαλος ή κερδίσει η φιλοξενούμενη.',
+  '12':'Διπλή Ευκαιρία 12 — επιβεβαιώνεται αν υπάρξει νικητής, ανεξάρτητα από το ποια ομάδα κερδίσει.',
 });
 
 /**
@@ -288,9 +293,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.5';
+const APP_VERSION   = 'v5.6';
 const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'ADAPTIVE PRECISION LAB · WALK-FORWARD · META-CONFIDENCE · HISTORICAL RECALL · VALUE EDGE';
+const BUILD_TIME    = 'COMPOSITE MATCH INTELLIGENCE · DOUBLE CHANCE · ADAPTIVE PRECISION · MARKET SAFETY';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -1675,14 +1680,156 @@ function adjustPlayerCardProbs(players, oppStats, matchCtx) {
 }
 
 // ================================================================
+//  v5.6 — COMPOSITE MATCH INTELLIGENCE (CMI)
+// ================================================================
+// Το 1X2 δεν αποφασίζεται πλέον μόνο από xG Diff.
+// Χρησιμοποιούμε Poisson ως probabilistic prior και ανεξάρτητο directional
+// evidence από όλη τη στατιστική εικόνα. Το CMI είναι deliberately conservative:
+// όταν υπάρχει κατεύθυνση αλλά όχι αρκετή ισχύς για straight 1/2, προτιμά
+// Double Chance (1X / X2 / 12) αντί να «αναγκάζει» νίκη.
+const CMI_WEIGHTS = Object.freeze({
+  xgProjection:0.20,
+  formAttack:0.13,
+  defense:0.11,
+  split:0.10,
+  formRating:0.11,
+  h2h:0.08,
+  shotsOn:0.06,
+  ranking:0.06,
+  lineup:0.04,
+  motivation:0.04,
+  cornerPressure:0.04,
+  discipline:0.03
+});
+
+function _cmiTanh(v,scale=1){
+  const x=safeNum(v,0)/Math.max(0.0001,scale);
+  return Math.tanh(x);
+}
+function _cmiSoftmax3(a,b,c){
+  const m=Math.max(a,b,c), ea=Math.exp(a-m), eb=Math.exp(b-m), ec=Math.exp(c-m), z=ea+eb+ec||1;
+  return [ea/z,eb/z,ec/z];
+}
+function computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx={}){
+  const xgDiff=safeNum(hXG,0)-safeNum(aXG,0);
+  const h2h=ctx.h2h||{};
+  const h2hN=safeNum(h2h.homeWins,0)+safeNum(h2h.awayWins,0)+safeNum(h2h.draws,0);
+  const hRank=safeNum(ctx.homeRank,0), aRank=safeNum(ctx.awayRank,0);
+  const hFactor=safeNum(ctx.hInjAdj?.factor,1), aFactor=safeNum(ctx.aInjAdj?.factor,1);
+  const hMot=safeNum(ctx.sitCtx?.hMot,1), aMot=safeNum(ctx.sitCtx?.aMot,1);
+
+  // Κάθε component είναι [-1,+1]: + = HOME, - = AWAY.
+  const values={
+    xgProjection:_cmiTanh(xgDiff,0.85),
+    formAttack:_cmiTanh(safeNum(hS?.fXG,1.35)-safeNum(aS?.fXG,1.35),0.85),
+    defense:_cmiTanh(safeNum(aS?.fXGA,1.35)-safeNum(hS?.fXGA,1.35),0.85),
+    split:_cmiTanh(safeNum(hS?.sXG,1.35)-safeNum(aS?.sXG,1.35),0.85),
+    formRating:_cmiTanh(safeNum(hS?.formRating,50)-safeNum(aS?.formRating,50),30),
+    h2h:h2hN>=4?clamp((safeNum(h2h.homeWins,0)-safeNum(h2h.awayWins,0))/h2hN,-1,1):0,
+    shotsOn:_cmiTanh(safeNum(hS?.shotsOn,4.5)-safeNum(aS?.shotsOn,4.5),2.5),
+    ranking:(hRank>0&&aRank>0)?_cmiTanh(aRank-hRank,8):0,
+    lineup:_cmiTanh(hFactor-aFactor,0.14),
+    motivation:_cmiTanh(hMot-aMot,0.12),
+    cornerPressure:_cmiTanh(safeNum(hS?.cor,5)-safeNum(aS?.cor,5),2.2),
+    // χαμηλότερες κάρτες = μικρό θετικό discipline edge. Πολύ μικρό βάρος, επειδή είναι noisy signal.
+    discipline:_cmiTanh(safeNum(aS?.crd,2.2)-safeNum(hS?.crd,2.2),1.8)
+  };
+
+  let directional=0, totalW=0;
+  const components=[];
+  for(const [key,w] of Object.entries(CMI_WEIGHTS)){
+    const v=clamp(safeNum(values[key],0),-1,1);
+    directional+=v*w; totalW+=w;
+    components.push({key,weight:w,value:v,contribution:v*w});
+  }
+  directional=clamp(directional/Math.max(totalW,0.0001),-1,1);
+
+  const tXG=safeNum(hXG,0)+safeNum(aXG,0);
+  const closeness=1-Math.min(1,Math.abs(directional));
+  const xgClose=1-Math.min(1,Math.abs(xgDiff)/1.20);
+  const h2hDraw=h2hN>=4?clamp(safeNum(h2h.draws,0)/h2hN,0,1):0.28;
+  const lowTotal=clamp((3.8-tXG)/2.2,0,1);
+  const drawSignal=clamp(0.45*closeness+0.30*xgClose+0.15*h2hDraw+0.10*lowTotal,0,1);
+  const volVals=[Number(hS?.r6?.sdGoals),Number(aS?.r6?.sdGoals)].filter(Number.isFinite);
+  const avgVol=volVals.length?volVals.reduce((a,b)=>a+b,0)/volVals.length:1.05;
+  const volatilitySafety=clamp(1-(avgVol-0.70)/1.25,0,1);
+
+  // Poisson = prior. CMI directional evidence κάνει περιορισμένη log-space adjustment,
+  // ώστε να μην ξαναμετράμε υπερβολικά το xG.
+  const ph0=clamp(safeNum(rawPP?.pHome,1/3),0.02,0.96);
+  const px0=clamp(safeNum(rawPP?.pDraw,1/3),0.02,0.96);
+  const pa0=clamp(safeNum(rawPP?.pAway,1/3),0.02,0.96);
+  const alpha=0.72;
+  const drawAlpha=0.46;
+  const [pHome,pDraw,pAway]=_cmiSoftmax3(
+    Math.log(ph0)+alpha*directional,
+    Math.log(px0)+drawAlpha*(drawSignal-0.50),
+    Math.log(pa0)-alpha*directional
+  );
+
+  const p1X=clamp(pHome+pDraw,0,1), pX2=clamp(pDraw+pAway,0,1), p12=clamp(pHome+pAway,0,1);
+  const sorted=[['1',pHome],['X',pDraw],['2',pAway]].sort((a,b)=>b[1]-a[1]);
+  const leaderOutcome=sorted[0][0], leaderProb=sorted[0][1], gap=leaderProb-sorted[1][1];
+
+  // Agreement: πόσα directional components συμφωνούν με την πλευρά του leader.
+  const sideSign=leaderOutcome==='1'?1:leaderOutcome==='2'?-1:0;
+  const directionalParts=components.filter(c=>Math.abs(c.value)>=0.08);
+  const aligned=sideSign===0?directionalParts.filter(c=>Math.abs(c.value)<0.30).length:directionalParts.filter(c=>Math.sign(c.value)===sideSign).length;
+  const agreement=directionalParts.length?aligned/directionalParts.length:0.5;
+
+  let recommendedMarket='NO SIGNAL', recommendedProb=leaderProb, rationale='Δεν υπάρχει επαρκής συνολική υπεροχή.';
+  const sideAligned=(leaderOutcome==='1'&&directional>=0.20)||(leaderOutcome==='2'&&directional<=-0.20);
+  const straightMinProb=0.56+(1-volatilitySafety)*0.05;
+  const straightMinGap=0.10+(1-volatilitySafety)*0.03;
+  if((leaderOutcome==='1'||leaderOutcome==='2') && leaderProb>=straightMinProb && gap>=straightMinGap && sideAligned && agreement>=0.55){
+    recommendedMarket=leaderOutcome;
+    recommendedProb=leaderProb;
+    rationale='Straight αποτέλεσμα: υψηλή πιθανότητα, καθαρό probability gap και πολυπαραγοντική συμφωνία.';
+  }else if(leaderOutcome==='X' && pDraw>=0.36 && gap>=0.04 && drawSignal>=0.60){
+    recommendedMarket='X'; recommendedProb=pDraw;
+    rationale='Ισοπαλία: υψηλό draw-support και μικρή directional ανισορροπία.';
+  }else{
+    // Conservative fallback: όταν η μία πλευρά υπερέχει αλλά η straight νίκη δεν είναι
+    // αρκετά τεκμηριωμένη, επιλέγουμε τη σωστή Double Chance.
+    if(directional<=-0.08 && pX2>=0.65){
+      recommendedMarket='X2'; recommendedProb=pX2;
+      rationale='AWAY πλεονέκτημα χωρίς αρκετή ισχύ για καθαρό 2 — προτιμάται X2.';
+    }else if(directional>=0.08 && p1X>=0.65){
+      recommendedMarket='1X'; recommendedProb=p1X;
+      rationale='HOME πλεονέκτημα χωρίς αρκετή ισχύ για καθαρό 1 — προτιμάται 1X.';
+    }else if(drawSignal<0.34 && p12>=0.72){
+      recommendedMarket='12'; recommendedProb=p12;
+      rationale='Χαμηλή πιθανότητα ισοπαλίας — προτιμάται 12.';
+    }else{
+      const dc=[['1X',p1X],['X2',pX2],['12',p12]].sort((a,b)=>b[1]-a[1])[0];
+      if(dc[1]>=0.68){ recommendedMarket=dc[0]; recommendedProb=dc[1]; rationale='Δεν υπάρχει ασφαλές straight 1X2· επιλέγεται η ισχυρότερη διπλή ευκαιρία.'; }
+    }
+  }
+
+  const dataN=Math.min(8,Math.max(safeNum(hS?.r6?.n,0),safeNum(aS?.r6?.n,0)));
+  const dataQuality=clamp(55+dataN*4+(ctx.lineupAvailable?8:0)+(h2hN>=4?5:0),55,100);
+  const compositeScore=clamp(Math.round(50+directional*50),0,100); // >50 HOME, <50 AWAY
+
+  return {
+    pHome,pDraw,pAway,p1X,pX2,p12,
+    raw:{pHome:ph0,pDraw:px0,pAway:pa0},
+    leaderOutcome,leaderProb,gap,
+    recommendedMarket,recommendedProb,rationale,
+    directional,compositeScore,drawSignal,agreement,dataQuality,volatilitySafety,avgVol,
+    straightMinProb,straightMinGap,
+    components,xgDiff,tXG
+  };
+}
+
+// ================================================================
 //  PICK ENGINE (Με Asian Handicap & Half-Time)
 // ================================================================
-function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
+function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,ctx={}){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
-  const pp=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
-  let outPick='X';
-  if(pp.pHome-pp.pAway>0.15&&xgDiff>lp.xgDiff)outPick='1';
-  else if(pp.pAway-pp.pHome>0.15&&xgDiff<-lp.xgDiff)outPick='2';
+  const rawPP=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
+  const matchPicture=computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx);
+  const pp={...rawPP,pHome:matchPicture.pHome,pDraw:matchPicture.pDraw,pAway:matchPicture.pAway,p1X:matchPicture.p1X,pX2:matchPicture.pX2,p12:matchPicture.p12};
+  const outPick=matchPicture.leaderOutcome;
   
   // --- ASIAN HANDICAP (-1.5) CALCULATION ---
   let pAH_Home = 0, pAH_Away = 0;
@@ -1777,17 +1924,23 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
     omegaPick='🎯 ΓΚΟΛ/ΓΚΟΛ (GG)';pickScore=pp.pBTTS*100;
     reason=`Ποντάρισμα: Και οι δύο ομάδες να σκοράρουν. Αμφότερες έχουν επιθετική απειλή (🏠 ${hXG.toFixed(2)} / ✈️ ${aXG.toFixed(2)} xG) — ${pct(pp.pBTTS)} πιθανότητα.`;}
 
-  // 7. STRAIGHT WIN
-  else if(outPick !== 'X' && Math.abs(xgDiff) >= lp.xgDiff){
-    const isHome   = outPick==='1';
+  // 7. STRAIGHT WIN — μόνο όταν το CMI επιβεβαιώνει καθαρό 1 ή 2.
+  else if(matchPicture.recommendedMarket==='1' || matchPicture.recommendedMarket==='2'){
+    const isHome   = matchPicture.recommendedMarket==='1';
     const outcome  = isHome ? '🏠 ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ' : '✈️ ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ';
     const outProb  = isHome ? pp.pHome : pp.pAway;
-    const formOk   = isHome ? hS.formRating >= 40 : aS.formRating >= 40;
-    if(outProb >= 0.58 && formOk){
-      omegaPick = outProb >= 0.65 ? `⚡ ${outcome}` : outcome;
-      pickScore = outProb*100;
-      reason = `Ποντάρισμα: Νίκη ${isHome?'γηπεδούχων':'φιλοξενούμενων'}. ${confLabel(outProb*100)} — υπεροχή σε xG (${isHome?'+':''}${xgDiff.toFixed(2)}) και φόρμα. Πιθανότητα νίκης: ${pct(outProb)}.`;
-    }
+    omegaPick = outProb >= 0.65 ? `⚡ ${outcome}` : outcome;
+    pickScore = outProb*100;
+    reason = `Ποντάρισμα: Νίκη ${isHome?'γηπεδούχων':'φιλοξενούμενων'}. CMI ${(matchPicture.compositeScore).toFixed(0)}/100 · ${(matchPicture.agreement*100).toFixed(0)}% συμφωνία δεικτών · πιθανότητα ${pct(outProb)}.`;
+  }
+
+  // 7b. DOUBLE CHANCE — ασφαλέστερη έκφραση της κατεύθυνσης όταν το straight 1/2 δεν τεκμηριώνεται.
+  else if(['1X','X2','12'].includes(matchPicture.recommendedMarket) && matchPicture.recommendedProb>=0.65){
+    const dc=matchPicture.recommendedMarket;
+    const dcLbl=dc==='1X'?'🏠 1X — ΓΗΠΕΔΟΥΧΟΣ Ή ΙΣΟΠΑΛΙΑ':dc==='X2'?'✈️ X2 — ΙΣΟΠΑΛΙΑ Ή ΦΙΛΟΞΕΝΟΥΜΕΝΟΣ':'⚔️ 12 — ΝΙΚΗΤΗΣ ΧΩΡΙΣ ΙΣΟΠΑΛΙΑ';
+    omegaPick=`🛡️ ${dcLbl}`;
+    pickScore=matchPicture.recommendedProb*100;
+    reason=`Διπλή Ευκαιρία ${dc}: ${matchPicture.rationale} Συνθετική πιθανότητα ${pct(matchPicture.recommendedProb)}.`;
   }
 
   // 8. PROPS
@@ -1811,6 +1964,8 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0){
   const top1P=pp.bestScore.prob, top2P=pp.secondScore.prob;
   const exactConf=Math.round(clamp((top1P+top2P)*100*4.2,0,99));
   return{omegaPick,reason,pickScore,outPick,
+    outcomeMarket:matchPicture.recommendedMarket,outcomeProb:matchPicture.recommendedProb,
+    matchPicture,rawPP,
     hG:pp.bestScore.h,aG:pp.bestScore.a,
     hG2:pp.secondScore.h,aG2:pp.secondScore.a,
     hExp:hL,aExp:aL,exactConf,xgDiff,pp,
@@ -2028,7 +2183,12 @@ async function analyzeMatchSafe(m,index,total){
     const aXGfinal = aInjAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
 
-    const bttsScore=Math.min(hXGfinal,aXGfinal);const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id);
+    const homeRank=getTeamRank(stand,m.teams.home.id)??99;
+    const awayRank=getTeamRank(stand,m.teams.away.id)??99;
+    const bttsScore=Math.min(hXGfinal,aXGfinal);
+    const result=computePick(hXGfinal,aXGfinal,tXGfinal,bttsScore,lp,hS,aS,m.league.id,{
+      h2h:h2hSummary,hInjAdj,aInjAdj,sitCtx,homeRank,awayRank,lineupAvailable:!!lineupData?.available
+    });
 
     // ⏱️ HT ANALYSIS — αυτόνομη ανάλυση ημιχρόνου (league-specific factor + D-C ρ=-0.10)
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
@@ -2068,7 +2228,8 @@ async function analyzeMatchSafe(m,index,total){
 
     window.scannedMatchesData.push({
       m,fixId:m.fixture.id,ht:m.teams.home.name,at:m.teams.away.name,lg:m.league.name,leagueId:m.league.id,
-      tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,xgDiff:result.xgDiff,
+      tXG:tXGfinal,btts:bttsScore,outPick:result.outPick,outcomeMarket:result.outcomeMarket,outcomeProb:result.outcomeProb,xgDiff:result.xgDiff,
+      matchPicture:result.matchPicture,rawPP:result.rawPP,
       hXGbase:hXG, aXGbase:aXG, hXGfinal, aXGfinal,
       hInjAdj, aInjAdj,
       hPlayers, aPlayers,
@@ -2077,7 +2238,7 @@ async function analyzeMatchSafe(m,index,total){
       exact:`${result.hG}-${result.aG}`,exact2:`${result.hG2}-${result.aG2}`,exactConf:result.exactConf,
       omegaPick:result.omegaPick,strength:result.pickScore,reason:result.reason,hExp:result.hExp,aExp:result.aExp,pp:result.pp,
       lambdaTotal:result.lambdaTotal,cornerConf:result.cornerConf,expCor:result.expCor,
-      hr:getTeamRank(stand,m.teams.home.id)??99,ar:getTeamRank(stand,m.teams.away.id)??99,
+      hr:homeRank,ar:awayRank,
       hS,aS,h2h:h2hSummary,
       actStats, isBomb:result.omegaPick.includes('💣'), hScorerProb, aScorerProb,
       sitCtx,    // Situational context (motivation flags, derby)
@@ -2347,7 +2508,7 @@ function applySubstitution(d, newLineupData) {
   const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
   const tXGfinal = hXGfinal + aXGfinal;
   const btts = Math.min(hXGfinal, aXGfinal);
-  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
+  const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId,{h2h:d.h2h,hInjAdj:d.hInjAdj,aInjAdj:d.aInjAdj,sitCtx:d.sitCtx,homeRank:d.hr,awayRank:d.ar,lineupAvailable:!!d.lineupData?.available});
   const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
 
   // Παρακολούθηση changed fields (για flash)
@@ -2361,7 +2522,7 @@ function applySubstitution(d, newLineupData) {
   Object.assign(d, {
     hXGfinal, aXGfinal, tXG: tXGfinal, btts,
     hInjAdj: newHAdj, aInjAdj: newAAdj, htAnalysis,
-    outPick: result.outPick, xgDiff: result.xgDiff,
+    outPick: result.outPick, outcomeMarket:result.outcomeMarket, outcomeProb:result.outcomeProb, matchPicture:result.matchPicture, rawPP:result.rawPP, xgDiff: result.xgDiff,
     exact: `${result.hG}-${result.aG}`, exact2: `${result.hG2}-${result.aG2}`,
     exactConf: result.exactConf, omegaPick: result.omegaPick,
     strength: result.pickScore, reason: result.reason,
@@ -2669,9 +2830,9 @@ window.fetchAllLineups = async function() {
         const lp = getLeagueParams(d.leagueId);
         const hA = applyLineupAdjustment(d.hXGbase||d.hXGfinal, d.hPlayers, nl.home, []);
         const aA = applyLineupAdjustment(d.aXGbase||d.aXGfinal, d.aPlayers, nl.away, []);
-        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId);
+        const res = computePick(hA.adjXG, aA.adjXG, hA.adjXG+aA.adjXG, Math.min(hA.adjXG,aA.adjXG), lp, d.hS, d.aS, d.leagueId,{h2h:d.h2h,hInjAdj:hA,aInjAdj:aA,sitCtx:d.sitCtx,homeRank:d.hr,awayRank:d.ar,lineupAvailable:!!d.lineupData?.available});
         Object.assign(d,{hXGfinal:hA.adjXG,aXGfinal:aA.adjXG,hInjAdj:hA,aInjAdj:aA,
-          outPick:res.outPick,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
+          outPick:res.outPick,outcomeMarket:res.outcomeMarket,outcomeProb:res.outcomeProb,matchPicture:res.matchPicture,rawPP:res.rawPP,exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,
           exactConf:res.exactConf,omegaPick:res.omegaPick,strength:res.pickScore,
           hExp:res.hExp,aExp:res.aExp,pp:res.pp});
         confirmed++;
@@ -2702,7 +2863,7 @@ window.fetchLineupForMatch = async function(fixId) {
     const hXGfinal = newHAdj.adjXG, aXGfinal = newAAdj.adjXG;
     const tXGfinal = hXGfinal + aXGfinal;
     const btts = Math.min(hXGfinal, aXGfinal);
-    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId);
+    const result = computePick(hXGfinal, aXGfinal, tXGfinal, btts, lp, d.hS, d.aS, d.leagueId,{h2h:d.h2h,hInjAdj:d.hInjAdj,aInjAdj:d.aInjAdj,sitCtx:d.sitCtx,homeRank:d.hr,awayRank:d.ar,lineupAvailable:!!d.lineupData?.available});
     const htAnalysis = computeHTAnalysis(result.hExp, result.aExp, lp);
     const cardCtx = {xgDiff: result.xgDiff, leagueId: d.leagueId};
     adjustPlayerCardProbs(d.hPlayers, d.aS, cardCtx);
@@ -2710,7 +2871,7 @@ window.fetchLineupForMatch = async function(fixId) {
     Object.assign(d, {
       hXGfinal, aXGfinal, tXG:tXGfinal, btts,
       hInjAdj:newHAdj, aInjAdj:newAAdj, htAnalysis,
-      outPick:result.outPick, xgDiff:result.xgDiff,
+      outPick:result.outPick,outcomeMarket:result.outcomeMarket,outcomeProb:result.outcomeProb,matchPicture:result.matchPicture,rawPP:result.rawPP, xgDiff:result.xgDiff,
       exact:`${result.hG}-${result.aG}`, exact2:`${result.hG2}-${result.aG2}`,
       exactConf:result.exactConf, omegaPick:result.omegaPick,
       strength:result.pickScore, reason:result.reason,
@@ -2790,7 +2951,7 @@ function _medianNums(values){
 
 function _emptyOddsSnapshot(){
   return {
-    home:null, draw:null, away:null,
+    home:null, draw:null, away:null, oneX:null, twelve:null, xTwo:null,
     over25:null, under25:null, over35:null, under35:null,
     bttsY:null, bttsN:null,
     _market:{},
@@ -2824,7 +2985,7 @@ function parseOddsResponse(response) {
   if(!Array.isArray(response)||!response.length) return out;
 
   const best={};
-  const samples={home:[],draw:[],away:[],over25:[],under25:[],over35:[],under35:[],bttsY:[],bttsN:[]};
+  const samples={home:[],draw:[],away:[],oneX:[],twelve:[],xTwo:[],over25:[],under25:[],over35:[],under35:[],bttsY:[],bttsN:[]};
   const seenBooks=new Set();
   let completeMarkets=0;
 
@@ -2847,6 +3008,7 @@ function parseOddsResponse(response) {
       const bookmakerName=bk?.name||`Book ${bk?.id??'?'}`;
       seenBooks.add(String(bk?.id??bookmakerName));
       const mw={home:null,draw:null,away:null};
+      const dc={oneX:null,twelve:null,xTwo:null};
       const ou25={over25:null,under25:null};
       const ou35={over35:null,under35:null};
       const btts={bttsY:null,bttsN:null};
@@ -2861,6 +3023,15 @@ function parseOddsResponse(response) {
             if(val==='home'){ mw.home=odd; _pushBest(best,'home',odd,bookmakerName); }
             else if(val==='draw'){ mw.draw=odd; _pushBest(best,'draw',odd,bookmakerName); }
             else if(val==='away'){ mw.away=odd; _pushBest(best,'away',odd,bookmakerName); }
+          }
+        } else if(name==='double chance'){
+          for(const v of (bet.values||[])){
+            const val=String(v?.value||'').trim().toLowerCase().replace(/\s+/g,'');
+            const odd=parseFloat(v?.odd);
+            if(!Number.isFinite(odd)) continue;
+            if(['home/draw','homeordraw','1x','home-draw'].includes(val)){dc.oneX=odd;_pushBest(best,'oneX',odd,bookmakerName);}
+            else if(['draw/away','draworaway','x2','draw-away'].includes(val)){dc.xTwo=odd;_pushBest(best,'xTwo',odd,bookmakerName);}
+            else if(['home/away','homeoraway','12','home-away'].includes(val)){dc.twelve=odd;_pushBest(best,'twelve',odd,bookmakerName);}
           }
         } else if(name==='goals over/under'){
           for(const v of (bet.values||[])){
@@ -2898,6 +3069,9 @@ function parseOddsResponse(response) {
     }
   }
 
+  // Double Chance no-vig probability προκύπτει από το πλήρες 1X2 consensus
+  // (οι 1X/X2/12 επιλογές επικαλύπτονται και δεν πρέπει να κανονικοποιούνται μεταξύ τους).
+
   Object.keys(samples).forEach(key=>{
     const rows=samples[key];
     const b=best[key];
@@ -2917,6 +3091,23 @@ function parseOddsResponse(response) {
       bestBookmaker:b?.bookmaker||rows[0]?.bookmaker||null
     };
   });
+
+  const deriveDC=(key,k1,k2)=>{
+    const a=out._market?.[k1], b=out._market?.[k2], be=best[key];
+    if(!a||!b) return;
+    const p=clamp(Number(a.noVigProb||0)+Number(b.noVigProb||0),0.01,0.99);
+    out[key]=be?.odd??null;
+    out._market[key]={
+      noVigProb:p,fairOdds:1/p,
+      books:Math.min(Number(a.books||0),Number(b.books||0)),
+      spreadPP:Number(a.spreadPP||0)+Number(b.spreadPP||0),
+      overroundAvg:_medianNums([a.overroundAvg,b.overroundAvg].filter(Number.isFinite)),
+      bestOdds:be?.odd??null,bestBookmaker:be?.bookmaker||null,derivedFrom:'1X2 no-vig'
+    };
+  };
+  deriveDC('oneX','home','draw');
+  deriveDC('xTwo','draw','away');
+  deriveDC('twelve','home','away');
 
   out._meta={
     bookmakerCount:seenBooks.size,
@@ -3028,6 +3219,9 @@ function extractValueBets(rec, odds) {
   assess('1X2',pp.pHome,odds.home,'ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ','home');
   assess('1X2',pp.pDraw,odds.draw,'ΙΣΟΠΑΛΙΑ','draw');
   assess('1X2',pp.pAway,odds.away,'ΝΙΚΗ ΦΙΛΟΞΕΝΟΥΜΕΝΩΝ','away');
+  if(Number.isFinite(pp.p1X)) assess('Διπλή Ευκαιρία',pp.p1X,odds.oneX,'1X','oneX');
+  if(Number.isFinite(pp.pX2)) assess('Διπλή Ευκαιρία',pp.pX2,odds.xTwo,'X2','xTwo');
+  if(Number.isFinite(pp.p12)) assess('Διπλή Ευκαιρία',pp.p12,odds.twelve,'12','twelve');
   assess('Πάνω 2.5',pp.pO25,odds.over25,'ΠΑΝΩ ΑΠΟ 2.5 ΓΚΟΛ','over25');
   assess('Κάτω 2.5',pp.pU25,odds.under25,'ΚΑΤΩ ΑΠΟ 2.5 ΓΚΟΛ','under25');
   assess('Πάνω 3.5',pp.pO35,odds.over35,'ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ','over35');
@@ -3236,6 +3430,7 @@ function _bombStatusLabel(status){
     LOW_COVERAGE:'🟡 LOW COVERAGE',
     WIDE_MARKET:'🟡 WIDE MARKET',
     HIGH_DIVERGENCE:'🟠 HIGH DIVERGENCE',
+    SAFER_DC:'🛡️ SAFER DOUBLE CHANCE',
     CONFLICT:'🔴 MODEL–MARKET CONFLICT'
   }[status]||status;
 }
@@ -3264,6 +3459,13 @@ function _bombCandidate(rec,marketKey,market,label,icon,modelProb){
   else if(books<BOMB_MIN_BOOKS) status='LOW_COVERAGE';
   else if(spreadPP>BOMB_MAX_MARKET_SPREAD_PP) status='WIDE_MARKET';
 
+  // Outcome safety gate: ένα market mispricing δεν αρκεί για να μετατρέψει
+  // ένα αβέβαιο straight 1/2 σε «Bomb». Αν το πλήρες CMI ζητά 1X ή X2,
+  // η αντίστοιχη καθαρή νίκη υποβαθμίζεται σε diagnostic SAFER_DC.
+  const straightCode=marketKey==='home'?'1':marketKey==='draw'?'X':marketKey==='away'?'2':null;
+  const saferMarket=rec?.matchPicture?.recommendedMarket||rec?.outcomeMarket||null;
+  if(status==='VERIFIED' && straightCode && saferMarket && saferMarket!==straightCode) status='SAFER_DC';
+
   // 0–100 ranking score. Τα hard gates παραπάνω αποφασίζουν VERIFIED/REJECT.
   const gapScore=clamp((gapPP/BOMB_VERIFIED_MAX_GAP_PP)*30,0,30);
   const edgeScore=clamp((execEdgePct/50)*25,0,25);
@@ -3286,6 +3488,7 @@ function _bombCandidate(rec,marketKey,market,label,icon,modelProb){
     marketOverround:meta?.overroundAvg??null,
     gapPP, execEdge, execEdgePct,
     bombScore,
+    saferMarket:rec?.matchPicture?.recommendedMarket||rec?.outcomeMarket||null,
     verified:status==='VERIFIED',
     breakdown:{gapScore,edgeScore,coverageScore,spreadScore,formScore,strengthScore}
   };
@@ -3387,7 +3590,7 @@ function renderBombsTab(bombs){
         <div>Odds <b>${d.effectiveOdds.toFixed(2)}</b></div>
         <div>Δ <b>${d.gapPP>=0?'+':''}${d.gapPP.toFixed(1)}pp</b></div>
         <div>EV <b>${d.execEdgePct>=0?'+':''}${d.execEdgePct.toFixed(1)}%</b></div>
-        <div style="color:${sc};font-weight:800;">${_bombStatusLabel(d.status)}</div>
+        <div style="color:${sc};font-weight:800;">${_bombStatusLabel(d.status)}${d.status==='SAFER_DC'&&d.saferMarket?`<br><span style=\"color:var(--accent-teal);font-size:.58rem;\">CMI → ${esc(d.saferMarket)}</span>`:''}</div>
       </div>`;
     }).join('')}</div></div>`:'';
 
@@ -3707,8 +3910,13 @@ window.openMatchAnalysisDrawer=function(fixId){
   document.getElementById('matchDrawerTitle').textContent=`${rec.ht||'—'} vs ${rec.at||'—'}`;
   document.getElementById('matchDrawerMeta').textContent=`${when}${score}`;
   const precisionQuick=rec.precision?`<div class="match-analysis-stat"><span>Meta-Confidence</span><strong style="color:${rec.precision.allowed?'var(--accent-green)':rec.precision.tier==='STANDARD'?'var(--accent-gold)':'var(--accent-red)'}">${(rec.precision.metaProb*100).toFixed(1)}% · ${rec.precision.tier} · cut ${(rec.precision.threshold*100).toFixed(0)}%</strong></div>`:'';
+  const mp=rec.matchPicture||null;
+  const dcQuick=mp?`<div class="match-analysis-stat"><span>${acr('DC')}</span><strong>1X ${(mp.p1X*100).toFixed(1)}% · X2 ${(mp.pX2*100).toFixed(1)}% · 12 ${(mp.p12*100).toFixed(1)}%</strong></div>`:'';
+  const cmiQuick=mp?`<div class="match-analysis-stat"><span>${acr('CMI')}</span><strong style="color:${mp.recommendedMarket==='NO SIGNAL'?'var(--accent-red)':['1X','X2','12'].includes(mp.recommendedMarket)?'var(--accent-teal)':'var(--accent-green)'}">${esc(mp.recommendedMarket)} · ${(mp.recommendedProb*100).toFixed(1)}% · index ${mp.compositeScore}/100</strong></div>`:'';
   document.getElementById('matchDrawerQuick').innerHTML=`
-    <div class="match-analysis-stat"><span>1X2</span><strong>1 ${ph.toFixed(1)}% · X ${px.toFixed(1)}% · 2 ${pa.toFixed(1)}%</strong></div>
+    <div class="match-analysis-stat"><span>1X2 · CMI</span><strong>1 ${ph.toFixed(1)}% · X ${px.toFixed(1)}% · 2 ${pa.toFixed(1)}%</strong></div>
+    ${dcQuick}
+    ${cmiQuick}
     <div class="match-analysis-stat"><span>xG</span><strong>${hXG.toFixed(2)} – ${aXG.toFixed(2)} · tXG ${tXG.toFixed(2)}</strong></div>
     <div class="match-analysis-stat"><span>CONF</span><strong>${conf.toFixed(0)}%</strong></div>
     ${precisionQuick}
@@ -4071,6 +4279,37 @@ function buildAccordionHTML(x) {
     </div>`;
   };
 
+  // 0. Composite Match Intelligence — πλήρης πολυπαραγοντική εικόνα 1X2/DC
+  const compositeHTML = x.matchPicture ? (()=>{
+    const mp=x.matchPicture;
+    const labels={xgProjection:'Projected xG',formAttack:'Form xG',defense:'xGA Defense',split:'Home/Away Split',formRating:'Form Rating',h2h:'H2H',shotsOn:'Shots on Target',ranking:'League Rank',lineup:'Lineup / Injuries',motivation:'Context / Motivation',cornerPressure:'Corner Pressure',discipline:'Discipline / Cards'};
+    const rows=(mp.components||[]).map(c=>{
+      const side=c.value>0.08?'HOME':c.value<-0.08?'AWAY':'NEUTRAL';
+      const col=side==='HOME'?'var(--accent-gold)':side==='AWAY'?'var(--accent-blue)':'var(--text-muted)';
+      return `<div style="display:grid;grid-template-columns:minmax(105px,1.4fr) .65fr .6fr .7fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.035);font-size:.67rem;">
+        <span>${labels[c.key]||c.key}</span><span style="font-family:var(--font-mono);">${(c.weight*100).toFixed(0)}%</span><span style="color:${col};font-weight:800;">${side}</span><span style="font-family:var(--font-mono);color:${col};">${c.value>=0?'+':''}${c.value.toFixed(2)}</span>
+      </div>`;
+    }).join('');
+    const recCol=mp.recommendedMarket==='NO SIGNAL'?'var(--accent-red)':(['1X','X2','12'].includes(mp.recommendedMarket)?'var(--accent-teal)':'var(--accent-green)');
+    return `<div class="accordion-card" style="border-color:rgba(45,212,191,.38);background:linear-gradient(135deg,rgba(45,212,191,.06),rgba(56,189,248,.025));">
+      <h4 style="color:var(--accent-teal);">🧮 ${acr('CMI')} — Complete Statistical Picture</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:7px;margin-bottom:10px;">
+        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;"><div style="font-size:.58rem;color:var(--text-muted);">RECOMMENDED</div><div style="font-size:1.15rem;font-weight:900;color:${recCol};">${esc(mp.recommendedMarket)}</div><div style="font-family:var(--font-mono);font-size:.72rem;">${(mp.recommendedProb*100).toFixed(1)}%</div></div>
+        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;"><div style="font-size:.58rem;color:var(--text-muted);">COMPOSITE INDEX</div><div style="font-size:1.15rem;font-weight:900;font-family:var(--font-mono);">${mp.compositeScore}/100</div><div style="font-size:.60rem;color:var(--text-muted);">0 AWAY · 50 EVEN · 100 HOME</div></div>
+        <div style="background:var(--bg-surface);padding:8px;border-radius:6px;"><div style="font-size:.58rem;color:var(--text-muted);">INDICATOR AGREEMENT</div><div style="font-size:1.15rem;font-weight:900;font-family:var(--font-mono);">${(mp.agreement*100).toFixed(0)}%</div><div style="font-size:.60rem;color:var(--text-muted);">Data quality ${mp.dataQuality}% · stability ${(mp.volatilitySafety*100).toFixed(0)}%</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;">
+        <div style="text-align:center;background:rgba(252,211,77,.07);padding:8px;border-radius:6px;"><div style="font-size:.6rem;color:var(--text-muted);">1X</div><b>${(mp.p1X*100).toFixed(1)}%</b></div>
+        <div style="text-align:center;background:rgba(45,212,191,.07);padding:8px;border-radius:6px;"><div style="font-size:.6rem;color:var(--text-muted);">X2</div><b>${(mp.pX2*100).toFixed(1)}%</b></div>
+        <div style="text-align:center;background:rgba(192,132,252,.07);padding:8px;border-radius:6px;"><div style="font-size:.6rem;color:var(--text-muted);">12</div><b>${(mp.p12*100).toFixed(1)}%</b></div>
+      </div>
+      <div style="font-size:.65rem;color:var(--text-muted);padding:6px 8px;background:rgba(255,255,255,.025);border-radius:5px;margin-bottom:7px;">Poisson prior: 1 ${(mp.raw.pHome*100).toFixed(1)}% · X ${(mp.raw.pDraw*100).toFixed(1)}% · 2 ${(mp.raw.pAway*100).toFixed(1)}% → CMI: 1 ${(mp.pHome*100).toFixed(1)}% · X ${(mp.pDraw*100).toFixed(1)}% · 2 ${(mp.pAway*100).toFixed(1)}%</div>
+      <div style="font-size:.7rem;color:var(--text-sub);padding:8px 10px;border:1px solid rgba(45,212,191,.16);border-radius:6px;margin-bottom:8px;">${esc(mp.rationale||'')}</div>
+      <div style="font-size:.61rem;color:var(--text-muted);display:grid;grid-template-columns:minmax(105px,1.4fr) .65fr .6fr .7fr;gap:6px;padding-bottom:3px;"><span>FACTOR</span><span>WEIGHT</span><span>EDGE</span><span>NORM.</span></div>
+      ${rows}
+    </div>`;
+  })() : '';
+
   // 1. Home vs Away Breakdown
   const homeAwayHTML = `
     <div class="accordion-card" style="margin:0; height:100%;">
@@ -4244,8 +4483,9 @@ function buildAccordionHTML(x) {
       <!-- LIVE QUALITY INDEX — εμφανίζεται μόνο σε live αγώνες -->
       ${liveQualityPanel}
 
+      ${compositeHTML ? `<div style="margin-bottom:14px;${liveQualityPanel ? 'margin-top:14px;' : ''}">${compositeHTML}</div>` : ''}
       <!-- ΓΡΑΜΜΗ 1: Breakdown & Projections Δίπλα-δίπλα -->
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px; ${liveQualityPanel ? 'margin-top:14px;' : ''}">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px;">
         ${homeAwayHTML}
         ${gameProjHTML}
       </div>
@@ -4879,7 +5119,7 @@ function renderSummaryTable() {
             })()}
           </td>
           <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
-          <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outPick}</td>
+          <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outcomeMarket||x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
           <td class="col-btts data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('GOAL')?'🎯':'-'}</td>
@@ -5328,15 +5568,15 @@ window.runCustomAudit = async function(autoMode = false) {
 const LS_APL_MODEL    = 'omega_adaptive_precision_model_v5.5';
 const LS_APL_SETTINGS = 'omega_adaptive_precision_settings_v5.5';
 const LS_APL_LOG      = 'omega_adaptive_precision_log_v5.5';
-const APL_SCHEMA      = 1;
+const APL_SCHEMA      = 2;
 const APL_FEATURES = [
   'baseProb','probGap','xgSupport','formSupport','stability',
-  'lineupQuality','injurySafety','marketAgreement','homePick','drawPick','awayPick'
+  'lineupQuality','injurySafety','marketAgreement','compositeSupport','homePick','drawPick','awayPick'
 ];
 const APL_FEATURE_LABELS = {
   baseProb:'Base 1X2 probability', probGap:'Probability gap', xgSupport:'xG direction',
   formSupport:'Form support', stability:'Recent stability', lineupQuality:'Lineup quality',
-  injurySafety:'Injury safety', marketAgreement:'Market agreement',
+  injurySafety:'Injury safety', marketAgreement:'Market agreement', compositeSupport:'Composite statistical support',
   homePick:'Pick=1', drawPick:'Pick=X', awayPick:'Pick=2'
 };
 const APL_DEFAULT_SETTINGS = {
@@ -5446,10 +5686,17 @@ function _aplFeatureVector(r,pickOverride=null){
   const injurySafety=clamp(1-injuryLoad/0.75,0,1);
   const marketProb=_aplMarketProbForPick(r,pick);
   const marketAgreement=marketProb===null?0.50:clamp(1-Math.abs(baseProb-marketProb)/0.25,0,1);
+  const mp=r?.matchPicture||r?.preMatchPicture||null;
+  let compositeSupport=0.50;
+  if(mp){
+    if(pick==='1') compositeSupport=clamp(0.5+Number(mp.directional||0)/2,0,1);
+    else if(pick==='2') compositeSupport=clamp(0.5-Number(mp.directional||0)/2,0,1);
+    else compositeSupport=clamp(Number(mp.drawSignal??0.5),0,1);
+  }
 
   return [
     _aplClamp01(baseProb),_aplClamp01(probGap),_aplClamp01(xgSupport),_aplClamp01(formSupport),
-    _aplClamp01(stability),_aplClamp01(lineupQuality),_aplClamp01(injurySafety),_aplClamp01(marketAgreement),
+    _aplClamp01(stability),_aplClamp01(lineupQuality),_aplClamp01(injurySafety),_aplClamp01(marketAgreement),_aplClamp01(compositeSupport),
     pick==='1'?1:0,pick==='X'?1:0,pick==='2'?1:0
   ];
 }
@@ -5554,7 +5801,7 @@ function _aplAblation(examples,settings){
   const train=examples.slice(0,cut), test=examples.slice(cut);
   const allIdx=APL_FEATURES.map((_,i)=>i), full=_aplTrainLogistic(train,settings.recencyHalfLife,allIdx,320);
   const fullRows=test.map(e=>({...e,pred:_aplPredict(full,e.features)})); const fullB=_aplBrier(fullRows);
-  return APL_FEATURES.slice(0,8).map((name,j)=>{
+  return APL_FEATURES.slice(0,9).map((name,j)=>{
     const idx=allIdx.filter(i=>i!==j), m=_aplTrainLogistic(train,settings.recencyHalfLife,idx,260);
     const rows=test.map(e=>({...e,pred:_aplPredict(m,e.features)}));
     return {name,label:APL_FEATURE_LABELS[name]||name,deltaBrier:(_aplBrier(rows)??fullB)-fullB};
@@ -5567,6 +5814,9 @@ function _aplCalibrationBins(rows){
 function _aplLoadState(){
   try{adaptivePrecisionSettings={...APL_DEFAULT_SETTINGS,...JSON.parse(localStorage.getItem(LS_APL_SETTINGS)||'{}')};}catch{adaptivePrecisionSettings={...APL_DEFAULT_SETTINGS};}
   try{adaptivePrecisionModel=JSON.parse(localStorage.getItem(LS_APL_MODEL)||'null');}catch{adaptivePrecisionModel=null;}
+  // v5.6 adds Composite Statistical Support and shifts feature indexes.
+  // Old v5.5 weights are unsafe with the new vector, so force a clean retrain while preserving the Vault.
+  if(adaptivePrecisionModel && adaptivePrecisionModel.schema!==APL_SCHEMA) adaptivePrecisionModel=null;
   try{adaptivePrecisionLog=JSON.parse(localStorage.getItem(LS_APL_LOG)||'[]')||[];}catch{adaptivePrecisionLog=[];}
 }
 function _aplSaveSettings(){try{localStorage.setItem(LS_APL_SETTINGS,JSON.stringify(adaptivePrecisionSettings));}catch{}}
@@ -7455,14 +7705,14 @@ window.resimulateMatches=function(){
     const hXGfinal=hXG*hFactor, aXGfinal=aXG*aFactor;
     const hDelta=hXGfinal-hXG, aDelta=aXGfinal-aXG;
     const tXG=hXGfinal+aXGfinal,btts=Math.min(hXGfinal,aXGfinal);
-    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId);
+    const res=computePick(hXGfinal,aXGfinal,tXG,btts,lp,d.hS,d.aS,d.leagueId,{h2h:d.h2h,hInjAdj:d.hInjAdj,aInjAdj:d.aInjAdj,sitCtx:d.sitCtx,homeRank:d.hr,awayRank:d.ar,lineupAvailable:!!d.lineupData?.available});
     const htAnalysis=computeHTAnalysis(res.hExp,res.aExp,lp);
     Object.assign(d,{
       tXG,btts,hXGbase:hXG,aXGbase:aXG,hXGfinal,aXGfinal,
       hInjAdj:{...d.hInjAdj,adjXG:hXGfinal,delta:hDelta},
       aInjAdj:{...d.aInjAdj,adjXG:aXGfinal,delta:aDelta},
       htAnalysis,
-      outPick:res.outPick,xgDiff:res.xgDiff,
+      outPick:res.outPick,outcomeMarket:res.outcomeMarket,outcomeProb:res.outcomeProb,matchPicture:res.matchPicture,rawPP:res.rawPP,xgDiff:res.xgDiff,
       exact:`${res.hG}-${res.aG}`,exact2:`${res.hG2}-${res.aG2}`,exactConf:res.exactConf,
       omegaPick:res.omegaPick,strength:res.pickScore,reason:res.reason,
       hExp:res.hExp,aExp:res.aExp,pp:res.pp,
