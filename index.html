@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>APEX OMEGA v5.9 — Streamlined Scanner + Time Window + Global Results + CMI</title>
+  <title>APEX OMEGA v6.0 — Background Engine + Streamlined Scanner + CMI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260919-v59-time-window">
+  <link rel="stylesheet" href="style.css?v=20260920-v60-background">
 </head>
 <body>
 
@@ -15,13 +15,17 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <div class="brand-logo">
       APEX<span>OMEGA</span>
-      <span class="version-tag" id="versionTag">v5.9</span>
+      <span class="version-tag" id="versionTag">v6.0</span>
     </div>
     <div id="lastUpdatedBadge" style="display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:0.58rem;color:var(--text-muted);background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:3px 9px;white-space:nowrap;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;display:inline-block;box-shadow:0 0 5px var(--accent-green);flex-shrink:0;animation:pulseRed 2s infinite;"></span>
       <span id="lastUpdatedText">—</span>
     </div>
     <button onclick="openGlossary()" style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);color:var(--blue);border-radius:8px;padding:4px 10px;font-size:0.72rem;font-weight:700;cursor:pointer;font-family:var(--font-cond);letter-spacing:0.05em;" title="Γλωσσάριο Δεικτών">? Γλωσσάριο</button>
+    <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.22);border-radius:8px;padding:4px 10px;font-size:.66rem;font-family:var(--font-mono);font-weight:700;white-space:nowrap;" title="Το Node.js Background Engine συνεχίζει να λειτουργεί όταν κλείσει η σελίδα.">
+      <span id="backgroundEngineDot" style="width:7px;height:7px;border-radius:50%;background:var(--text-muted);display:inline-block;"></span>
+      <span id="backgroundHeaderStatus" style="color:var(--text-muted);">BG CONNECTING</span>
+    </div>
       <button onclick="window.testApi && window.testApi()" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);color:var(--green);border-radius:8px;padding:4px 10px;font-size:0.72rem;font-weight:700;cursor:pointer;font-family:var(--font-cond);letter-spacing:0.05em;" title="Έλεγχος σύνδεσης API-Football">🩺 API Test</button>
   </div>
   <div class="header-right">
@@ -64,7 +68,7 @@
     <!-- Version badge — hardcoded για να φαίνεται αμέσως πριν το JS -->
     <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid rgba(77,184,255,0.18);border-radius:10px;padding:4px 12px;margin-bottom:20px;">
       <span style="width:5px;height:5px;background:var(--accent-green);border-radius:50%;box-shadow:0 0 6px var(--accent-green);flex-shrink:0;"></span>
-      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v5.9 · STREAMLINED SCANNER · ATHENS TIME WINDOW · GLOBAL RESULTS · CMI</span>
+      <span id="authBuildInfo" style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-blue);letter-spacing:0.06em;">v6.0 · BACKGROUND ENGINE · HEADLESS AUTO-RUN · SQLITE STATE · ATHENS TIME · CMI</span>
     </div>
     <input type="password" id="pin" class="auth-input"
       placeholder="· · · ·" maxlength="8" autocomplete="off" inputmode="numeric">
@@ -177,6 +181,19 @@
           <span id="selfImproveStatus" style="font-size:0.66rem;color:var(--text-muted);">Ενεργοποίηση μετά τη σύνδεση…</span>
         </div>
         <button type="button" id="selfImproveNowBtn" class="btn btn-outline" onclick="window.runSelfImproveNow()" style="height:30px;padding:4px 10px;font-size:0.66rem;color:var(--purple);border-color:rgba(192,132,252,0.3);">▶ Run now</button>
+      </div>
+      <div id="backgroundEnginePanel" style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid rgba(16,185,129,.22);border-radius:9px;background:linear-gradient(135deg,rgba(16,185,129,.055),rgba(15,23,42,.02));">
+        <div style="display:flex;align-items:center;gap:9px;min-width:0;flex-wrap:wrap;">
+          <span style="font-size:.73rem;font-weight:900;color:var(--accent-green);">⚙ Background Engine</span>
+          <span id="backgroundEngineStatus" style="font-size:.68rem;color:var(--text-muted);font-family:var(--font-mono);">CONNECTING…</span>
+          <span id="backgroundEngineDetails" style="font-size:.62rem;color:var(--text-muted);">—</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" onclick="window.APEX_BG?.runNow('results')" style="height:30px;padding:4px 9px;font-size:.64rem;">↻ Results now</button>
+          <button type="button" class="btn btn-outline" onclick="window.APEX_BG?.runNow('learn')" style="height:30px;padding:4px 9px;font-size:.64rem;">🧠 Learn now</button>
+          <button type="button" class="btn btn-outline" onclick="window.APEX_BG?.runNow('scan')" style="height:30px;padding:4px 9px;font-size:.64rem;color:var(--accent-blue);">▶ BG Scan now</button>
+          <button type="button" id="backgroundToggleBtn" class="btn btn-outline" style="height:30px;padding:4px 9px;font-size:.64rem;">⏸ Pause BG</button>
+        </div>
       </div>
       <div class="toolbar" style="margin-top:12px; justify-content:flex-end;">
         <button class="btn btn-outline" onclick="exportData()">↓ JSON</button>
@@ -395,8 +412,10 @@
   </div>
 </div>
 
+<!--APEX_SERVER_STATE-->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="leagues.js?v=20260919-v59-time-window"></script>
-<script src="stats.js?v=20260919-v59-time-window"></script>
+<script src="leagues.js?v=20260920-v60-background"></script>
+<script src="stats.js?v=20260920-v60-background"></script>
+<script src="background-bridge.js?v=20260920-v60-background"></script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 // ==========================================================================
-// APEX OMEGA v5.9 — STREAMLINED SCANNER + ATHENS TIME WINDOW + GLOBAL RESULTS + CMI
+// APEX OMEGA v6.0 — BACKGROUND ENGINE + STREAMLINED SCANNER + ATHENS TIME WINDOW + CMI
 // Poisson · xG · Corners · Scorers · Asian Handicap · HT · AI Advisor
 // ==========================================================================
 
-const API_BASE = "https://v3.football.api-sports.io";
-let API_KEY    = "956cbd05f9e9bf934df78d9b72d9a3a0";
+const API_BASE = "/api/football";
+let API_KEY    = ""; // v6.0: secret moved to local background service (.env)
 
 const LS_PREDS    = "omega_preds_v5.0";
 const LS_SETTINGS = "omega_settings_v5.0";
@@ -61,7 +61,7 @@ const ACRONYM_DICT = {
   // ── Value & Money management ──────────────────────────────────
   'EV%':      'Expected Value % (Αναμενόμενη Αξία) — (Πιθανότητα μοντέλου × Απόδοση book) − 1.\nΠ.χ. μοντέλο δίνει 60%, book δίνει 1.90 → EV% = (0.60×1.90)−1 = +14%.\nΠαίζουμε ΜΟΝΟ θετικό EV (πράσινο). Μακροπρόθεσμα κερδοφόρο.',
   'Kelly':    'Kelly Criterion (Κριτήριο Kelly) — Μαθηματικός τύπος: ποντάρεις ακριβώς το σωστό ποσό βάσει bankroll & EV%.\nΤο APEX χρησιμοποιεί Fractional Kelly 25% — χρυσή τομή: μεγιστοποιείς κέρδη χωρίς χρεοκοπία σε κακό σερί.',
-  'Vault':    'Vault — LocalStorage αποθήκη ιστορικών προβλέψεων που τροφοδοτεί το Audit & Auto-Calibration',
+  'Vault':    'Vault — Μόνιμη αποθήκη ιστορικών προβλέψεων. Στη v6.0 συγχρονίζεται με το Background Engine / SQLite και τροφοδοτεί Audit, Auto-Calibration και Precision Learning.',
 
   // ── Engine παράμετροι ─────────────────────────────────────────
   'xG Mult':  'xG Multiplier (Πολλαπλασιαστής) — Συντελεστής ανά πρωτάθλημα που βαθμονομεί τα "ωμά" xG.\n• Mult >1.0 (π.χ. Bundesliga 1.12): επιθετικό πρωτάθλημα, τα xG υποεκτιμούν\n• Mult <1.0 (π.χ. Serie A 0.95): αμυντικό, τα xG υπερεκτιμούν\nΡυθμίζεται αυτόματα από το Grid Search Auto-Calibration.',
@@ -99,7 +99,7 @@ Object.assign(ACRONYM_DICT, {
   'EV%':      'Αναμενόμενη Αξία (Expected Value %) — Πόσο κέρδος ή ζημία αναμένει θεωρητικά το μοντέλο ανά μονάδα πονταρίσματος με βάση πιθανότητα και απόδοση.',
   'EV':       'Αναμενόμενη Αξία (Expected Value) — Σύγκριση της πιθανότητας του APEX με την προσφερόμενη απόδοση. Θετικό EV σημαίνει θεωρητική αξία, όχι εγγυημένο κέρδος.',
   'Kelly':    'Κριτήριο Kelly — Μαθηματική μέθοδος υπολογισμού μεγέθους πονταρίσματος με βάση πιθανότητα, απόδοση και bankroll.',
-  'Vault':    'Αποθήκη προβλέψεων (Vault) — Τοπικό ιστορικό προβλέψεων που χρησιμοποιείται από Audit και βαθμονόμηση.',
+  'Vault':    'Αποθήκη προβλέψεων (Vault) — Μόνιμο ιστορικό που συγχρονίζεται με το Background Engine / SQLite και χρησιμοποιείται από Audit, βαθμονόμηση και Precision Learning.',
   'xG Mult':  'Πολλαπλασιαστής xG — Συντελεστής βαθμονόμησης που αυξάνει ή μειώνει τα xG ανά πρωτάθλημα.',
   'LRU':      'Λιγότερο πρόσφατα χρησιμοποιημένο (Least Recently Used) — Κανόνας cache που απομακρύνει πρώτα τα παλαιότερα αχρησιμοποίητα δεδομένα.',
   'ROI':      'Απόδοση επί των πονταρισμένων μονάδων (Return on Investment) — Καθαρό κέρδος ή ζημία ως ποσοστό του συνολικού stake.',
@@ -293,9 +293,9 @@ function _adaptApiRate(plan, headers){
 // ================================================================
 //  VERSION & BUILD INFO
 // ================================================================
-const APP_VERSION   = 'v5.9';
-const BUILD_DATE    = '19/09/2026';
-const BUILD_TIME    = 'STREAMLINED SCANNER · ATHENS TIME WINDOW · GLOBAL RESULTS · CMI';
+const APP_VERSION   = 'v6.0';
+const BUILD_DATE    = '20/09/2026';
+const BUILD_TIME    = 'BACKGROUND ENGINE · HEADLESS AUTO-RUN · SQLITE STATE · ATHENS TIME · CMI';
 const BUILD_LABEL   = `${APP_VERSION} · ${BUILD_DATE} ${BUILD_TIME}`;
 function updateLastCalibBadge(ts) {
   const el = document.getElementById('lastCalibBadge');
@@ -3260,6 +3260,9 @@ window.syncFixtureLifecycle=async function({silent=true,force=false}={}){
   }finally{_lifecycleSyncRunning=false;}
 };
 function startAutoSync(){
+  // v6.0: the invisible background runtime is orchestrated by server.js.
+  // Avoid duplicate browser lifecycle polling there; the visible dashboard keeps its 60s sync.
+  if(new URLSearchParams(location.search).get('background')==='1') return;
   if(_autoSyncTimer)clearInterval(_autoSyncTimer);
   const tick=async()=>{
     if(isRunning||_lifecycleSyncRunning) return;
@@ -6140,6 +6143,9 @@ function saveToVault(data){
       map.set(id,next);
     });
     localStorage.setItem(LS_PREDS,JSON.stringify(Array.from(map.values())));
+    // v6.0: mirror the full current scan to the background service so the
+    // dashboard can be closed and later restored without losing cards/results.
+    try{ window.APEX_BG?.saveCurrentScan?.(data); }catch{}
   }catch(e){ console.warn('[APEX] saveToVault:',e.message); }
 }
 window.clearVault=function(){if(confirm("Purge all data?")){localStorage.removeItem(LS_PREDS);try{localStorage.removeItem(LS_APL_MODEL);localStorage.removeItem(LS_APL_LOG);}catch{} adaptivePrecisionModel=null;adaptivePrecisionLog=[];showOk("Vault + Precision learning history purged.");updateAuditLeagueFilter();renderAdaptivePrecisionLab?.();}};
@@ -7477,6 +7483,8 @@ function _selfImproveDueCheck(){
   else _updateSelfImproveDueStatus();
 }
 window.startHourlySelfImprovement=function(){
+  // Headless v6.0 cycles are scheduled centrally by server.js to avoid duplicate training/API work.
+  if(new URLSearchParams(location.search).get('background')==='1') return;
   if(_selfImproveTimer) clearInterval(_selfImproveTimer);
   _selfImproveDueCheck();
   _selfImproveTimer=setInterval(_selfImproveDueCheck,60*1000);
