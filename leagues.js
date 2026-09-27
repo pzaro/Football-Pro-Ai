@@ -1,4 +1,4 @@
-// leagues.js — Βάση δεδομένων πρωταθλημάτων APEX OMEGA v5.0
+// leagues.js — Βάση δεδομένων πρωταθλημάτων APEX OMEGA v6.0 + UEFA Nations League
 // ─────────────────────────────────────────────────────────────
 // Κατηγορίες:
 //   GOLD   → υψηλή σκοραριστικότητα, καλή εφαρμογή Poisson (mult +12%)
@@ -12,6 +12,9 @@ const LEAGUES_DATA = [
   { id:2,   name:"Champions League"        },
   { id:3,   name:"Europa League"           },
   { id:848, name:"Conference League"       },
+
+  // ── UEFA National Team Competitions ──────────────────────
+  { id:5,   name:"UEFA Nations League"      },
 
   // ── England ───────────────────────────────────────────────
   { id:39,  name:"Premier League (EN)"     },   // TIGHT
@@ -60,6 +63,7 @@ const LEAGUES_DATA = [
 
   // ── Greece ────────────────────────────────────────────────
   { id:197, name:"Super League (GR)"       },   // TIGHT
+  { id:494, name:"Super League 2 (GR)"     },   // TRAP — 2nd tier, provisional calibration
 
   // ── ═══ ΒΟΡΕΙΕΣ ΧΩΡΕΣ ═══ ────────────────────────────────
 
@@ -124,6 +128,8 @@ const MY_LEAGUES_IDS  = [
   140,  // La Liga ES
   135,  // Serie A IT
   197,  // Super League GR
+  494,  // Super League 2 GR
+  5,    // UEFA Nations League — national teams
 ];
 
 // ── League avg goals per match (home + away) ──────────────────
@@ -154,6 +160,7 @@ const LEAGUE_AVG_GOALS = {
   140: 2.52,  // La Liga
   61:  2.45,  // Ligue 1
   197: 2.40,  // Super League GR
+  494: 2.30,  // Super League 2 GR — recent-season baseline; adaptive calibration can refine
   94:  2.45,  // Primeira Liga
   128: 2.30,  // Liga Profesional AR
   283: 2.35,  // SuperLiga RO
@@ -166,6 +173,7 @@ const LEAGUE_AVG_GOALS = {
   2:   2.55,  // Champions League
   3:   2.60,  // Europa League
   848: 2.50,  // Conference League
+  5:   2.50,  // UEFA Nations League — neutral baseline; adaptive calibration can refine
 };
 
 // ── League type classifiers ───────────────────────────────────
@@ -177,6 +185,7 @@ const TRAP_LEAGUES = new Set([
   136, 137, 141, // Serie B, Coppa Italia (IT), La Liga 2 (ES)
   79, 62,        // 2. Bundesliga (DE), Ligue 2 (FR)
   357, 395,      // Premier Division IE, NIFL Premiership NIR
+  494,           // Super League 2 (GR) — lower-tier variance
   239, 280, 268, // Colombia, Peru, Uruguay
   265,           // Chile
 ]);
@@ -238,6 +247,7 @@ const LEAGUES_HT_FACTORS = {
   203: 0.438,
   // Greece
   197: 0.435,
+  494: 0.430, // Super League 2 GR — provisional; learning layer can refine
   // Scandinavia / Nordic
   113: 0.430, // Allsvenskan (SE)
   103: 0.440, // Eliteserien (NO) — γκολ και στα 2 ημίχρονα
@@ -259,4 +269,5 @@ const LEAGUES_HT_FACTORS = {
   239: 0.432, 280: 0.430, 268: 0.432, 265: 0.432,
   // UEFA
   2:   0.430, 3:  0.430, 848: 0.432,
+  5:   0.430, // UEFA Nations League — national teams, neutral baseline
 };
