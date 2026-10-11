@@ -2948,10 +2948,10 @@ function liveCompactHTML(hName,aName,lp,li,{compact=false}={}){
     group(`xG live${li?` <span style="text-transform:none;font-weight:600;">(${li.xgSource==='provider'?'πάροχος':'από σουτ'})</span>`:''}`,xgFmt)+
   `</div>`;
 }
-function liveCompactForRecord(x){
+function liveCompactForRecord(x,{compact=true}={}){
   const st=x?.m?.fixture?.status?.short||''; if(!isLive(st)) return '';
   const lp=liveOutcomeProbs(x.hExp,x.aExp,x.m?.goals?.home,x.m?.goals?.away,x.m?.fixture?.status?.elapsed??x.liveIntel?.elapsed,x.liveIntel);
-  return liveCompactHTML(x.ht,x.at,lp,x.liveIntel,{compact:true});
+  return liveCompactHTML(x.ht,x.at,lp,x.liveIntel,{compact});
 }
 async function _liveIntelForFixture(lf){
   const k=String(lf.fixture.id); let h=null,a=null; const c=liveStatsCache.get(k);
@@ -5325,7 +5325,7 @@ function renderSummaryTable() {
               </div>`;
             })()}
           </td>
-          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${LIVE_SIMPLE?liveCompactForRecord(x):`${momentumBar}${nextGoalBadge}${sqdBadge}`}</td>
+          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${LIVE_SIMPLE?'':`${momentumBar}${nextGoalBadge}${sqdBadge}`}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outcomeMarket||x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>
@@ -5337,6 +5337,7 @@ function renderSummaryTable() {
           <td class="col-conf data-num" style="color:${confCol}; font-size:1.1rem;">${hasSignal ? conf.toFixed(0)+'%' : `<span style="color:var(--text-dim);font-size:0.8rem;">${conf.toFixed(0)}%</span>`}</td>
           <td class="col-signal" style="color:${omCol};font-weight:800;font-size:0.85rem;">${hasSignal ? (x.omegaPick||'—').split(' ').slice(0,3).join(' ') : '<span style="color:var(--text-dim);font-size:0.75rem;">— χαμηλό conf.</span>'}</td>
         </tr>
+        ${LIVE_SIMPLE&&live?`<tr class="live-subrow" onclick="toggleMatchDetails('${x.fixId}')" style="cursor:pointer;background:rgba(16,185,129,0.05);"><td colspan="10" style="padding:2px 16px 12px;border-top:none;text-align:left;">${liveCompactForRecord(x,{compact:false})}</td></tr>`:''}
         <tr id="details-${x.fixId}" style="display:none; background:var(--bg-surface);">
           ${buildAccordionHTML(x)}
         </tr>`;
