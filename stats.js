@@ -9,6 +9,14 @@ let API_KEY    = ""; // v6.0: secret moved to local background service (.env)
 const LS_PREDS    = "omega_preds_v5.0";
 const LS_SETTINGS = "omega_settings_v5.0";
 const LS_LGMODS   = "omega_lgmods_v5.0";
+// ── Απλοποίηση 2026-10-11 (βλ. IMPROVEMENT_LOG.md) ──
+// AUTO_PARAM_TUNING: false = τα Self-Improve / Auto-Calibration / Audit ΔΕΝ αλλάζουν πια παραμέτρους πρωταθλημάτων.
+//   Η αυτόματη μάθηση γίνεται μόνο από το Adaptive Precision Lab. Οι τρέχουσες παράμετροι μένουν «παγωμένες».
+// ENABLE_O35_PICK: false = χωρίς σύσταση/σήμα Over 3.5 (hold-out: 30% ευστοχία, κάτω από τη βάση 32%).
+// ENABLE_MARKET_BOMBS: false = χωρίς καρτέλα/ετικέτα Bombs. Τα Value Bets παραμένουν.
+const AUTO_PARAM_TUNING=false;
+const ENABLE_O35_PICK=false;
+const ENABLE_MARKET_BOMBS=false;
 const LS_BANKROLL = "omega_bankroll_v5.0";
 const LS_POSTMATCH_RANGE = "omega_postmatch_range_v5.0";
 const POSTMATCH_RANGES = new Set(["CURRENT","7","30","90","ALL"]);
@@ -1074,7 +1082,7 @@ function collectConfirmedMarketSignals(rec){
   const market=mp?.recommendedMarket||rec.outcomeMarket;
   const marketProb=Number(mp?.recommendedProb??rec.outcomeProb??0);
   if(['1','X','2','1X','X2','12'].includes(market) && marketProb>=0.65) add(`OUT_${market}`,`Σημείο ${market}`,'1X2 / DC',marketProb*100,{selection:market});
-  if(Number(pp.pO35)>=0.52 && tXG>=Number(lp.minXGO35??3.8)) add('O35','Over 3.5','Γκολ',Number(pp.pO35)*100);
+  if(ENABLE_O35_PICK && Number(pp.pO35)>=0.52 && tXG>=Number(lp.minXGO35??3.8)) add('O35','Over 3.5','Γκολ',Number(pp.pO35)*100);
   if(Number(pp.pO25)>=0.62 && tXG>=Number(lp.minXGO25??3.1)) add('O25','Over 2.5','Γκολ',Number(pp.pO25)*100);
   if(Number(pp.pU25)>=0.58 && tXG<=Number(lp.maxU25??1.8)) add('U25','Under 2.5','Γκολ',Number(pp.pU25)*100);
   if(Number(pp.pBTTS)>=0.68 && hXG>=1.10 && aXG>=1.10) add('BTTS','GG','BTTS',Number(pp.pBTTS)*100);
@@ -1082,7 +1090,8 @@ function collectConfirmedMarketSignals(rec){
   const cards=Number(rec.hS?.crd||0)+Number(rec.aS?.crd||0);
   if(cards>=Number(engineConfig?.minCards??6.1) && Math.abs(Number(rec.xgDiff||0))<0.45) add('CRD55','Over 5.5','Κάρτες',Math.min(99,Math.max(0,(cards-5)*20)));
   if(rec.exact && Number(rec.exactConf||0)>=70) add('EXACT','Ακριβές σκορ','Σκορ',Number(rec.exactConf),{scores:[rec.exact,rec.exact2].filter(Boolean)});
-  if(rec.htAnalysis?.htBest && Number(rec.htAnalysis?.htConf||0)>=70) add('HTEXACT','Σκορ ΗΤ','Ημίχρονο',Number(rec.htAnalysis.htConf),{scores:[`${rec.htAnalysis.htBest.h}-${rec.htAnalysis.htBest.a}`,rec.htAnalysis.htSecond?`${rec.htAnalysis.htSecond.h}-${rec.htAnalysis.htSecond.a}`:null].filter(Boolean)});
+  // Σκορ ημιχρόνου αφαιρέθηκε από τα επιβεβαιωμένα σήματα (2026-10-11): η «εμπιστοσύνη» έφτανε τεχνητά το 99%.
+  if(false && rec.htAnalysis?.htBest && Number(rec.htAnalysis?.htConf||0)>=70) add('HTEXACT','Σκορ ΗΤ','Ημίχρονο',Number(rec.htAnalysis.htConf),{scores:[`${rec.htAnalysis.htBest.h}-${rec.htAnalysis.htBest.a}`,rec.htAnalysis.htSecond?`${rec.htAnalysis.htSecond.h}-${rec.htAnalysis.htSecond.a}`:null].filter(Boolean)});
   if(Number(rec.offside?.pTotOff35)>=70) add('OFF35','Over 3.5','Οφσάιντ',Number(rec.offside.pTotOff35));
   // Ensure the primary signal is represented even when it has a special wording.
   const pick=String(rec.omegaPick||'');
@@ -2177,7 +2186,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,ctx={}){
     reason=`Ποντάρισμα: Φιλοξενούμενοι να προηγούνται στο ημίχρονο. Παίζουν επιθετικά από τα πρώτα λεπτά (xG ${xgDiff.toFixed(2)}).`;}
 
   // 3. OVER 3.5
-  else if(pp.pO35 >= 0.52 && tXG >= lp.minXGO35 && btts >= 1.30){
+  else if(ENABLE_O35_PICK && pp.pO35 >= 0.52 && tXG >= lp.minXGO35 && btts >= 1.30){
     omegaPick='🚀 ΠΑΝΩ ΑΠΟ 3.5 ΓΚΟΛ';pickScore=pp.pO35*100;
     reason=`Ποντάρισμα: Τουλάχιστον 4 γκολ. Και οι δύο ομάδες έχουν ισχυρή επίθεση — αναμένονται ${tXG.toFixed(1)} γκολ συνολικά (${pct(pp.pO35)} πιθανότητα).`;}
 
@@ -3699,9 +3708,9 @@ window.fetchAllOdds=async function(force=false){
     renderTopSections();
     renderSummaryTable();
 
-    const bombN=latestTopLists.bombs?.length||0;
+    const vbN=latestTopLists.valueBets?.length||0;
     if(priced>0){
-      showOk(`✅ Market scan: ${priced}/${total} αγώνες με odds · ${bombN} verified bombs${failed?` · ${failed} σφάλματα`:''}`);
+      showOk(`✅ Market scan: ${priced}/${total} αγώνες με odds · ${vbN} value bets${failed?` · ${failed} σφάλματα`:''}`);
     }else{
       showErr(`⚠️ Δεν βρέθηκαν διαθέσιμες pre-match αποδόσεις για ${total} αγώνες. Θα ξαναδοκιμαστούν στο επόμενο refresh.`);
     }
@@ -3709,7 +3718,7 @@ window.fetchAllOdds=async function(force=false){
     showErr('Σφάλμα market scan: '+e.message);
   }finally{
     setLoader(false);
-    if(btn){btn.disabled=false;btn.textContent='💎 Market Value / Bombs';}
+    if(btn){btn.disabled=false;btn.textContent='💎 Market Value';}
   }
 };
 
@@ -3730,7 +3739,7 @@ function renderValueBetsTab(bets) {
     return `<div style="text-align:center;color:var(--text-muted);padding:30px 20px;">
       <div style="font-size:2rem;margin-bottom:10px;">💰</div>
       <div style="font-weight:700;margin-bottom:6px;">Δεν υπάρχουν Value Bets ακόμα</div>
-      <div style="font-size:0.82rem;">Πατήστε <b>💎 Market Value / Bombs</b> για no-vig σύγκριση APEX ↔ αγορά</div>
+      <div style="font-size:0.82rem;">Πατήστε <b>💎 Market Value</b> για no-vig σύγκριση APEX ↔ αγορά</div>
     </div>`;
   }
 
@@ -3930,6 +3939,10 @@ function computeBombScore(rec){
 
 function buildBombsList(){
   const sd=(window.scannedMatchesData||[]).filter(x=>{const st=x.m?.fixture?.status?.short||'';return !isFinished(st)&&!isLive(st);});
+  if(!ENABLE_MARKET_BOMBS){
+    sd.forEach(rec=>{rec.marketBomb=null;rec.marketBombVerified=false;rec.isBomb=!!(rec.omegaPick||'').includes('💣');});
+    latestTopLists.bombs=[]; latestBombDiagnostics=[]; return;
+  }
   const bombs=[];
   const diagnostics=[];
 
@@ -4066,7 +4079,7 @@ function renderTopSections(){
   const vbCount = latestTopLists.valueBets.length;
   const tabs=[
     {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
-    {id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'},
+    ...(!ENABLE_MARKET_BOMBS?[]:[{id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'}]),
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
     {id:'precision',lbl:`🧠 Precision 1X2`,                                 d:latestTopLists.precision||[],sk:null,          sl:'META'},
@@ -5638,7 +5651,7 @@ window.runCustomAudit = async function(autoMode = false) {
     try{ localStorage.setItem(LS_PREDS, JSON.stringify(store)); }catch{}
 
     // ── Auto-Calibration: τρέχει αμέσως ──────────────────────
-    if(calibRecs.length >= CALIB_MIN_N) {
+    if(AUTO_PARAM_TUNING && calibRecs.length >= CALIB_MIN_N) {
       setProgress(95, 'Grid Search calibration…');
       window._lastAuditCalibRecs = calibRecs;
       window.runAutoCalibration(calibRecs);
@@ -7320,6 +7333,7 @@ function gridSearchLeague(records, leagueId) {
  * Εφαρμόζει τα βέλτιστα parameters και αποθηκεύει.
  */
 window.applyCalibAdjustments = function(adjustmentsByLeague, options={}) {
+  if(!AUTO_PARAM_TUNING) return 0; // παγωμένες παράμετροι — βλ. AUTO_PARAM_TUNING
   const applied = [];
   Object.entries(adjustmentsByLeague).forEach(([lid, data]) => {
     const id = parseInt(lid);
@@ -7474,7 +7488,7 @@ window.runHourlySelfImprove=async function(manual=false){
       return true;
     }
     const byLeague={}; calib.forEach(r=>{(byLeague[r.leagueId]??=[]).push(r);});
-    const adjustments=_safeHourlyAdjustments(byLeague);
+    const adjustments=AUTO_PARAM_TUNING?_safeHourlyAdjustments(byLeague):{};
     const leagueN=Object.keys(adjustments).length;
     let applied=0;
     if(leagueN){
@@ -7531,6 +7545,7 @@ window.startHourlySelfImprovement=function(){
  * χωρίς να ρωτά τον χρήστη.
  */
 window.autoCalibrate = function() {
+  if(!AUTO_PARAM_TUNING) return;
   try {
     // Φόρτωσε όλα τα settled ματς από το Vault
     const store = JSON.parse(localStorage.getItem(LS_PREDS) || '[]');
