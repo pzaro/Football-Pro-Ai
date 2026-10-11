@@ -4160,10 +4160,45 @@ function rebuildTopLists(){
   latestTopLists.players = allP;
 }
 
+// ── Φίλτρο 70%+ / Top 10 (βαθμονομημένες πιθανότητες· backtest 97.188 αγώνων: 70–80% → 83.7% σωστά) ──
+const PICK70_MIN=0.70;
+let _only70=false; try{_only70=localStorage.getItem('apex_only70')==='1';}catch{}
+window.toggleOnly70=function(on){_only70=!!on;try{localStorage.setItem('apex_only70',_only70?'1':'0');}catch{};renderSummaryTable();};
+function picks70(x){
+  const pp=x?.pp||{}; const n=v=>Number.isFinite(Number(v))?Number(v):0;
+  const A=[['1',n(pp.pHome)],['Χ',n(pp.pDraw)],['2',n(pp.pAway)]].filter(a=>a[1]>=PICK70_MIN).sort((a,b)=>b[1]-a[1]);
+  const D=[['1Χ',n(pp.p1X)||n(pp.pHome)+n(pp.pDraw)],['Χ2',n(pp.pX2)||n(pp.pDraw)+n(pp.pAway)]].filter(a=>a[1]>=PICK70_MIN).sort((a,b)=>b[1]-a[1]);
+  const G=[['Over 2.5',n(pp.pO25)],['Under 2.5',n(pp.pU25)],['Goal-Goal',n(pp.pBTTS)]].filter(a=>a[1]>=PICK70_MIN).sort((a,b)=>b[1]-a[1]);
+  const out=[]; if(A.length)out.push(A[0]); else if(D.length)out.push(D[0]); if(G.length)out.push(G[0]);
+  return out.map(([label,p])=>({label,p})).sort((a,b)=>b.p-a.p);
+}
+function _pick70Badges(list,{big=false}={}){
+  return list.map(k=>`<span style="display:inline-flex;align-items:center;gap:6px;background:#16a34a;color:#fff;border-radius:7px;padding:${big?'5px 10px':'2px 7px'};font-weight:900;font-size:${big?'.95rem':'.72rem'};margin:2px 6px 2px 0;">${esc(k.label)} <span style="font-family:var(--font-mono);">${Math.round(k.p*100)}%</span></span>`).join('');
+}
+function top70List(limit=10){
+  const rows=[];
+  for(const x of (window.scannedMatchesData||[])){
+    const st=x?.m?.fixture?.status?.short||''; if(isFinished(st)||isLive(st)) continue;
+    const k=picks70(x); if(!k.length) continue;
+    rows.push({x,k,best:k[0].p});
+  }
+  return rows.sort((a,b)=>b.best-a.best).slice(0,limit);
+}
+function renderTop70Tab(list){
+  if(!list.length) return `<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχει αγώνας με πιθανότητα ≥70% στο τρέχον scan.</div>`;
+  return `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;">Οι 10 πιο πιθανές προβλέψεις (≥70%) των αγώνων που δεν έχουν αρχίσει, σε φθίνουσα σειρά. Ιστορικά (backtest 97.188 αγώνων): όταν το APEX έλεγε 70–80%, βγήκε 83.7%.</div><div style="display:flex;flex-direction:column;gap:10px;">`+
+    list.map(({x,k},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
+      <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
+      <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}<div style="margin-top:5px;">${_pick70Badges(k,{big:true})}</div></div>
+      <div style="text-align:right;flex-shrink:0;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:#16a34a;">${Math.round(k[0].p*100)}%</div><div style="font-size:.62rem;color:var(--text-muted);font-weight:700;">ΠΙΘΑΝΟΤΗΤΑ</div></div>
+    </div>`).join('')+`</div>`;
+}
+
 function renderTopSections(){
   if(!latestTopLists.valueBets) latestTopLists.valueBets = [];
   const vbCount = latestTopLists.valueBets.length;
   const tabs=[
+    {id:'top70',lbl:`🎯 Top 10 · 70%+`,d:top70List(10),sk:null,sl:null},
     {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
     ...(!ENABLE_MARKET_BOMBS?[]:[{id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'}]),
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
@@ -4194,7 +4229,9 @@ function renderTopSections(){
   html+=`</div>`;
   tabs.forEach((tab,i)=>{
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
-    if(tab.id==='players'){
+    if(tab.id==='top70'){
+      html += renderTop70Tab(tab.d);
+    } else if(tab.id==='players'){
       html += renderPlayersTab(tab.d);
     } else if(tab.id==='valuebets'){
       html += renderValueBetsTab(tab.d);
@@ -5231,7 +5268,8 @@ window.syncPostMatchHistory=async function(){
 function renderSummaryTable() {
   const sec = document.getElementById('summarySection'); if(!sec) return;
   const sd = window.scannedMatchesData || [];
-  const activeMatches = sd.filter(d => !isFinished(d.m?.fixture?.status?.short));
+  const activeAll = sd.filter(d => !isFinished(d.m?.fixture?.status?.short));
+  const activeMatches = _only70 ? activeAll.filter(d=>isLive(d.m?.fixture?.status?.short||'')||picks70(d).length).sort((a,b)=>(picks70(b)[0]?.p||0)-(picks70(a)[0]?.p||0)) : activeAll;
   const currentFinished = sd.filter(d => isFinished(d.m?.fixture?.status?.short));
   const postMeta = _pmDataset(currentFinished);
   const finishedMatches = postMeta.matches;
@@ -5240,7 +5278,7 @@ function renderSummaryTable() {
   let finalHtml = '';
 
   // 1. ACTIVE MATCHES
-  if (activeMatches.length > 0) {
+  if (activeAll.length > 0) {
     const grouped={}; activeMatches.forEach(d=>{ if(!grouped[d.lg]) grouped[d.lg]=[]; grouped[d.lg].push(d); });
     let rows='';
     for(const[lg,matches] of Object.entries(grouped)){
@@ -5320,6 +5358,7 @@ function renderSummaryTable() {
               ${injBadge}${lineupSrcBadge}${subFlash}
             </div>
             ${competitionContextHTML(x,{compact:true})}
+            ${_only70?`<div style="margin-top:4px;">${_pick70Badges(picks70(x))}</div>`:''}
             ${(() => {
               const hPos = x.hr, aPos = x.ar;
               if(!hPos || hPos >= 99) return '';
@@ -5352,7 +5391,7 @@ function renderSummaryTable() {
     }
     finalHtml += `<div class="quant-panel" style="padding:0;overflow:hidden;">
       <div style="padding:15px 20px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:1px;">📊 Match Dashboard (Active) — ${activeMatches.length} αγώνες</span><span style="font-size:.64rem;color:var(--text-muted);font-family:var(--font-mono);">🕒 όλες οι ώρες: Ελλάδα (Europe/Athens)</span>
+        <span style="font-size:0.95rem;font-weight:800;color:var(--accent-blue);text-transform:uppercase;letter-spacing:1px;">📊 Match Dashboard (Active) — ${activeMatches.length}${_only70?` / ${activeAll.length}`:''} αγώνες</span><label style="display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:800;color:${_only70?'#16a34a':'var(--text-muted)'};cursor:pointer;margin-left:auto;margin-right:14px;"><input type="checkbox" ${_only70?'checked':''} onchange="window.toggleOnly70(this.checked)" style="width:16px;height:16px;"> Μόνο 70%+</label><span style="font-size:.64rem;color:var(--text-muted);font-family:var(--font-mono);">🕒 όλες οι ώρες: Ελλάδα (Europe/Athens)</span>
       </div>${rows}</div>`;
   }
 
