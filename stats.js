@@ -3612,6 +3612,34 @@ function extractValueBets(rec, odds) {
   return bets;
 }
 
+// ================================================================
+//  MARKET BLEND 1X2 (2026-10-11): γραμμικό μείγμα πιθανοτήτων μοντέλου με no-vig αγορά.
+//  Walk-forward hold-out n=100: Brier 0.637→0.566, LogLoss 1.074→0.955, ECE 0.153→0.122.
+//  Αναίρεση: MARKET_BLEND_W=0 (μόνο μοντέλο). Οι αρχικές τιμές μοντέλου κρατιούνται στο pp.model.
+// ================================================================
+const MARKET_BLEND_W=0.7;
+function _mbRestoreModel(pp){
+  if(pp&&pp.model){ Object.assign(pp,pp.model); delete pp.model; delete pp.marketBlendW; }
+}
+function applyMarketBlend(rec){
+  const pp=rec?.pp, mk=rec?.odds?._market;
+  if(!pp||!mk||!(MARKET_BLEND_W>0)) return false;
+  const m=[Number(mk.home?.noVigProb),Number(mk.draw?.noVigProb),Number(mk.away?.noVigProb)];
+  if(!m.every(v=>Number.isFinite(v)&&v>0&&v<1)) return false;
+  const ms=m[0]+m[1]+m[2]; if(!(ms>0.9&&ms<1.1)) return false;
+  const base=pp.model||{pHome:pp.pHome,pDraw:pp.pDraw,pAway:pp.pAway,p1X:pp.p1X,pX2:pp.pX2,p12:pp.p12};
+  const q=[Number(base.pHome),Number(base.pDraw),Number(base.pAway)];
+  if(!q.every(v=>Number.isFinite(v)&&v>=0)) return false;
+  const qs=q[0]+q[1]+q[2]; if(!(qs>0)) return false;
+  const w=clamp(MARKET_BLEND_W,0,1);
+  const b=q.map((v,i)=>(1-w)*(v/qs)+w*(m[i]/ms));
+  pp.model=base;
+  pp.pHome=b[0]; pp.pDraw=b[1]; pp.pAway=b[2];
+  pp.p1X=clamp(b[0]+b[1],0,1); pp.pX2=clamp(b[1]+b[2],0,1); pp.p12=clamp(b[0]+b[2],0,1);
+  pp.marketBlendW=w;
+  return true;
+}
+
 /**
  * Φέρνει odds για όλους τους ενεργούς αγώνες και αμέσως ξαναχτίζει
  * Value Bets + Verified Market Bombs.
@@ -3638,13 +3666,16 @@ window.fetchAllOdds=async function(force=false){
       await Promise.all(batch.map(async rec=>{
         try{
           if(!force&&_oddsLoadedFixtures.has(rec.fixId)&&rec.odds){
+            applyMarketBlend(rec);
             priced+=(rec.odds?._meta?.bookmakerCount||0)>0?1:0;
             booksSeen=Math.max(booksSeen,rec.odds?._meta?.bookmakerCount||0);
             return;
           }
           const odds=await fetchOddsForFixture(rec.fixId,force);
           rec.odds=odds;
+          _mbRestoreModel(rec.pp); // value bets συγκρίνουν το καθαρό μοντέλο με την αγορά
           rec.valueBets=extractValueBets(rec,odds);
+          applyMarketBlend(rec);
           if((odds?._meta?.bookmakerCount||0)>0){
             _oddsLoadedFixtures.add(rec.fixId);
             priced++;
