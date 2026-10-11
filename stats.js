@@ -17,6 +17,15 @@ const LS_LGMODS   = "omega_lgmods_v5.0";
 const AUTO_PARAM_TUNING=false;
 const ENABLE_O35_PICK=false;
 const ENABLE_MARKET_BOMBS=false;
+// ── Απλοποίηση #2 (2026-10-11, κατόπιν αιτήματος του χρήστη) — αναίρεση: false → true ──
+// ENABLE_EXACT_SIGNAL: false = το ακριβές σκορ δεν είναι πια «επιβεβαιωμένο σήμα» ούτε καρτέλα (live: 31/163 = 19% με δηλωμένη εμπιστοσύνη 70–99%).
+// ENABLE_PROP_PICKS: false = χωρίς συστάσεις/σήματα κόρνερ, κάρτες, οφσάιντ (σπάνια, χωρίς αποδεδειγμένη ευστοχία).
+// SHOW_ENGINE_PARAMS: false = κρυφό το πάνελ Global Engine Parameters (οι τιμές μένουν ίδιες).
+// SHOW_AUTOLEARN_ROW: false = κρυφή η γραμμή «Hourly Auto-Learn» (διπλότυπο του «Learn now»· το ωριαίο Auto-Learn συνεχίζει κανονικά).
+const ENABLE_EXACT_SIGNAL=false;
+const ENABLE_PROP_PICKS=false;
+const SHOW_ENGINE_PARAMS=false;
+const SHOW_AUTOLEARN_ROW=false;
 const LS_BANKROLL = "omega_bankroll_v5.0";
 const LS_POSTMATCH_RANGE = "omega_postmatch_range_v5.0";
 const POSTMATCH_RANGES = new Set(["CURRENT","7","30","90","ALL"]);
@@ -1086,18 +1095,18 @@ function collectConfirmedMarketSignals(rec){
   if(Number(pp.pO25)>=0.62 && tXG>=Number(lp.minXGO25??3.1)) add('O25','Over 2.5','Γκολ',Number(pp.pO25)*100);
   if(Number(pp.pU25)>=0.58 && tXG<=Number(lp.maxU25??1.8)) add('U25','Under 2.5','Γκολ',Number(pp.pU25)*100);
   if(Number(pp.pBTTS)>=0.68 && hXG>=1.10 && aXG>=1.10) add('BTTS','GG','BTTS',Number(pp.pBTTS)*100);
-  if(Number(rec.cornerConf)>=72) add('COR85','Over 8.5','Κόρνερ',Number(rec.cornerConf));
+  if(ENABLE_PROP_PICKS && Number(rec.cornerConf)>=72) add('COR85','Over 8.5','Κόρνερ',Number(rec.cornerConf));
   const cards=Number(rec.hS?.crd||0)+Number(rec.aS?.crd||0);
-  if(cards>=Number(engineConfig?.minCards??6.1) && Math.abs(Number(rec.xgDiff||0))<0.45) add('CRD55','Over 5.5','Κάρτες',Math.min(99,Math.max(0,(cards-5)*20)));
-  if(rec.exact && Number(rec.exactConf||0)>=70) add('EXACT','Ακριβές σκορ','Σκορ',Number(rec.exactConf),{scores:[rec.exact,rec.exact2].filter(Boolean)});
+  if(ENABLE_PROP_PICKS && cards>=Number(engineConfig?.minCards??6.1) && Math.abs(Number(rec.xgDiff||0))<0.45) add('CRD55','Over 5.5','Κάρτες',Math.min(99,Math.max(0,(cards-5)*20)));
+  if(ENABLE_EXACT_SIGNAL && rec.exact && Number(rec.exactConf||0)>=70) add('EXACT','Ακριβές σκορ','Σκορ',Number(rec.exactConf),{scores:[rec.exact,rec.exact2].filter(Boolean)});
   // Σκορ ημιχρόνου αφαιρέθηκε από τα επιβεβαιωμένα σήματα (2026-10-11): η «εμπιστοσύνη» έφτανε τεχνητά το 99%.
   if(false && rec.htAnalysis?.htBest && Number(rec.htAnalysis?.htConf||0)>=70) add('HTEXACT','Σκορ ΗΤ','Ημίχρονο',Number(rec.htAnalysis.htConf),{scores:[`${rec.htAnalysis.htBest.h}-${rec.htAnalysis.htBest.a}`,rec.htAnalysis.htSecond?`${rec.htAnalysis.htSecond.h}-${rec.htAnalysis.htSecond.a}`:null].filter(Boolean)});
-  if(Number(rec.offside?.pTotOff35)>=70) add('OFF35','Over 3.5','Οφσάιντ',Number(rec.offside.pTotOff35));
+  if(ENABLE_PROP_PICKS && Number(rec.offside?.pTotOff35)>=70) add('OFF35','Over 3.5','Οφσάιντ',Number(rec.offside.pTotOff35));
   // Ensure the primary signal is represented even when it has a special wording.
   const pick=String(rec.omegaPick||'');
   if(pick && !pick.includes('ΧΩΡΙΣ') && !pick.includes('NO BET')){
-    if(pick.includes('ΚΟΡΝΕΡ')) add('COR85','Over 8.5','Κόρνερ',rec.cornerConf);
-    else if(pick.includes('ΚΑΡΤΕΣ')) add('CRD55','Over 5.5','Κάρτες',rec.strength);
+    if(pick.includes('ΚΟΡΝΕΡ')) { if(ENABLE_PROP_PICKS) add('COR85','Over 8.5','Κόρνερ',rec.cornerConf); }
+    else if(pick.includes('ΚΑΡΤΕΣ')) { if(ENABLE_PROP_PICKS) add('CRD55','Over 5.5','Κάρτες',rec.strength); }
     else if(pick.includes('ΠΑΝΩ ΑΠΟ 3.5')) add('O35','Over 3.5','Γκολ',rec.strength);
     else if(pick.includes('ΠΑΝΩ ΑΠΟ 2.5')) add('O25','Over 2.5','Γκολ',rec.strength);
     else if(pick.includes('ΚΑΤΩ ΑΠΟ 2.5')) add('U25','Under 2.5','Γκολ',rec.strength);
@@ -2225,10 +2234,10 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,ctx={}){
   }
 
   // 8. PROPS
-  else if(cornerRes.conf >= 72){
+  else if(ENABLE_PROP_PICKS && cornerRes.conf >= 72){
     omegaPick='🚩 ΠΑΝΩ ΑΠΟ 8.5 ΚΟΡΝΕΡ';pickScore=cornerRes.conf;
     reason=`Ποντάρισμα: Πάνω από 8 κόρνερ. Επιθετικό ματς με πολλές τελικές — αναμένονται ${cornerRes.expCor.toFixed(1)} κόρνερ συνολικά.`;}
-  else if(totCards >= engineConfig.minCards && Math.abs(xgDiff) < 0.45){
+  else if(ENABLE_PROP_PICKS && totCards >= engineConfig.minCards && Math.abs(xgDiff) < 0.45){
     omegaPick='🟨 ΠΑΝΩ ΑΠΟ 5.5 ΚΑΡΤΕΣ';pickScore=clamp((totCards-5.0)*20,0,85);
     reason=`Ποντάρισμα: Πάνω από 5 κάρτες. Ισορροπημένο και αγωνιστικό ματς — αναμένονται ${totCards.toFixed(1)} κάρτες συνολικά.`;}
   
@@ -4085,8 +4094,8 @@ function renderTopSections(){
     {id:'precision',lbl:`🧠 Precision 1X2`,                                 d:latestTopLists.precision||[],sk:null,          sl:'META'},
     {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
-    {id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'},
-    {id:'exact',    lbl:`🎯 Ακριβές`,                                      d:latestTopLists.exact,      sk:'exactConf',  sl:'CONF'},
+    ...(!ENABLE_PROP_PICKS?[]:[{id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'}]),
+    ...(!ENABLE_EXACT_SIGNAL?[]:[{id:'exact',    lbl:`🎯 Ακριβές`,                                      d:latestTopLists.exact,      sk:'exactConf',  sl:'CONF'}]),
     {id:'players',  lbl:'👥 Παίκτες',                                      d:latestTopLists.players,    sk:null,         sl:null}
   ];
   const t=document.getElementById('topSection');if(!t)return;
@@ -8146,3 +8155,6 @@ window.addEventListener('DOMContentLoaded',()=>{
   window.onScanModeChange?.(false);
   const d15=new Date();d15.setDate(d15.getDate()-15);const as=document.getElementById('auditStart'),ae=document.getElementById('auditEnd');if(as)as.value=d15.toISOString().split('T')[0];if(ae)ae.value=today;
 });
+
+// Απλοποίηση #2: απόκρυψη πάνελ (αναίρεση με SHOW_ENGINE_PARAMS / SHOW_AUTOLEARN_ROW = true)
+(function(){try{const e=document.getElementById('engineParamsPanel');if(e&&!SHOW_ENGINE_PARAMS)e.style.display='none';const a=document.getElementById('autoLearnRow');if(a&&!SHOW_AUTOLEARN_ROW)a.style.display='none';}catch{}})();
