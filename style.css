@@ -1904,3 +1904,14 @@ body {
 @media (max-width:480px){
   .scanner-window-grid{grid-template-columns:1fr;}
 }
+
+/* ================================================================
+   2026-10-11 — Σαφής σήμανση: «Ολοκληρώθηκε» ουδέτερο, σωστό = πράσινο, λάθος = κόκκινο
+   ================================================================ */
+.match-completed-badge{color:#ffffff!important;background:#475569!important;border:1px solid #334155!important;}
+.settled-signal-chip.won,
+.global-completed-result .settled-signal-chip.won{color:#ffffff!important;background:#16a34a!important;border-color:#15803d!important;}
+.settled-signal-chip.lost,
+.global-completed-result .settled-signal-chip.lost{color:#ffffff!important;background:#dc2626!important;border-color:#b91c1c!important;}
+.settled-signal-chip.won b,.settled-signal-chip.lost b{color:#ffffff!important;}
+.live-compact{margin-top:8px;}

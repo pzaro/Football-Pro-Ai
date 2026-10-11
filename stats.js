@@ -30,7 +30,11 @@ const SHOW_AUTOLEARN_ROW=false;
 // Το μοντέλο ήταν υπερβολικά σίγουρο και υποτιμούσε την έδρα (μέσο p(1)=0.378 έναντι 43.1% πραγματικά).
 // p' ∝ exp(log p / T + b): T=2.2 «ανοίγει» τις πιθανότητες, b = μετατόπιση υπέρ 1 / Χ (σε σχέση με το 2).
 const ENABLE_1X2_CALIBRATION=true;
+// MODEL_VERSION: αλλάζει ΜΟΝΟ όταν αλλάζει κάτι που επηρεάζει τις προβλέψεις (το backtest ξαναϋπολογίζει τότε όλους τους αγώνες).
+const MODEL_VERSION='2026-10-11-cal1';
 const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
+// LIVE_SIMPLE: true = απλή προβολή live (πιθανότητες τελικού 1/Χ/2, επόμενο γκολ, xG). false = η παλιά πλήρης προβολή.
+const LIVE_SIMPLE=true;
 const LS_BANKROLL = "omega_bankroll_v5.0";
 const LS_POSTMATCH_RANGE = "omega_postmatch_range_v5.0";
 const POSTMATCH_RANGES = new Set(["CURRENT","7","30","90","ALL"]);
@@ -1053,7 +1057,7 @@ function matchLifecycleHTML(rec,{compact=false}={}){
   const time=formatGreeceKickoff(rec,{withDate:!compact});
   if(st.finished){
     const score=(st.home!==null&&st.home!==undefined&&st.away!==null&&st.away!==undefined)?`${st.home}–${st.away}`:'—';
-    return `<span class="match-completed-badge">✓ ΟΛΟΚΛΗΡΩΘΗΚΕ</span><span class="match-final-score-badge">FT ${score}</span><span class="match-greece-time" title="Ώρα έναρξης Ελλάδος">🇬🇷 ${time}</span>`;
+    return `<span class="match-completed-badge">🏁 ΟΛΟΚΛΗΡΩΘΗΚΕ</span><span class="match-final-score-badge">FT ${score}</span><span class="match-greece-time" title="Ώρα έναρξης Ελλάδος">🇬🇷 ${time}</span>`;
   }
   if(st.live){
     const score=(st.home!==null&&st.home!==undefined&&st.away!==null&&st.away!==undefined)?`${st.home}–${st.away}`:'0–0';
@@ -1158,7 +1162,7 @@ function globalCompletedResultHTML(rec,{compact=true}={}){
   if(!st.finished) return '';
   const score=(st.home!==null&&st.home!==undefined&&st.away!==null&&st.away!==undefined)?`${st.home}–${st.away}`:'—';
   return `<div class="global-completed-result ${compact?'compact':''}">
-    <div class="global-completed-head"><span class="match-completed-badge">✓ ΟΛΟΚΛΗΡΩΘΗΚΕ</span><span class="match-final-score-badge">FT ${score}</span></div>
+    <div class="global-completed-head"><span class="match-completed-badge">🏁 ΟΛΟΚΛΗΡΩΘΗΚΕ</span><span class="match-final-score-badge">FT ${score}</span></div>
     ${confirmedMarketsSettlementHTML(src,{compact:true})}
   </div>`;
 }
@@ -2908,6 +2912,51 @@ function computeInPlayPick(baseRec,liveFixture){
   return{inPlayPick,inPlayConf:clamp(inPlayConf,0,99),inPlayReason,hGoals,aGoals,elapsed,status,decayed,ppAdj};
 }
 
+// ── LIVE απλή προβολή: πιθανότητες τελικού (1/Χ/2), επόμενο γκολ, xG ─────────────
+// Υπόλοιπα γκολ ~ Poisson με λ = προ-αγώνα αναμενόμενα γκολ × υπόλοιπος χρόνος,
+// μισό-μισό με τον ρυθμό live xG όταν υπάρχουν στατιστικά (≥15').
+function liveOutcomeProbs(hExp,aExp,hG,aG,elapsed,li){
+  hG=Number(hG)||0; aG=Number(aG)||0;
+  const e=clamp(Number(elapsed)||0,0,95), minLeft=Math.max(90-e,0);
+  let hL=Math.max((Number(hExp)||1.2)*minLeft/90,0.005), aL=Math.max((Number(aExp)||1.0)*minLeft/90,0.005);
+  let src='μοντέλο';
+  if(li && Number(li.elapsed)>=15 && (li.hLiveXG>0||li.aLiveXG>0)){
+    const hR=Math.max(li.hLiveXG/li.elapsed*minLeft,0.005), aR=Math.max(li.aLiveXG/li.elapsed*minLeft,0.005);
+    hL=0.5*hL+0.5*hR; aL=0.5*aL+0.5*aR; src='μοντέλο + live xG';
+  }
+  let p1=0,pX=0,p2=0;
+  for(let i=0;i<=9;i++){const pi=poissonProb(hL,i);for(let j=0;j<=9;j++){const p=pi*poissonProb(aL,j);const fh=hG+i,fa=aG+j;if(fh>fa)p1+=p;else if(fh<fa)p2+=p;else pX+=p;}}
+  const z=p1+pX+p2||1; p1/=z; pX/=z; p2/=z;
+  const tot=hL+aL, pNone=Math.exp(-tot);
+  return {p1,pX,p2,pNextH:(1-pNone)*hL/tot,pNextA:(1-pNone)*aL/tot,pNone,src};
+}
+function _livePct(v){return `${Math.round((Number(v)||0)*100)}%`;}
+function liveCompactHTML(hName,aName,lp,li,{compact=false}={}){
+  if(!lp) return '';
+  const best=Math.max(lp.p1,lp.pX,lp.p2);
+  const cell=(lbl,v,isBest)=>`<div style="flex:1;min-width:${compact?44:64}px;text-align:center;padding:${compact?'3px 4px':'6px 6px'};border-radius:6px;${isBest?'background:#16a34a;color:#fff;':'background:var(--bg-base);'}"><div style="font-size:${compact?'.55rem':'.62rem'};font-weight:800;opacity:.85;">${lbl}</div><div style="font-family:var(--font-mono);font-weight:900;font-size:${compact?'.78rem':'1rem'};">${_livePct(v)}</div></div>`;
+  const row=(title,cells)=>`<div style="margin-top:${compact?4:8}px;"><div style="font-size:${compact?'.55rem':'.62rem'};color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">${title}</div><div style="display:flex;gap:4px;">${cells}</div></div>`;
+  const nb=Math.max(lp.pNextH,lp.pNone,lp.pNextA);
+  const xg=li?`🏠 ${Number(li.hLiveXG).toFixed(2)} – ${Number(li.aLiveXG).toFixed(2)} ✈️ <span style="color:var(--text-muted);font-weight:600;">(${li.xgSource==='provider'?'πάροχος':'εκτίμηση από σουτ'})</span>`:'<span style="color:var(--text-muted);">αναμονή στατιστικών…</span>';
+  return `<div class="live-compact">`+
+    row('Τελικό αποτέλεσμα',cell('1',lp.p1,lp.p1===best)+cell('Χ',lp.pX,lp.pX===best)+cell('2',lp.p2,lp.p2===best))+
+    row('Επόμενο γκολ',cell('🏠 '+(compact?'':esc(hName||'')),lp.pNextH,lp.pNextH===nb)+cell('Κανένα',lp.pNone,lp.pNone===nb)+cell('✈️ '+(compact?'':esc(aName||'')),lp.pNextA,lp.pNextA===nb))+
+    `<div style="margin-top:${compact?4:8}px;font-size:${compact?'.62rem':'.72rem'};font-weight:800;">xG live: <span style="font-family:var(--font-mono);">${xg}</span></div>`+
+    (compact?'':`<div style="margin-top:4px;font-size:.58rem;color:var(--text-dim);">Εκτίμηση: ${esc(lp.src)}</div>`)+
+  `</div>`;
+}
+function liveCompactForRecord(x){
+  const st=x?.m?.fixture?.status?.short||''; if(!isLive(st)) return '';
+  const lp=liveOutcomeProbs(x.hExp,x.aExp,x.m?.goals?.home,x.m?.goals?.away,x.m?.fixture?.status?.elapsed??x.liveIntel?.elapsed,x.liveIntel);
+  return liveCompactHTML(x.ht,x.at,lp,x.liveIntel,{compact:true});
+}
+async function _liveIntelForFixture(lf){
+  const k=String(lf.fixture.id); let h=null,a=null; const c=liveStatsCache.get(k);
+  if(c&&Date.now()-c.ts<110000){h=c.h;a=c.a;}
+  else{ try{const r=await apiReq(`fixtures/statistics?fixture=${k}`); if(r?.response?.length>=2){h=r.response[0].statistics;a=r.response[1].statistics;liveStatsCache.set(k,{h,a,ts:Date.now()});}}catch{} }
+  return (h&&a)?computeLiveIntelligence(h,a,lf.fixture.status.elapsed||1):null;
+}
+
 // ── Live Tracker Engine ───────────────────────────────────────────────────────
 window.startLiveTracker=async function(){
   if(isLiveTracking)return;
@@ -2938,7 +2987,7 @@ async function _liveTrackerTick(){
     for(const lf of all){
       const fixId=lf.fixture.id;
       const preMatch=(window.scannedMatchesData||[]).find(r=>r.fixId===fixId);
-      let inPlay=null;
+      let inPlay=null, expH=preMatch?.hExp, expA=preMatch?.aExp;
       if(preMatch){inPlay=computeInPlayPick(preMatch,lf);}
       else{
         try{
@@ -2946,17 +2995,19 @@ async function _liveTrackerTick(){
           const lp=getLeagueParams(lf.league.id);const hXG=Number(hS.fXG)*lp.mult,aXG=Number(aS.fXG)*lp.mult;
           const tXG=hXG+aXG;const res2=computePick(hXG,aXG,tXG,Math.min(hXG,aXG),lp,hS,aS,lf.league.id);
           const syn={fixId,ht:lf.teams.home.name,at:lf.teams.away.name,lg:lf.league.name,leagueId:lf.league.id,hExp:res2.hExp,aExp:res2.aExp,omegaPick:res2.omegaPick,strength:res2.pickScore,tXG,hS,aS};
-          inPlay=computeInPlayPick(syn,lf);
+          inPlay=computeInPlayPick(syn,lf); expH=res2.hExp; expA=res2.aExp;
         }catch{}
       }
       const prev=liveMatchesState[fixId];
-      if(prev&&inPlay&&prev.inPlayPick!==inPlay.inPlayPick){
+      if(!LIVE_SIMPLE&&prev&&inPlay&&prev.inPlayPick!==inPlay.inPlayPick){
         const alert={time:new Date().toLocaleTimeString('el-GR',{timeZone:GREECE_TIME_ZONE,hour:'2-digit',minute:'2-digit'}),fixId,ht:lf.teams.home.name,at:lf.teams.away.name,elapsed:lf.fixture.status.elapsed,from:prev.inPlayPick,to:inPlay.inPlayPick,score:`${lf.goals.home}-${lf.goals.away}`};
         liveAlerts.unshift(alert);if(liveAlerts.length>20)liveAlerts.pop();
         _flashSignalAlert(alert);
         try{localStorage.setItem(LS_LIVE_ALERTS,JSON.stringify(liveAlerts.slice(0,20)));}catch{}
       }
-      liveMatchesState[fixId]={...inPlay,lf};liveRecs.push({lf,inPlay,preMatch});
+      let li=null, liveP=null;
+      if(LIVE_SIMPLE){ li=preMatch?.liveIntel||await _liveIntelForFixture(lf); liveP=liveOutcomeProbs(expH,expA,lf.goals?.home,lf.goals?.away,lf.fixture?.status?.elapsed,li); }
+      liveMatchesState[fixId]={...inPlay,lf};liveRecs.push({lf,inPlay,preMatch,li,liveP});
     }
     _renderLiveDashboard(liveRecs);_renderLiveAlerts();
     if(statusEl)statusEl.textContent=`Ενεργό — poll σε ${LIVE_POLL_MS/1000}s`;
@@ -2984,6 +3035,14 @@ function _renderLiveAlerts(){
 
 function _renderLiveDashboard(liveRecs){
   const el=document.getElementById('liveDashboard');if(!el)return;
+  if(LIVE_SIMPLE && liveRecs.length){
+    liveRecs.sort((a,b)=>(b.lf.fixture.status.elapsed||0)-(a.lf.fixture.status.elapsed||0));
+    el.innerHTML=liveRecs.map(({lf,li,liveP,preMatch})=>{
+      const hG=lf.goals?.home??0,aG=lf.goals?.away??0,st=lf.fixture.status.short,mn=lf.fixture.status.elapsed||0;
+      return `<div class="match-card" id="live-card-${lf.fixture.id}" style="border-color:rgba(16,185,129,0.35);"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div style="flex:1;min-width:150px;"><div class="match-league"><span class="live-dot"></span><span class="league-badge">${esc(st)}</span><span style="color:var(--text-muted);font-size:0.65rem;margin-left:4px;">${esc(lf.league.name)}</span></div><div style="font-weight:800;font-size:0.95rem;margin-top:6px;">🏠 ${esc(lf.teams.home.name)}</div><div style="font-weight:700;font-size:0.9rem;color:var(--text-muted);">✈️ ${esc(lf.teams.away.name)}</div></div><div style="text-align:center;min-width:90px;"><div style="font-size:2rem;font-weight:900;font-family:var(--font-mono);line-height:1;">${hG} - ${aG}</div><div style="font-size:0.75rem;color:var(--accent-green);font-weight:800;margin-top:3px;">${st==='HT'?'ΗΜΙΧΡΟΝΟ':mn+"'"}</div></div></div>${liveCompactHTML(lf.teams.home.name,lf.teams.away.name,liveP,li)}${preMatch?.omegaPick&&!String(preMatch.omegaPick).includes('ΧΩΡΙΣ')?`<div style="margin-top:6px;font-size:.62rem;color:var(--text-muted);">Πρό-αγώνα: ${esc(preMatch.omegaPick)}</div>`:''}</div>`;
+    }).join('');
+    return;
+  }
   if(!liveRecs.length){el.innerHTML=`<div style="text-align:center;color:var(--text-muted);padding:32px 0;font-size:0.8rem;">Δεν υπάρχουν live αγώνες για τα επιλεγμένα πρωταθλήματα.</div>`;return;}
   liveRecs.sort((a,b)=>{
     const aF=a.inPlay&&liveMatchesState[a.lf.fixture.id]?.inPlayPick!==a.preMatch?.omegaPick?1:0;
@@ -4361,7 +4420,7 @@ window.openMatchAnalysisDrawer=function(fixId){
   const finalScore=finished?`${rec.m?.goals?.home??rec.pmActualHome??'—'}–${rec.m?.goals?.away??rec.pmActualAway??'—'}`:null;
   const score=live ? ` · LIVE ${rec.m?.goals?.home??0}-${rec.m?.goals?.away??0}` : finished?` · FT ${finalScore}`:'';
   const liveBadge=live?'<span class="match-analysis-live-badge">● LIVE</span>':'';
-  const completedBadge=finished?'<span class="match-analysis-completed-badge">✓ ΟΛΟΚΛΗΡΩΘΗΚΕ</span>':'';
+  const completedBadge=finished?'<span class="match-analysis-completed-badge">🏁 ΟΛΟΚΛΗΡΩΘΗΚΕ</span>':'';
 
   document.getElementById('matchDrawerLeague').innerHTML=`${liveBadge}${completedBadge}<span>ΑΝΑΛΥΣΗ ΑΓΩΝΑ</span>`;
   document.getElementById('matchDrawerTitle').innerHTML=`<span>${esc(rec.ht||'—')}</span><span class="match-analysis-vs">vs</span><span>${esc(rec.at||'—')}</span>`;
@@ -4513,7 +4572,7 @@ function buildAccordionHTML(x) {
   const li = x.liveIntel || null; // Live Intelligence data (null αν δεν είναι live)
 
   // ── Live SQD + Shot Quality panel (μόνο αν είναι live) ──────────
-  const liveQualityPanel = li ? (() => {
+  const liveQualityPanel = (LIVE_SIMPLE && isLive(x.m?.fixture?.status?.short||'')) ? `<div class="accordion-card" style="border-color:rgba(74,222,128,0.35);"><h4 style="color:var(--accent-green);">⚡ Live</h4>${liveCompactHTML(x.ht,x.at,liveOutcomeProbs(x.hExp,x.aExp,x.m?.goals?.home,x.m?.goals?.away,x.m?.fixture?.status?.elapsed??li?.elapsed,li),li)}</div>` : li ? (() => {
     const sqd = li.sqd || 0;
     const sqdAbs = Math.abs(sqd);
     const hSide = sqd > 0.01;
@@ -5263,7 +5322,7 @@ function renderSummaryTable() {
               </div>`;
             })()}
           </td>
-          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${momentumBar}${nextGoalBadge}${sqdBadge}</td>
+          <td class="col-score data-num" style="color:${scoreCol};">${scoreStr}${liveExtra}${LIVE_SIMPLE?liveCompactForRecord(x):`${momentumBar}${nextGoalBadge}${sqdBadge}`}</td>
           <td class="col-1x2 data-num" style="font-size:1.1rem;">${x.outcomeMarket||x.outPick}</td>
           <td class="col-o25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('OVER 2')?'🔥':'-'}</td>
           <td class="col-u25 data-num" style="font-size:1.1rem;">${x.omegaPick?.includes('UNDER 2')?'🔒':'-'}</td>

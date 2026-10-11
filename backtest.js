@@ -592,8 +592,13 @@ async function main() {
   // 2) Στόχοι: τελειωμένοι αγώνες σεζόν που έχουν και την ΠΡΟΗΓΟΥΜΕΝΗ σεζόν φορτωμένη (ιστορικό φόρμας)
   // Έκδοση μοντέλου: αν άλλαξε το stats.js, οι παλιές προβλέψεις αρχειοθετούνται και ξαναϋπολογίζονται
   // (τα ιστορικά δεδομένα είναι ήδη στην κρυφή μνήμη, οπότε δεν ξοδεύονται ξανά κλήσεις API).
-  const modelHash = require('node:crypto').createHash('sha1').update(fs.readFileSync(path.join(ROOT, 'stats.js'))).digest('hex').slice(0, 10);
+  // Έκδοση μοντέλου = MODEL_VERSION από το stats.js (αλλαγές μόνο εμφάνισης δεν προκαλούν επανυπολογισμό).
+  const statsSrc = fs.readFileSync(path.join(ROOT, 'stats.js'), 'utf8');
+  const mv = statsSrc.match(/const MODEL_VERSION\s*=\s*['"]([^'"]+)['"]/);
+  const modelHash = mv ? mv[1] : require('node:crypto').createHash('sha1').update(statsSrc).digest('hex').slice(0, 10);
+  const SAME_MODEL = { '68f2e3d595': '2026-10-11-cal1' }; // ίδιο μοντέλο, πριν μπει το MODEL_VERSION
   let state = readJson(STATE_FILE, { done: {} });
+  if (state.modelHash && SAME_MODEL[state.modelHash] === modelHash) state.modelHash = modelHash;
   if (Object.keys(state.done || {}).length && state.modelHash !== modelHash) {
     const arch = path.join(BT_DIR, `predictions_${state.modelHash || 'v0'}.jsonl`);
     if (fs.existsSync(PRED_FILE)) fs.renameSync(PRED_FILE, arch);
