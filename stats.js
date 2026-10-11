@@ -35,6 +35,10 @@ const MODEL_VERSION='2026-10-11-cal1';
 const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
 // LIVE_SIMPLE: true = απλή προβολή live (πιθανότητες τελικού 1/Χ/2, επόμενο γκολ, xG). false = η παλιά πλήρης προβολή.
 const LIVE_SIMPLE=true;
+// SHOW_BET_JOURNAL: false = κρυφό το Bet Journal και τα κουμπιά «Log Bet/Καταγραφή» (κανένα καταγεγραμμένο στοίχημα· τα δεδομένα μένουν).
+// SHOW_SMART_AUDIT: false = κρυφά τα Run Audit / Purge / AI Advisor. Μένουν οι ημερομηνίες και το πρωτάθλημα, που τα χρησιμοποιεί το Adaptive Precision Lab.
+const SHOW_BET_JOURNAL=false;
+const SHOW_SMART_AUDIT=false;
 const LS_BANKROLL = "omega_bankroll_v5.0";
 const LS_POSTMATCH_RANGE = "omega_postmatch_range_v5.0";
 const POSTMATCH_RANGES = new Set(["CURRENT","7","30","90","ALL"]);
@@ -4528,7 +4532,7 @@ function renderTop3Certainty(bets) {
       <!-- Actions -->
       <div style="padding:10px 16px;border-top:1px solid var(--border-light);display:flex;gap:8px;flex-wrap:wrap;">
         <button onclick="window.openMatchAnalysisDrawer('${x.fixId}')" style="flex:1;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📊 Πλήρης Ανάλυση</button>
-        <button onclick="window.openLogBetModal('${x.fixId}')" style="flex:1;padding:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--accent-green);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Log Bet</button>
+        ${!SHOW_BET_JOURNAL?'':`<button onclick="window.openLogBetModal('${x.fixId}')" style="flex:1;padding:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--accent-green);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Log Bet</button>`}
       </div>
     </div>`;
   }).join('')}
@@ -4969,7 +4973,7 @@ function buildAccordionHTML(x) {
           <div style="background:var(--bg-surface);border-radius:5px;padding:8px;"><div style="color:var(--text-muted);margin-bottom:2px;">✈️ Defense</div><div style="font-family:var(--font-mono);font-weight:700;color:${x.dcResult.aDef<0.9?'var(--accent-green)':x.dcResult.aDef>1.1?'var(--accent-red)':'var(--text-main)'};">${x.dcResult.aDef?.toFixed(2)}</div></div>
         </div>
       </div>` : ''}
-      <button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Καταγραφή</button>
+      ${!SHOW_BET_JOURNAL?'':`<button onclick="window.openLogBetModal('${x.fixId}')" style="margin-top:14px;width:100%;padding:8px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:var(--accent-blue);border-radius:6px;cursor:pointer;font-weight:700;font-size:0.78rem;">📒 Καταγραφή</button>`}
       ${renderStabilitySignals(x)}
     </div>` : '';
 
@@ -8170,7 +8174,7 @@ window.addEventListener('DOMContentLoaded',()=>{
       const advSec=document.getElementById('advisorSection');
       if(advSec){
         // Bet Journal section
-        const bjSection=document.createElement('div');bjSection.id='betJournalSection';
+        const bjSection=document.createElement('div');bjSection.id='betJournalSection';if(!SHOW_BET_JOURNAL)bjSection.style.display='none';
         advSec.appendChild(bjSection);
         renderBetJournal();
       }
@@ -8229,4 +8233,5 @@ window.addEventListener('DOMContentLoaded',()=>{
 });
 
 // Απλοποίηση #2: απόκρυψη πάνελ (αναίρεση με SHOW_ENGINE_PARAMS / SHOW_AUTOLEARN_ROW = true)
+(function(){try{if(!SHOW_SMART_AUDIT){['auditRunGroup','auditPurgeGroup'].forEach(id=>{const g=document.getElementById(id);if(g)g.style.display='none';});const t=document.getElementById('auditPanelTitle');if(t)t.textContent='📅 Περίοδος εκπαίδευσης · Adaptive Precision Lab';const a=document.getElementById('auditSection');if(a)a.style.display='none';}}catch{}})();
 (function(){try{const e=document.getElementById('engineParamsPanel');if(e&&!SHOW_ENGINE_PARAMS)e.style.display='none';const a=document.getElementById('autoLearnRow');if(a&&!SHOW_AUTOLEARN_ROW)a.style.display='none';}catch{}})();

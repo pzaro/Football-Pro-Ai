@@ -284,7 +284,7 @@
     <!-- ── AUDIT ────────────────────────────────────────────── -->
     <div class="quant-panel">
       <div class="panel-title" style="margin-bottom:14px;">
-        <span>🗄️ Smart Audit &amp; AI Advisor</span>
+        <span id="auditPanelTitle">🗄️ Smart Audit &amp; AI Advisor</span>
       </div>
       <div class="toolbar">
         <div class="input-group">
@@ -301,11 +301,11 @@
             <option value="ALL">Global</option>
           </select>
         </div>
-        <div class="input-group" style="flex:0;">
+        <div class="input-group" id="auditRunGroup" style="flex:0;">
           <label class="input-label">&nbsp;</label>
           <button class="btn btn-purple" onclick="runCustomAudit()">Run Audit</button>
         </div>
-        <div class="input-group" style="flex:0;">
+        <div class="input-group" id="auditPurgeGroup" style="flex:0;">
           <label class="input-label">&nbsp;</label>
           <button class="btn btn-danger" onclick="clearVault()">Purge</button>
         </div>
