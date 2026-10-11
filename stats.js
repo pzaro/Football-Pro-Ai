@@ -39,6 +39,8 @@ const LIVE_SIMPLE=true;
 // SHOW_SMART_AUDIT: false = κρυφά τα Run Audit / Purge / AI Advisor. Μένουν οι ημερομηνίες και το πρωτάθλημα, που τα χρησιμοποιεί το Adaptive Precision Lab.
 const SHOW_BET_JOURNAL=false;
 const SHOW_SMART_AUDIT=false;
+// ENABLE_APL: false = το Adaptive Precision Lab δεν φιλτράρει συστάσεις, δεν εκπαιδεύεται και το πάνελ του κρύβεται (εκπαιδευόταν σε ~200 live αγώνες· το φίλτρο πλέον είναι η βαθμονομημένη πιθανότητα ≥70%, ελεγμένη σε 97.188 αγώνες).
+const ENABLE_APL=false;
 const LS_BANKROLL = "omega_bankroll_v5.0";
 const LS_POSTMATCH_RANGE = "omega_postmatch_range_v5.0";
 const POSTMATCH_RANGES = new Set(["CURRENT","7","30","90","ALL"]);
@@ -4166,7 +4168,7 @@ function renderTopSections(){
     ...(!ENABLE_MARKET_BOMBS?[]:[{id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'}]),
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
-    {id:'precision',lbl:`🧠 Precision 1X2`,                                 d:latestTopLists.precision||[],sk:null,          sl:'META'},
+    ...(!ENABLE_APL?[]:[{id:'precision',lbl:`🧠 Precision 1X2`,                                 d:latestTopLists.precision||[],sk:null,          sl:'META'}]),
     {id:'outcomes', lbl:'🏆 Αποτέλεσμα',                                   d:latestTopLists.outcomes,   sk:'strength',   sl:'CONF'},
     {id:'over25',   lbl:`🔥 Πάνω Γκολ`,                                   d:latestTopLists.over25,     sk:'tXG',        sl:acr('xG')},
     ...(!ENABLE_PROP_PICKS?[]:[{id:'corners',  lbl:'🚩 Κόρνερ',                                       d:latestTopLists.corners,    sk:'cornerConf', sl:'CONF'}]),
@@ -6099,6 +6101,7 @@ function _aplTrainFromExamples(examples,settings,scopeMeta={}){
   },preds:policyRows};
 }
 window.trainAdaptivePrecisionFromVault=function(opts={}){
+  if(!ENABLE_APL) return null;
   const store=JSON.parse(localStorage.getItem(LS_PREDS)||'[]'); const s=adaptivePrecisionSettings;
   const end=opts.end||todayISO(); const st=new Date(`${end}T00:00:00`);st.setDate(st.getDate()-s.windowDays);const start=opts.start||st.toISOString().slice(0,10);
   const league=opts.league||'ALL', examples=_aplExamplesFromStore(store,{start,end,league}); const trained=_aplTrainFromExamples(examples,s,{start,end,league});
@@ -6109,6 +6112,7 @@ window.trainAdaptivePrecisionFromVault=function(opts={}){
   return trained;
 };
 window.runAdaptivePrecisionLab=async function(opts={}){
+  if(!ENABLE_APL) return {skipped:true};
   if(isRunning&&!opts.background){showErr('Another process is running.');return;}
   const background=!!opts.background; if(!background){isRunning=true;setBtnsDisabled(true);setLoader(true,'Adaptive Precision Lab…');}
   try{
@@ -6131,6 +6135,7 @@ window.runAdaptivePrecisionLab=async function(opts={}){
   finally{if(!background){isRunning=false;setBtnsDisabled(false);setLoader(false);}}
 };
 window.applyAdaptivePrecisionToCurrentScan=function(){
+  if(!ENABLE_APL){(window.scannedMatchesData||[]).forEach(r=>{if(r)r.precision=null;});return 0;}
   const model=adaptivePrecisionModel; if(!model?.weights?.length) return 0; let n=0;
   (window.scannedMatchesData||[]).forEach(r=>{
     const pick=_aplPick(r); if(!pick){r.precision=null;return;} const f=_aplFeatureVector(r,pick);if(!f){r.precision=null;return;}
@@ -6139,7 +6144,7 @@ window.applyAdaptivePrecisionToCurrentScan=function(){
     r.precision={metaProb:meta,threshold,allowed,tier,target:model.settings?.targetAccuracy||adaptivePrecisionSettings.targetAccuracy,modelAccepted:!!model.metaModelAccepted};n++;
   }); return n;
 };
-function _aplAllowsRec(r){return !adaptivePrecisionSettings.applyGuard||!adaptivePrecisionModel||!r?.precision||r.precision.allowed;}
+function _aplAllowsRec(r){if(!ENABLE_APL)return true;return !adaptivePrecisionSettings.applyGuard||!adaptivePrecisionModel||!r?.precision||r.precision.allowed;}
 function _aplPct(v){return Number.isFinite(v)?`${(v*100).toFixed(1)}%`:'—';}
 function _aplCol(v){const p=v*100;return p>75?'var(--accent-green)':p<60?'var(--accent-red)':'var(--text-main)';}
 window.resetAdaptivePrecisionModel=function(){
@@ -8233,5 +8238,6 @@ window.addEventListener('DOMContentLoaded',()=>{
 });
 
 // Απλοποίηση #2: απόκρυψη πάνελ (αναίρεση με SHOW_ENGINE_PARAMS / SHOW_AUTOLEARN_ROW = true)
+(function(){try{if(!ENABLE_APL){['aplPanel','smartAuditPanel'].forEach(id=>{const g=document.getElementById(id);if(g)g.style.display='none';});}}catch{}})();
 (function(){try{if(!SHOW_SMART_AUDIT){['auditRunGroup','auditPurgeGroup'].forEach(id=>{const g=document.getElementById(id);if(g)g.style.display='none';});const t=document.getElementById('auditPanelTitle');if(t)t.textContent='📅 Περίοδος εκπαίδευσης · Adaptive Precision Lab';const a=document.getElementById('auditSection');if(a)a.style.display='none';}}catch{}})();
 (function(){try{const e=document.getElementById('engineParamsPanel');if(e&&!SHOW_ENGINE_PARAMS)e.style.display='none';const a=document.getElementById('autoLearnRow');if(a&&!SHOW_AUTOLEARN_ROW)a.style.display='none';}catch{}})();
