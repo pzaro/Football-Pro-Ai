@@ -96,17 +96,34 @@ function readAppState() {
 // ─────────────────────────────────────────────────────────────
 // Πραγματικό API (μόνο για ιστορικά δεδομένα, με όριο κλήσεων)
 // ─────────────────────────────────────────────────────────────
-let callsUsed = 0, budget = MAX_CALLS, budgetHit = false, lastCallAt = 0;
-const API_GAP_MS = Number(process.env.BACKTEST_API_GAP_MS || 160);
+let callsUsed = 0, budget = MAX_CALLS, budgetHit = false;
+const API_GAP_MS = Number(process.env.BACKTEST_API_GAP_MS || 220);  // ~270 κλήσεις/λεπτό: αφήνει χώρο και στην εφαρμογή
 class BudgetError extends Error {}
+
+// Ενιαίος «διαχειριστής ρυθμού»: όλες οι κλήσεις περνούν μία-μία με σταθερό κενό,
+// και όταν το API πει «πολλά αιτήματα» σταματούν ΟΛΕΣ μαζί μέχρι το επόμενο λεπτό.
+let _slot = Promise.resolve(), _nextAt = 0, _pauseUntil = 0;
+function takeSlot() {
+  const mine = _slot.then(async () => {
+    const now = Date.now();
+    const at = Math.max(_nextAt, _pauseUntil, now);
+    if (at > now) await sleep(at - now);
+    _nextAt = Date.now() + API_GAP_MS;
+  });
+  _slot = mine.catch(() => {});
+  return mine;
+}
+function pauseToNextMinute(extraMs = 1500) {
+  const now = Date.now();
+  const until = Math.ceil((now + 1) / 60000) * 60000 + extraMs;
+  if (until > _pauseUntil) { _pauseUntil = until; log(`Όριο ανά λεπτό — παύση ${Math.round((until - now) / 1000)}s`); }
+}
 
 async function realApi(p) {
   if (OFFLINE) throw new BudgetError('offline');
-  if (callsUsed >= budget) { budgetHit = true; throw new BudgetError('budget'); }
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const wait = Math.max(0, API_GAP_MS - (Date.now() - lastCallAt));
-    if (wait) await sleep(wait);
-    lastCallAt = Date.now();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (callsUsed >= budget) { budgetHit = true; throw new BudgetError('budget'); }
+    await takeSlot();
     callsUsed++;
     let r, data;
     try {
@@ -115,8 +132,10 @@ async function realApi(p) {
     } catch (e) { log('Σφάλμα δικτύου', p, e.message); await sleep(3000 * (attempt + 1)); continue; }
     const rem = parseInt(r.headers.get('x-ratelimit-requests-remaining') || '', 10);
     if (Number.isFinite(rem) && rem <= RESERVE) { budget = Math.min(budget, callsUsed); }
+    const perMin = parseInt(r.headers.get('x-ratelimit-remaining') || '', 10);
+    if (Number.isFinite(perMin) && perMin <= 5) pauseToNextMinute();
     const errs = data?.errors && (Array.isArray(data.errors) ? data.errors.length : Object.keys(data.errors).length) ? JSON.stringify(data.errors) : '';
-    if (r.status === 429 || /rate|too many/i.test(errs)) { log('Όριο ρυθμού API — αναμονή 65s'); await sleep(65000); continue; }
+    if (r.status === 429 || /rate|too many/i.test(errs)) { pauseToNextMinute(); continue; }
     if (/limit|quota|subscription|key|token/i.test(errs) || r.status === 401 || r.status === 403) {
       budgetHit = true; budget = callsUsed; throw new BudgetError(`API: ${errs || r.status}`);
     }
@@ -173,6 +192,27 @@ async function fetchStats(id) {
   writeJson(f, { _at: Date.now(), data: arr });
   statsMem.set(id, arr);
   return arr;
+}
+
+// Μαζικό κατέβασμα στατιστικών: fixtures?ids=a-b-... (έως 20 αγώνες ανά κλήση, μαζί με statistics)
+async function prefetchStats(ids) {
+  const need = [...new Set(ids)].filter(id => cachedStats(id) === undefined);
+  let got = 0;
+  for (let i = 0; i < need.length; i += 20) {
+    const chunk = need.slice(i, i + 20);
+    let d;
+    try { d = await realApi(`fixtures?ids=${chunk.join('-')}`); }
+    catch (e) { if (e instanceof BudgetError) { budgetHit = true; return got; } log('Μαζικά στατιστικά:', e.message); continue; }
+    const seen = new Set();
+    for (const f of d?.response || []) {
+      const id = f?.fixture?.id; if (!id) continue; seen.add(id);
+      const arr = Array.isArray(f.statistics) ? f.statistics : [];
+      const file = statsFile(id); fs.mkdirSync(path.dirname(file), { recursive: true });
+      writeJson(file, { _at: Date.now(), data: arr }); statsMem.set(id, arr); got++;
+    }
+    for (const id of chunk) if (!seen.has(id)) { const file = statsFile(id); fs.mkdirSync(path.dirname(file), { recursive: true }); writeJson(file, { _at: Date.now(), data: [] }); statsMem.set(id, []); }
+  }
+  return got;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -550,7 +590,17 @@ async function main() {
   log(`Φορτώθηκαν ${FX.size} αγώνες από ${loaded.size} σεζόν.`);
 
   // 2) Στόχοι: τελειωμένοι αγώνες σεζόν που έχουν και την ΠΡΟΗΓΟΥΜΕΝΗ σεζόν φορτωμένη (ιστορικό φόρμας)
-  const state = readJson(STATE_FILE, { done: {} });
+  // Έκδοση μοντέλου: αν άλλαξε το stats.js, οι παλιές προβλέψεις αρχειοθετούνται και ξαναϋπολογίζονται
+  // (τα ιστορικά δεδομένα είναι ήδη στην κρυφή μνήμη, οπότε δεν ξοδεύονται ξανά κλήσεις API).
+  const modelHash = require('node:crypto').createHash('sha1').update(fs.readFileSync(path.join(ROOT, 'stats.js'))).digest('hex').slice(0, 10);
+  let state = readJson(STATE_FILE, { done: {} });
+  if (Object.keys(state.done || {}).length && state.modelHash !== modelHash) {
+    const arch = path.join(BT_DIR, `predictions_${state.modelHash || 'v0'}.jsonl`);
+    if (fs.existsSync(PRED_FILE)) fs.renameSync(PRED_FILE, arch);
+    log(`Νέα έκδοση μοντέλου (${state.modelHash} → ${modelHash}). Οι παλιές προβλέψεις κρατήθηκαν στο ${path.basename(arch)} και ξαναϋπολογίζονται όλες.`);
+    state = { done: {} };
+  }
+  state.modelHash = modelHash;
   const done = new Set(Object.keys(state.done || {}).map(Number));
   const targets = [];
   for (const key of loaded) {
@@ -581,12 +631,21 @@ async function main() {
         league: f.league, teams: { home: { ...f.teams.home, winner: null }, away: { ...f.teams.away, winner: null } },
         goals: { home: null, away: null }, score: { halftime: { home: null, away: null }, fulltime: { home: null, away: null } },
       }));
+      if (WANT_STATS && !OFFLINE) {
+        const ids = [];
+        for (const f of days.get(d)) for (const t of [f.teams.home.id, f.teams.away.id]) {
+          for (const g of (BY_TEAM.get(t) || []).filter(x => ts(x) < CUTOFF && isDone(x)).slice(0, 20))
+            if (STATS_COVERAGE.get(`${g.league.id}_${g.league.season}`) !== false) ids.push(g.fixture.id);
+        }
+        await prefetchStats(ids);
+        if (budgetHit) { log('Τέλος ορίου κλήσεων — συνέχεια στην επόμενη εκτέλεση.'); break; }
+      }
       const res = await analyzeDay(page, list);
       if (budgetHit) { log('Τέλος ορίου κλήσεων στη μέση της ημέρας — η ημέρα θα ξαναγίνει αύριο.'); break; }
       const lines = [];
       for (const r of res) {
         const f = FX.get(r.fixId); if (!f) continue;
-        lines.push(JSON.stringify({ ...r, ts: ts(f), leagueId: f.league.id, league: f.league.name, season: f.league.season, home: f.teams.home.name, away: f.teams.away.name,
+        lines.push(JSON.stringify({ ...r, model: modelHash, ts: ts(f), leagueId: f.league.id, league: f.league.name, season: f.league.season, home: f.teams.home.name, away: f.teams.away.name,
           gh: Number(f.goals.home), ga: Number(f.goals.away), htH: f.score?.halftime?.home ?? null, htA: f.score?.halftime?.away ?? null, status: f.fixture.status.short }));
         state.done[r.fixId] = 1;
       }
@@ -611,4 +670,4 @@ async function main() {
 if (require.main === module) {
   main().catch(e => { log('ΣΦΑΛΜΑ:', e.stack || e.message); process.exitCode = 1; });
 }
-module.exports = { emulate, buildReport, metrics, indexFixtures, rebuildTeamIndex, setCutoff: v => { CUTOFF = v; } };
+module.exports = { emulate, buildReport, metrics, indexFixtures, rebuildTeamIndex, setCutoff: v => { CUTOFF = v; }, realApi, prefetchStats, cachedStats };

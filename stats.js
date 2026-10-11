@@ -26,6 +26,11 @@ const ENABLE_EXACT_SIGNAL=false;
 const ENABLE_PROP_PICKS=false;
 const SHOW_ENGINE_PARAMS=false;
 const SHOW_AUTOLEARN_ROW=false;
+// ── Βαθμονόμηση 1Χ2 (2026-10-11, backtest walk-forward) — αναίρεση: ENABLE_1X2_CALIBRATION=false ──
+// Το μοντέλο ήταν υπερβολικά σίγουρο και υποτιμούσε την έδρα (μέσο p(1)=0.378 έναντι 43.1% πραγματικά).
+// p' ∝ exp(log p / T + b): T=2.2 «ανοίγει» τις πιθανότητες, b = μετατόπιση υπέρ 1 / Χ (σε σχέση με το 2).
+const ENABLE_1X2_CALIBRATION=true;
+const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
 const LS_BANKROLL = "omega_bankroll_v5.0";
 const LS_POSTMATCH_RANGE = "omega_postmatch_range_v5.0";
 const POSTMATCH_RANGES = new Set(["CURRENT","7","30","90","ALL"]);
@@ -2051,11 +2056,15 @@ function computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx={}){
   const pa0=clamp(safeNum(rawPP?.pAway,1/3),0.02,0.96);
   const alpha=0.72;
   const drawAlpha=0.46;
-  const [pHome,pDraw,pAway]=_cmiSoftmax3(
+  let [pHome,pDraw,pAway]=_cmiSoftmax3(
     Math.log(ph0)+alpha*directional,
     Math.log(px0)+drawAlpha*(drawSignal-0.50),
     Math.log(pa0)-alpha*directional
   );
+  if(ENABLE_1X2_CALIBRATION){
+    const T=CAL_1X2.T||1;
+    [pHome,pDraw,pAway]=_cmiSoftmax3(Math.log(Math.max(pHome,1e-9))/T+CAL_1X2.bHome, Math.log(Math.max(pDraw,1e-9))/T+CAL_1X2.bDraw, Math.log(Math.max(pAway,1e-9))/T);
+  }
 
   const p1X=clamp(pHome+pDraw,0,1), pX2=clamp(pDraw+pAway,0,1), p12=clamp(pHome+pAway,0,1);
   const sorted=[['1',pHome],['X',pDraw],['2',pAway]].sort((a,b)=>b[1]-a[1]);
