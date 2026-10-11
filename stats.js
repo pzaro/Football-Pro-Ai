@@ -2933,16 +2933,19 @@ function liveOutcomeProbs(hExp,aExp,hG,aG,elapsed,li){
 function _livePct(v){return `${Math.round((Number(v)||0)*100)}%`;}
 function liveCompactHTML(hName,aName,lp,li,{compact=false}={}){
   if(!lp) return '';
-  const best=Math.max(lp.p1,lp.pX,lp.p2);
-  const cell=(lbl,v,isBest)=>`<div style="flex:1;min-width:${compact?44:64}px;text-align:center;padding:${compact?'3px 4px':'6px 6px'};border-radius:6px;${isBest?'background:#16a34a;color:#fff;':'background:var(--bg-base);'}"><div style="font-size:${compact?'.55rem':'.62rem'};font-weight:800;opacity:.85;">${lbl}</div><div style="font-family:var(--font-mono);font-weight:900;font-size:${compact?'.78rem':'1rem'};">${_livePct(v)}</div></div>`;
-  const row=(title,cells)=>`<div style="margin-top:${compact?4:8}px;"><div style="font-size:${compact?'.55rem':'.62rem'};color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">${title}</div><div style="display:flex;gap:4px;">${cells}</div></div>`;
-  const nb=Math.max(lp.pNextH,lp.pNone,lp.pNextA);
-  const xg=li?`🏠 ${Number(li.hLiveXG).toFixed(2)} – ${Number(li.aLiveXG).toFixed(2)} ✈️ <span style="color:var(--text-muted);font-weight:600;">(${li.xgSource==='provider'?'πάροχος':'εκτίμηση από σουτ'})</span>`:'<span style="color:var(--text-muted);">αναμονή στατιστικών…</span>';
-  return `<div class="live-compact">`+
-    row('Τελικό αποτέλεσμα',cell('1',lp.p1,lp.p1===best)+cell('Χ',lp.pX,lp.pX===best)+cell('2',lp.p2,lp.p2===best))+
-    row('Επόμενο γκολ',cell('🏠 '+(compact?'':esc(hName||'')),lp.pNextH,lp.pNextH===nb)+cell('Κανένα',lp.pNone,lp.pNone===nb)+cell('✈️ '+(compact?'':esc(aName||'')),lp.pNextA,lp.pNextA===nb))+
-    `<div style="margin-top:${compact?4:8}px;font-size:${compact?'.62rem':'.72rem'};font-weight:800;">xG live: <span style="font-family:var(--font-mono);">${xg}</span></div>`+
-    (compact?'':`<div style="margin-top:4px;font-size:.58rem;color:var(--text-dim);">Εκτίμηση: ${esc(lp.src)}</div>`)+
+  // Οριζόντια διάταξη: [Τελικό 1/Χ/2] [Επόμενο γκολ] [xG] σε μία γραμμή (αναδιπλώνεται σε στενές οθόνες).
+  const fsV=compact?'1rem':'1.25rem', fsL=compact?'.68rem':'.78rem', fsT=compact?'.66rem':'.74rem';
+  const cell=(lbl,v,isBest,title='')=>`<div title="${esc(title)}" style="min-width:${compact?46:58}px;text-align:center;padding:${compact?'4px 6px':'6px 8px'};border-radius:7px;${isBest?'background:#16a34a;color:#fff;':'background:var(--bg-base);'}"><div style="font-size:${fsL};font-weight:800;opacity:.9;white-space:nowrap;">${lbl}</div><div style="font-family:var(--font-mono);font-weight:900;font-size:${fsV};line-height:1.15;">${_livePct(v)}</div></div>`;
+  const group=(title,inner)=>`<div style="display:flex;flex-direction:column;gap:3px;"><div style="font-size:${fsT};color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">${title}</div><div style="display:flex;gap:4px;">${inner}</div></div>`;
+  const best=Math.max(lp.p1,lp.pX,lp.p2), nb=Math.max(lp.pNextH,lp.pNone,lp.pNextA);
+  const xgBox=li
+    ?`<div style="display:flex;gap:4px;">${cell('🏠',li.hLiveXG/1,false)}${cell('✈️',li.aLiveXG/1,false)}</div>`
+    :`<div style="font-size:${fsL};color:var(--text-muted);padding:6px 0;">αναμονή…</div>`;
+  const xgFmt=li?`<div style="display:flex;gap:4px;"><div style="min-width:${compact?46:58}px;text-align:center;padding:${compact?'4px 6px':'6px 8px'};border-radius:7px;background:var(--bg-base);"><div style="font-size:${fsL};font-weight:800;">🏠</div><div style="font-family:var(--font-mono);font-weight:900;font-size:${fsV};line-height:1.15;">${Number(li.hLiveXG).toFixed(2)}</div></div><div style="min-width:${compact?46:58}px;text-align:center;padding:${compact?'4px 6px':'6px 8px'};border-radius:7px;background:var(--bg-base);"><div style="font-size:${fsL};font-weight:800;">✈️</div><div style="font-family:var(--font-mono);font-weight:900;font-size:${fsV};line-height:1.15;">${Number(li.aLiveXG).toFixed(2)}</div></div></div>`:xgBox;
+  return `<div class="live-compact" style="display:flex;flex-wrap:wrap;gap:${compact?'8px 12px':'10px 18px'};align-items:flex-end;margin-top:${compact?6:10}px;">`+
+    group('Τελικό',cell('1',lp.p1,lp.p1===best)+cell('Χ',lp.pX,lp.pX===best)+cell('2',lp.p2,lp.p2===best))+
+    group('Επόμενο γκολ',cell('🏠',lp.pNextH,lp.pNextH===nb,hName||'')+cell('Κανένα',lp.pNone,lp.pNone===nb)+cell('✈️',lp.pNextA,lp.pNextA===nb,aName||''))+
+    group(`xG live${li?` <span style="text-transform:none;font-weight:600;">(${li.xgSource==='provider'?'πάροχος':'από σουτ'})</span>`:''}`,xgFmt)+
   `</div>`;
 }
 function liveCompactForRecord(x){
