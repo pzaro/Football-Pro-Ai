@@ -4184,9 +4184,36 @@ function top70List(limit=10){
   }
   return rows.sort((a,b)=>b.best-a.best).slice(0,limit);
 }
+function _top70Text(list){
+  const d=new Date().toLocaleDateString('el-GR',{timeZone:'Europe/Athens',day:'2-digit',month:'2-digit'});
+  const lines=list.map(({x,k},j)=>`#${j+1}  ${formatGreeceKickoff(x,{withDate:false})} · ${x.lg||''}\n    ${x.ht} – ${x.at}\n    ➜ ${k.map(q=>`${q.label} ${Math.round(q.p*100)}%`).join('  ·  ')}`);
+  const subject=`APEX OMEGA — Επιλογές ≥70% · ${d}`;
+  const body=`${subject}\n\n${lines.join('\n\n')}\n\nΙστορικά (backtest 97.188 αγώνων): όταν το APEX έλεγε 70–80%, βγήκε 83,7%.\nΠιθανότητες, όχι βεβαιότητες· δεν αποτελεί συμβουλή στοιχηματισμού.`;
+  return {subject,body};
+}
+window.sendTop70Mail=function(){
+  const list=top70List(10);
+  if(!list.length){showErr('Δεν υπάρχουν σημερινές επιλογές ≥70% για αποστολή.');return;}
+  let to=''; try{to=localStorage.getItem('apex_mail_to')||'';}catch{}
+  if(!to){to=(prompt('Σε ποιο email να σταλούν οι επιλογές;','')||'').trim(); if(!to)return; try{localStorage.setItem('apex_mail_to',to);}catch{}}
+  const {subject,body}=_top70Text(list);
+  const url=`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const w=window.open(url,'_blank');
+  if(!w) location.href=`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+};
+window.copyTop70=async function(){
+  const list=top70List(10); if(!list.length){showErr('Δεν υπάρχουν επιλογές ≥70%.');return;}
+  const {body}=_top70Text(list);
+  try{await navigator.clipboard.writeText(body);showOk('Οι επιλογές αντιγράφηκαν.');}catch{showErr('Η αντιγραφή δεν επιτράπηκε από τον browser.');}
+};
+window.changeTop70MailTo=function(){
+  let cur=''; try{cur=localStorage.getItem('apex_mail_to')||'';}catch{}
+  const to=(prompt('Email παραλήπτη:',cur)||'').trim(); if(to){try{localStorage.setItem('apex_mail_to',to);}catch{};showOk(`Παραλήπτης: ${to}`);}
+};
 function renderTop70Tab(list){
   if(!list.length) return `<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχει αγώνας με πιθανότητα ≥70% στο τρέχον scan.</div>`;
-  return `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;">Οι 10 πιο πιθανές προβλέψεις (≥70%) των αγώνων που δεν έχουν αρχίσει, σε φθίνουσα σειρά. Ιστορικά (backtest 97.188 αγώνων): όταν το APEX έλεγε 70–80%, βγήκε 83.7%.</div><div style="display:flex;flex-direction:column;gap:10px;">`+
+  const btns=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-primary" onclick="window.sendTop70Mail()" style="background:#16a34a;border-color:#16a34a;color:#fff;font-weight:900;">✉️ Αποστολή στο mail</button><button class="btn btn-outline" onclick="window.copyTop70()">📋 Αντιγραφή</button><button class="btn btn-outline" onclick="window.changeTop70MailTo()" title="Αλλαγή παραλήπτη" style="font-size:.72rem;">⚙ Παραλήπτης</button></div>`;
+  return btns+`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;">Οι 10 πιο πιθανές προβλέψεις (≥70%) των αγώνων που δεν έχουν αρχίσει, σε φθίνουσα σειρά. Ιστορικά (backtest 97.188 αγώνων): όταν το APEX έλεγε 70–80%, βγήκε 83.7%.</div><div style="display:flex;flex-direction:column;gap:10px;">`+
     list.map(({x,k},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
       <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
       <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}<div style="margin-top:5px;">${_pick70Badges(k,{big:true})}</div></div>
