@@ -31,8 +31,13 @@ const SHOW_AUTOLEARN_ROW=false;
 // p' ∝ exp(log p / T + b): T=2.2 «ανοίγει» τις πιθανότητες, b = μετατόπιση υπέρ 1 / Χ (σε σχέση με το 2).
 const ENABLE_1X2_CALIBRATION=true;
 // MODEL_VERSION: αλλάζει ΜΟΝΟ όταν αλλάζει κάτι που επηρεάζει τις προβλέψεις (το backtest ξαναϋπολογίζει τότε όλους τους αγώνες).
-const MODEL_VERSION='2026-10-11-cal1';
+const MODEL_VERSION='2026-10-12-cal2';
 const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
+// ── Βαθμονόμηση γκολ (2026-10-12, backtest 106.429 αγώνων) — αναίρεση: ENABLE_GOALS_CALIBRATION=false ──
+// Over 2.5 / Goal-Goal ήταν πολύ υπερβολικά σίγουρα: όταν έλεγαν ≥70% έβγαιναν ~60%. p' = σ(a·logit(p)+b).
+const ENABLE_GOALS_CALIBRATION=true;
+const CAL_GOALS={o25:{a:0.336,b:-0.065},btts:{a:0.276,b:0.003}};
+function _calBin(p,c){const q=Math.min(Math.max(Number(p)||0.5,1e-4),1-1e-4);const z=c.a*Math.log(q/(1-q))+c.b;return 1/(1+Math.exp(-z));}
 // LIVE_SIMPLE: true = απλή προβολή live (πιθανότητες τελικού 1/Χ/2, επόμενο γκολ, xG). false = η παλιά πλήρης προβολή.
 const LIVE_SIMPLE=true;
 // SHOW_BET_JOURNAL: false = κρυφό το Bet Journal και τα κουμπιά «Log Bet/Καταγραφή» (κανένα καταγεγραμμένο στοίχημα· τα δεδομένα μένουν).
@@ -2138,6 +2143,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,ctx={}){
   const rawPP=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
   const matchPicture=computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx);
   const pp={...rawPP,pHome:matchPicture.pHome,pDraw:matchPicture.pDraw,pAway:matchPicture.pAway,p1X:matchPicture.p1X,pX2:matchPicture.pX2,p12:matchPicture.p12};
+  if(ENABLE_GOALS_CALIBRATION){pp.pO25=_calBin(pp.pO25,CAL_GOALS.o25);pp.pU25=1-pp.pO25;pp.pBTTS=_calBin(pp.pBTTS,CAL_GOALS.btts);}
   const outPick=matchPicture.leaderOutcome;
   
   // --- ASIAN HANDICAP (-1.5) CALCULATION ---
