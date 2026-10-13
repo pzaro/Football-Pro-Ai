@@ -31,8 +31,14 @@ const SHOW_AUTOLEARN_ROW=false;
 // p' ∝ exp(log p / T + b): T=2.2 «ανοίγει» τις πιθανότητες, b = μετατόπιση υπέρ 1 / Χ (σε σχέση με το 2).
 const ENABLE_1X2_CALIBRATION=true;
 // MODEL_VERSION: αλλάζει ΜΟΝΟ όταν αλλάζει κάτι που επηρεάζει τις προβλέψεις (το backtest ξαναϋπολογίζει τότε όλους τους αγώνες).
-const MODEL_VERSION='2026-10-12-cal2';
+const MODEL_VERSION='2026-10-13-lg1x2';
 const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
+// ── Βαθμονόμηση 1Χ2 ανά πρωτάθλημα (2026-10-13, backtest 117.546 αγώνων, walk-forward) — αναίρεση: ENABLE_LEAGUE_1X2_CAL=false ──
+// Επιπλέον μετατόπιση log-πιθανότητας υπέρ 1 / Χ (σε σχέση με το 2) μετά το CAL_1X2: κοινή (CAL_1X2_ADJ) + ανά πρωτάθλημα (CAL_1X2_LEAGUE[leagueId]=[δ1,δΧ], συρρίκνωση L2).
+// Άγνωστο πρωτάθλημα → μόνο η κοινή μετατόπιση. Το T δεν αλλάζει.
+const ENABLE_LEAGUE_1X2_CAL=true;
+const CAL_1X2_ADJ={bHome:0.095,bDraw:0.11};
+const CAL_1X2_LEAGUE={2:[0.04,-0.166],39:[-0.029,-0.094],40:[-0.036,-0.072],61:[0.009,-0.013],62:[0.01,0.039],71:[0.218,0.158],78:[-0.02,0.051],88:[0.009,0.044],94:[-0.018,-0.077],103:[0.046,0.031],106:[0.004,0.019],113:[-0.073,-0.065],119:[-0.06,0.042],128:[0.017,0.063],135:[-0.048,-0.023],136:[-0.002,0.128],140:[0.086,0.003],141:[0.088,0.156],144:[-0.006,0.017],164:[-0.02,0.028],197:[0.084,0.0],203:[0.04,0.021],207:[-0.05,0.018],218:[-0.1,-0.001],244:[-0.05,-0.045],265:[0.017,-0.058],268:[-0.121,-0.06],271:[-0.006,-0.007],283:[-0.019,-0.005],345:[-0.001,-0.019],357:[-0.025,-0.029],494:[0.029,-0.069]};
 // ── Βαθμονόμηση γκολ (2026-10-12, backtest 106.429 αγώνων) — αναίρεση: ENABLE_GOALS_CALIBRATION=false ──
 // Over 2.5 / Goal-Goal ήταν πολύ υπερβολικά σίγουρα: όταν έλεγαν ≥70% έβγαιναν ~60%. p' = σ(a·logit(p)+b).
 const ENABLE_GOALS_CALIBRATION=true;
@@ -2078,7 +2084,9 @@ function computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx={}){
   );
   if(ENABLE_1X2_CALIBRATION){
     const T=CAL_1X2.T||1;
-    [pHome,pDraw,pAway]=_cmiSoftmax3(Math.log(Math.max(pHome,1e-9))/T+CAL_1X2.bHome, Math.log(Math.max(pDraw,1e-9))/T+CAL_1X2.bDraw, Math.log(Math.max(pAway,1e-9))/T);
+    const _lb=ENABLE_LEAGUE_1X2_CAL?(CAL_1X2_LEAGUE[ctx?.leagueId]||[0,0]):null;
+    const _ah=_lb?CAL_1X2_ADJ.bHome+_lb[0]:0, _ad=_lb?CAL_1X2_ADJ.bDraw+_lb[1]:0;
+    [pHome,pDraw,pAway]=_cmiSoftmax3(Math.log(Math.max(pHome,1e-9))/T+CAL_1X2.bHome+_ah, Math.log(Math.max(pDraw,1e-9))/T+CAL_1X2.bDraw+_ad, Math.log(Math.max(pAway,1e-9))/T);
   }
 
   const p1X=clamp(pHome+pDraw,0,1), pX2=clamp(pDraw+pAway,0,1), p12=clamp(pHome+pAway,0,1);
@@ -2141,7 +2149,7 @@ function computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx={}){
 function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,ctx={}){
   const hL=clamp(hXG*lp.mult,0.15,4.0),aL=clamp(aXG*lp.mult,0.15,4.0);
   const rawPP=getPoissonProbabilities(hL,aL);const xgDiff=hXG-aXG;
-  const matchPicture=computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx);
+  const matchPicture=computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,{...(ctx||{}),leagueId});
   const pp={...rawPP,pHome:matchPicture.pHome,pDraw:matchPicture.pDraw,pAway:matchPicture.pAway,p1X:matchPicture.p1X,pX2:matchPicture.pX2,p12:matchPicture.p12};
   if(ENABLE_GOALS_CALIBRATION){pp.pO25=_calBin(pp.pO25,CAL_GOALS.o25);pp.pU25=1-pp.pO25;pp.pBTTS=_calBin(pp.pBTTS,CAL_GOALS.btts);}
   const outPick=matchPicture.leaderOutcome;
