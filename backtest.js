@@ -55,6 +55,7 @@ loadEnv(path.join(ROOT, '.env'));
 const API_BASE = 'https://v3.football.api-sports.io';
 const API_KEY = process.env.API_FOOTBALL_KEY || '';
 const PORT = Number(process.env.BACKTEST_PORT || 8799);
+let ACTIVE_PORT = PORT;
 const MAX_CALLS = Number(process.env.BACKTEST_MAX_CALLS || 40000);
 const RESERVE = Number(process.env.BACKTEST_RESERVE || 25000);
 const MIN_SEASON = Number(process.env.BACKTEST_MIN_SEASON || 0);
@@ -70,7 +71,20 @@ function log(...a) {
   try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
 }
 const readJson = (f, d = null) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
-const writeJson = (f, o) => { const tmp = f + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(o)); fs.renameSync(tmp, f); };
+// Ασφαλής εγγραφή: στα Windows το Dropbox/antivirus κλειδώνει στιγμιαία αρχεία (EPERM/EBUSY) — ξαναδοκιμάζει, αλλιώς γράφει απευθείας.
+const _pause = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch {} };
+const writeJson = (f, o) => {
+  const data = JSON.stringify(o), tmp = f + '.tmp';
+  try { fs.writeFileSync(tmp, data); } catch { _pause(200); fs.writeFileSync(tmp, data); }
+  for (let i = 0; i < 8; i++) {
+    try { fs.renameSync(tmp, f); return; }
+    catch (e) { if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e; _pause(150 * (i + 1)); }
+  }
+  for (let i = 0; i < 5; i++) {
+    try { fs.writeFileSync(f, data); try { fs.unlinkSync(tmp); } catch {} return; }
+    catch (e) { if (i === 4) throw e; _pause(500); }
+  }
+};
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ─────────────────────────────────────────────────────────────
@@ -381,7 +395,15 @@ function startServer(appState) {
       fs.createReadStream(file).pipe(res);
     } catch (e) { res.writeHead(500); res.end(String(e.message)); }
   });
-  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(PORT, '127.0.0.1', () => resolve(server)); });
+  // Αν η θύρα είναι πιασμένη (π.χ. παλιό παράθυρο backtest ακόμη ανοιχτό), δοκιμάζει τις επόμενες.
+  return new Promise((resolve, reject) => {
+    let port = PORT;
+    const tryListen = () => {
+      server.once('error', e => { if (e.code === 'EADDRINUSE' && port < PORT + 20) { port++; tryListen(); } else reject(e); });
+      server.listen(port, '127.0.0.1', () => { ACTIVE_PORT = port; resolve(server); });
+    };
+    tryListen();
+  });
 }
 
 function findChrome() {
@@ -402,7 +424,7 @@ async function openPage(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   page.on('pageerror', e => log('Σφάλμα σελίδας:', e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await page.goto(`http://127.0.0.1:${ACTIVE_PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForFunction(() => typeof analyzeMatchSafe === 'function' && typeof computePick === 'function', null, { timeout: 90000 });
   await page.evaluate(() => {
     try { window.loadSettings?.(); } catch {}
@@ -601,7 +623,7 @@ async function main() {
   if (state.modelHash && SAME_MODEL[state.modelHash] === modelHash) state.modelHash = modelHash;
   if (Object.keys(state.done || {}).length && state.modelHash !== modelHash) {
     const arch = path.join(BT_DIR, `predictions_${state.modelHash || 'v0'}.jsonl`);
-    if (fs.existsSync(PRED_FILE)) fs.renameSync(PRED_FILE, arch);
+    if (fs.existsSync(PRED_FILE)) { let ok = false; for (let i = 0; i < 8 && !ok; i++) { try { fs.renameSync(PRED_FILE, arch); ok = true; } catch (e) { _pause(300 * (i + 1)); } } if (!ok) { fs.copyFileSync(PRED_FILE, arch); fs.writeFileSync(PRED_FILE, ''); } }
     log(`Νέα έκδοση μοντέλου (${state.modelHash} → ${modelHash}). Οι παλιές προβλέψεις κρατήθηκαν στο ${path.basename(arch)} και ξαναϋπολογίζονται όλες.`);
     state = { done: {} };
   }
@@ -654,7 +676,7 @@ async function main() {
           gh: Number(f.goals.home), ga: Number(f.goals.away), htH: f.score?.halftime?.home ?? null, htA: f.score?.halftime?.away ?? null, status: f.fixture.status.short }));
         state.done[r.fixId] = 1;
       }
-      if (lines.length) fs.appendFileSync(PRED_FILE, lines.join('\n') + '\n');
+      if (lines.length) { const txt = lines.join('\n') + '\n'; for (let i = 0; i < 6; i++) { try { fs.appendFileSync(PRED_FILE, txt); break; } catch (e) { if (i === 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e; _pause(300 * (i + 1)); } } }
       processed += lines.length; daysDone++;
       if (daysDone % 10 === 0) {
         writeJson(STATE_FILE, state);
@@ -663,9 +685,9 @@ async function main() {
       if (daysDone % 150 === 0) { await ctx.close(); ({ ctx, page } = await openPage(browser)); }
     }
   } finally {
-    writeJson(STATE_FILE, state);
+    try { writeJson(STATE_FILE, state); } catch (e) { log('Προειδοποίηση: δεν γράφτηκε το state.json:', e.message); }
     try { await browser.close(); } catch {}
-    server.close();
+    try { server.close(); } catch {}
   }
   if (unknownPaths.size) log('Αιτήματα χωρίς ιστορικά δεδομένα (ουδέτερη απάντηση):', [...unknownPaths.entries()].map(([k, v]) => `${k}×${v}`).join(', '));
   log(`Ολοκληρώθηκε η εκτέλεση: ${processed} νέοι αγώνες, κλήσεις API ${callsUsed}.${budgetHit ? ' Συνεχίζει στην επόμενη εκτέλεση.' : ''}`);
@@ -673,6 +695,7 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(e => { log('ΣΦΑΛΜΑ:', e.stack || e.message); process.exitCode = 1; });
+  main().catch(e => { log('ΣΦΑΛΜΑ:', e.stack || e.message); process.exitCode = 1; })
+    .finally(() => setTimeout(() => process.exit(process.exitCode || 0), 3000).unref());
 }
 module.exports = { emulate, buildReport, metrics, indexFixtures, rebuildTeamIndex, setCutoff: v => { CUTOFF = v; }, realApi, prefetchStats, cachedStats };

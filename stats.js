@@ -4188,7 +4188,10 @@ function top70List(limit=10){
     const k=picks70(x); if(!k.length) continue;
     rows.push({x,k,best:k[0].p});
   }
-  return rows.sort((a,b)=>b.best-a.best).slice(0,limit);
+  // Σειρά: πρώτα οι άσσοι (1), μετά το 2, μετά οι διπλές (1Χ/Χ2), τελευταία τα γκολ· μέσα σε κάθε ομάδα φθίνουσα πιθανότητα.
+  const tier=k=>({'1':0,'2':1,'1Χ':2,'Χ2':2,'Χ':3})[k.label]??4;
+  rows.forEach(r=>{const res=r.k.find(q=>tier(q)<4); r.main=res||r.k[0]; r.t=tier(r.main);});
+  return rows.sort((a,b)=>a.t-b.t||b.main.p-a.main.p).slice(0,limit);
 }
 function _top70Text(list){
   const d=new Date().toLocaleDateString('el-GR',{timeZone:'Europe/Athens',day:'2-digit',month:'2-digit'});
@@ -4219,11 +4222,11 @@ window.changeTop70MailTo=function(){
 function renderTop70Tab(list){
   if(!list.length) return `<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχει αγώνας με πιθανότητα ≥70% στο τρέχον scan.</div>`;
   const btns=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-primary" onclick="window.sendTop70Mail()" style="background:#16a34a;border-color:#16a34a;color:#fff;font-weight:900;">✉️ Αποστολή στο mail</button><button class="btn btn-outline" onclick="window.copyTop70()">📋 Αντιγραφή</button><button class="btn btn-outline" onclick="window.changeTop70MailTo()" title="Αλλαγή παραλήπτη" style="font-size:.72rem;">⚙ Παραλήπτης</button></div>`;
-  return btns+`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;">Οι 10 πιο πιθανές προβλέψεις (≥70%) των αγώνων που δεν έχουν αρχίσει, σε φθίνουσα σειρά. Ιστορικά (backtest 97.188 αγώνων): όταν το APEX έλεγε 70–80%, βγήκε 83.7%.</div><div style="display:flex;flex-direction:column;gap:10px;">`+
+  return btns+`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;">Οι 10 καλύτερες προβλέψεις (≥70%) των αγώνων που δεν έχουν αρχίσει: πρώτα οι άσσοι, μετά οι διπλές, με φθίνουσα πιθανότητα. Ιστορικά (backtest 97.188 αγώνων): όταν το APEX έλεγε 70–80%, βγήκε 83.7%.</div><div style="display:flex;flex-direction:column;gap:10px;">`+
     list.map(({x,k},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
       <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
       <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}<div style="margin-top:5px;">${_pick70Badges(k,{big:true})}</div></div>
-      <div style="text-align:right;flex-shrink:0;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:#16a34a;">${Math.round(k[0].p*100)}%</div><div style="font-size:.62rem;color:var(--text-muted);font-weight:700;">ΠΙΘΑΝΟΤΗΤΑ</div></div>
+      <div style="text-align:right;flex-shrink:0;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:#16a34a;">${Math.round(((list[j].main)||k[0]).p*100)}%</div><div style="font-size:.62rem;color:var(--text-muted);font-weight:700;">ΠΙΘΑΝΟΤΗΤΑ</div></div>
     </div>`).join('')+`</div>`;
 }
 
