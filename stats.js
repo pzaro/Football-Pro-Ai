@@ -31,7 +31,7 @@ const SHOW_AUTOLEARN_ROW=false;
 // p' ∝ exp(log p / T + b): T=2.2 «ανοίγει» τις πιθανότητες, b = μετατόπιση υπέρ 1 / Χ (σε σχέση με το 2).
 const ENABLE_1X2_CALIBRATION=true;
 // MODEL_VERSION: αλλάζει ΜΟΝΟ όταν αλλάζει κάτι που επηρεάζει τις προβλέψεις (το backtest ξαναϋπολογίζει τότε όλους τους αγώνες).
-const MODEL_VERSION='2026-10-14-o25ctx';
+const MODEL_VERSION='2026-10-16-o35cal';
 const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
 // ── Βαθμονόμηση 1Χ2 ανά πρωτάθλημα (2026-10-13, backtest 117.546 αγώνων, walk-forward) — αναίρεση: ENABLE_LEAGUE_1X2_CAL=false ──
 // Επιπλέον μετατόπιση log-πιθανότητας υπέρ 1 / Χ (σε σχέση με το 2) μετά το CAL_1X2: κοινή (CAL_1X2_ADJ) + ανά πρωτάθλημα (CAL_1X2_LEAGUE[leagueId]=[δ1,δΧ], συρρίκνωση L2).
@@ -47,6 +47,10 @@ const CAL_GOALS={o25:{a:0.336,b:-0.065},btts:{a:0.276,b:0.003}};
 // Μετά το CAL_GOALS: logit p'(O2.5) = a·logit p + g·|log p(1) − log p(2)| + t·log(xG1+xG2) + b. Το συνολικό xG και η ύπαρξη φαβορί προβλέπουν τα γκολ καλύτερα από το p μόνο.
 const ENABLE_O25_CONTEXT_CAL=true;
 const CAL_O25_CTX={a:0.1881,g:0.2033,t:0.729,b:-0.8899};
+// ── Βαθμονόμηση Over 3.5 (2026-10-16, backtest 137.156 αγώνων, walk-forward) — αναίρεση: ENABLE_O35_CAL=false ──
+// Το ωμό Poisson P(O3.5) ήταν πολύ υπερεκτιμημένο (ECE 0.092, και 10% των αγώνων με P(O3.5)>P(O2.5)). Νέο: logit p'(O3.5) = a·logit P(O2.5 τελικό) + b, με p'(O3.5) ≤ P(O2.5)−0.001.
+const ENABLE_O35_CAL=true;
+const CAL_O35={a:1.1046,b:-0.9462};
 function _calBin(p,c){const q=Math.min(Math.max(Number(p)||0.5,1e-4),1-1e-4);const z=c.a*Math.log(q/(1-q))+c.b;return 1/(1+Math.exp(-z));}
 // LIVE_SIMPLE: true = απλή προβολή live (πιθανότητες τελικού 1/Χ/2, επόμενο γκολ, xG). false = η παλιά πλήρης προβολή.
 const LIVE_SIMPLE=true;
@@ -2157,6 +2161,7 @@ function computePick(hXG,aXG,tXG,btts,lp,hS,aS,leagueId=0,ctx={}){
   const pp={...rawPP,pHome:matchPicture.pHome,pDraw:matchPicture.pDraw,pAway:matchPicture.pAway,p1X:matchPicture.p1X,pX2:matchPicture.pX2,p12:matchPicture.p12};
   if(ENABLE_GOALS_CALIBRATION){pp.pO25=_calBin(pp.pO25,CAL_GOALS.o25);pp.pU25=1-pp.pO25;pp.pBTTS=_calBin(pp.pBTTS,CAL_GOALS.btts);}
   if(ENABLE_GOALS_CALIBRATION&&ENABLE_O25_CONTEXT_CAL){const _q=Math.min(Math.max(Number(pp.pO25)||0.5,1e-4),1-1e-4);const _g=Math.abs(Math.log(Math.max(Number(pp.pHome)||1/3,1e-9))-Math.log(Math.max(Number(pp.pAway)||1/3,1e-9)));const _t=Math.log(Math.max((Number(hXG)||0)+(Number(aXG)||0),0.2));const _z=CAL_O25_CTX.a*Math.log(_q/(1-_q))+CAL_O25_CTX.g*_g+CAL_O25_CTX.t*_t+CAL_O25_CTX.b;pp.pO25=1/(1+Math.exp(-_z));pp.pU25=1-pp.pO25;}
+  if(ENABLE_GOALS_CALIBRATION&&ENABLE_O35_CAL){const _q5=Math.min(Math.max(Number(pp.pO25)||0.5,1e-4),1-1e-4);const _z5=CAL_O35.a*Math.log(_q5/(1-_q5))+CAL_O35.b;pp.pO35=Math.max(0,Math.min(1/(1+Math.exp(-_z5)),_q5-0.001));}
   const outPick=matchPicture.leaderOutcome;
   
   // --- ASIAN HANDICAP (-1.5) CALCULATION ---
