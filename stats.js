@@ -4300,6 +4300,14 @@ function renderTop70Tab(list){
 }
 
 // ── Σημεία (2026-10-17): 1/Χ/2 με τη μεγαλύτερη πιθανότητα του καθαρού μοντέλου + ιστορική ευστοχία πρωταθλήματος (backtest) ──
+// Κατάταξη πρωταθλημάτων στα σημεία (backtest, τελευταίοι 12 μήνες έως 2026-10-15· [id, όνομα, αγώνες, σωστά], ταξινόμηση Wilson).
+const SIGN_LEAGUE_RANK={"60":[[140,"La Liga (Ισπανία)",57,48],[103,"Eliteserien (Νορβηγία)",49,40],[197,"Super League 1 (Ελλάδα)",30,25],[494,"Super League 2 (Ελλάδα)",39,31],[144,"Jupiler Pro League (Βέλγιο)",34,27],[94,"Primeira Liga (Πορτογαλία)",68,50],[78,"Bundesliga (Γερμανία)",52,39],[40,"Championship (Αγγλία)",32,24],[848,"UEFA Europa Conference League (Ευρώπη)",41,29],[203,"Süper Lig (Τουρκία)",49,34]],"all60":[1110,776],"50":[[94,"Primeira Liga (Πορτογαλία)",144,98],[494,"Super League 2 (Ελλάδα)",113,78],[283,"Liga I (Ρουμανία)",100,69],[140,"La Liga (Ισπανία)",144,96],[78,"Bundesliga (Γερμανία)",132,86],[136,"Serie B (Ιταλία)",77,52],[3,"UEFA Europa League (Ευρώπη)",79,52],[345,"Czech Liga (Τσεχία)",112,71],[103,"Eliteserien (Νορβηγία)",107,68],[88,"Eredivisie (Ολλανδία)",138,84]],"all50":[3783,2231]};
+function _signRankHTML(){
+  const t=(key,title)=>{const rows=SIGN_LEAGUE_RANK[key]||[];const a=SIGN_LEAGUE_RANK['all'+key]||[0,0];
+    return `<div style="flex:1;min-width:260px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:8px;padding:10px 12px;"><div style="font-weight:800;font-size:.8rem;margin-bottom:6px;">${title} <span style="color:var(--text-muted);font-weight:600;">· όλα: ${a[0]?Math.round(a[1]/a[0]*100):0}% (${a[0]})</span></div>`+
+      rows.map((r,i)=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:.74rem;padding:3px 0;border-top:${i?'1px solid var(--border-light)':'none'};"><span>${i+1}. ${esc(r[1])}</span><span style="font-family:var(--font-mono);font-weight:800;color:#16a34a;">${Math.round(r[3]/r[2]*100)}% <span style="color:var(--text-muted);font-weight:600;">(${r[3]}/${r[2]})</span></span></div>`).join('')+`</div>`;};
+  return `<div style="margin-bottom:12px;"><div style="font-size:.78rem;font-weight:800;margin-bottom:6px;">🏆 Πρωταθλήματα με την καλύτερη ευστοχία στα σημεία (backtest, τελευταίοι 12 μήνες)</div><div style="display:flex;gap:10px;flex-wrap:wrap;">${t('60','Σημεία με πιθανότητα ≥60%')}${t('50','Σημεία με πιθανότητα ≥50%')}</div></div>`;
+}
 function _signHist(leagueId,p){const e=HIST_TABLES.signEdges;let b=0;while(b<e.length&&p>=e[b])b++;const g=HIST_TABLES.sign['0'][b]||[0,0];const gr=g[0]?g[1]/g[0]:p;const L=(HIST_TABLES.sign[String(leagueId)]||[])[b]||[0,0];return {rate:(L[1]+40*gr)/(L[0]+40),n:L[0],k:L[1],band:b};}
 function signsList(limit=15){
   const sd=(window.scannedMatchesData||[]).filter(x=>{const st=x?.m?.fixture?.status?.short||'';return x?.pp&&!isFinished(st)&&!isLive(st);});
@@ -4308,11 +4316,12 @@ function signsList(limit=15){
     .filter(Boolean).sort((a,b)=>(b.hist.rate-a.hist.rate)||(b.p-a.p)).slice(0,limit);
 }
 function renderSignsTab(list){
-  if(!list?.length) return `<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχουν αγώνες που δεν έχουν αρχίσει στο τρέχον scan.</div>`;
-  return `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">Σημείο = το αποτέλεσμα 1/Χ/2 με τη μεγαλύτερη πιθανότητα του μοντέλου. Ταξινόμηση με την <b>ιστορική ευστοχία</b> του μοντέλου στο ίδιο πρωτάθλημα και στην ίδια ζώνη πιθανότητας (backtest από 2023-07).</div><div style="display:flex;flex-direction:column;gap:10px;">`+
+  if(!list?.length) return _signRankHTML()+`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχουν αγώνες που δεν έχουν αρχίσει στο τρέχον scan.</div>`;
+  const top5=new Set((SIGN_LEAGUE_RANK['60']||[]).slice(0,5).map(r=>Number(r[0])));
+  return _signRankHTML()+`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">Σημείο = το αποτέλεσμα 1/Χ/2 με τη μεγαλύτερη πιθανότητα του μοντέλου. Ταξινόμηση με την <b>ιστορική ευστοχία</b> του μοντέλου στο ίδιο πρωτάθλημα και στην ίδια ζώνη πιθανότητας (backtest από 2023-07).</div><div style="display:flex;flex-direction:column;gap:10px;">`+
     list.map(({x,sign,p,hist},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
       <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
-      <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}
+      <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${top5.has(Number(x.leagueId))?'⭐ ':''}${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Μοντέλο ${Math.round(p*100)}% · ιστορικά στο πρωτάθλημα: <b>${hist.n?Math.round(hist.k/hist.n*100)+'% ('+hist.k+'/'+hist.n+')':'χωρίς δείγμα'}</b></div></div>
       <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-blue);min-width:34px;text-align:center;">${sign}</div>
       <div style="text-align:right;flex-shrink:0;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:#16a34a;">${Math.round(hist.rate*100)}%</div><div style="font-size:.62rem;color:var(--text-muted);font-weight:700;">ΙΣΤΟΡΙΚΗ ΕΥΣΤΟΧΙΑ</div></div>
