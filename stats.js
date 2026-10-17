@@ -305,6 +305,15 @@ const _apiQueue = [];
 let _apiActive = 0;
 let _apiPumpTimer = null;
 let _apiLastStart = 0;
+// ── Ρυθμός API (2026-10-17): το background engine και ο browser σαρώνουν ταυτόχρονα με το ίδιο κλειδί και μαζί ξεπερνούσαν το όριο/λεπτό (429).
+// API_SHARE_FACTOR: ο browser (σάρωση του χρήστη) παίρνει το 80% του ορίου/λεπτό, το background (headless) το 20%. Σε 429 ή «rateLimit» όλη η ουρά
+//   σταματά προσωρινά και το αίτημα ξαναδοκιμάζεται. Αναίρεση: API_SHARE_FACTOR=0.89, API_LOW_REMAINING=0.
+const _APEX_IS_HEADLESS = (typeof navigator!=='undefined') && (navigator.webdriver===true || /Headless/i.test(navigator.userAgent||''));
+const API_SHARE_FACTOR = _APEX_IS_HEADLESS ? 0.20 : 0.80;
+// SCAN_RETRY_PASSES: αγώνες που απέτυχαν (σφάλμα API ή προεπιλεγμένες τιμές xG 1.10) ξαναναλύονται έως 2 φορές στο τέλος της σάρωσης.
+const SCAN_RETRY_PASSES = 2;
+const API_LOW_REMAINING = 40;
+let _apiCooldownUntil = 0;
 
 // API-SPORTS rate control.
 // IMPORTANT: daily quota != requests/second. Start conservatively and adapt
@@ -340,7 +349,7 @@ function _adaptApiRate(plan, headers){
   }
   if(perMinute){
     // 12% safety margin against bursts / shared-IP protection.
-    API_START_GAP_MS=Math.max(70, Math.ceil((60000/perMinute)*1.12));
+    API_START_GAP_MS=Math.max(70, Math.ceil(60000/(perMinute*API_SHARE_FACTOR)));
   } else {
     API_START_GAP_MS=220;
   }
@@ -800,7 +809,7 @@ async function apiReq(path){
 
 function _drainQueue(){
   if(_apiPumpTimer || !_apiQueue.length || _apiActive>=MAX_CONCURRENT) return;
-  const wait=Math.max(0, API_START_GAP_MS-(Date.now()-_apiLastStart));
+  const wait=Math.max(0, API_START_GAP_MS-(Date.now()-_apiLastStart), _apiCooldownUntil-Date.now());
   _apiPumpTimer=setTimeout(()=>{
     _apiPumpTimer=null;
     if(!_apiQueue.length || _apiActive>=MAX_CONCURRENT){ _drainQueue(); return; }
@@ -813,10 +822,10 @@ function _drainQueue(){
 }
 
 async function _executeRequest(path,resolve,reject){
-  const MAX_RETRIES=2;
+  const MAX_RETRIES=2, MAX_RATE_RETRIES=4;
   let lastErr=null;
   try{
-    for(let attempt=0;attempt<=MAX_RETRIES;attempt++){
+    for(let attempt=0;attempt<=MAX_RATE_RETRIES;attempt++){
       try{
         const r=await fetch(`${API_BASE}/${path}`,{
           method:'GET',
@@ -829,6 +838,7 @@ async function _executeRequest(path,resolve,reject){
         const dailyRemaining=parseInt(r.headers.get('x-ratelimit-requests-remaining')||'',10);
         if(Number.isFinite(minuteRemaining)) apiRateInfo.remainingMinute=minuteRemaining;
         if(Number.isFinite(dailyRemaining)) apiRateInfo.dailyRemaining=dailyRemaining;
+        if(API_LOW_REMAINING>0&&Number.isFinite(minuteRemaining)&&minuteRemaining<=API_LOW_REMAINING) _apiCooldownUntil=Math.max(_apiCooldownUntil,Date.now()+12000);
         window.__APEX_API_DIAG__={...apiRateInfo,lastHttp:r.status,lastPath:path};
 
         if(r.ok){
@@ -836,6 +846,11 @@ async function _executeRequest(path,resolve,reject){
           if(_hasApiErrors(data)){
             console.warn(`[APEX API] ${path} returned API error:`,apiErr,data?.errors);
             // Rate/auth/quota errors must NOT silently become empty football data.
+            if(/too many requests|ratelimit|rate limit/i.test(apiErr) && !/for the day|daily/i.test(apiErr) && attempt<MAX_RATE_RETRIES){
+              const wait=15000*(attempt+1); _apiCooldownUntil=Math.max(_apiCooldownUntil,Date.now()+wait);
+              console.warn(`[APEX] rate limit on ${path} — global pause ${wait}ms`);
+              await new Promise(x=>setTimeout(x,wait)); continue;
+            }
             if(/rate|limit|quota|key|auth|forbidden|subscription/i.test(apiErr)){
               throw new Error(`API: ${apiErr}`);
             }
@@ -855,8 +870,8 @@ async function _executeRequest(path,resolve,reject){
         }
         if(r.status===429){
           lastErr=new Error(`API rate limit 429: ${bodyErr}`);
-          if(attempt<MAX_RETRIES){
-            const wait=5000*(attempt+1);
+          if(attempt<MAX_RATE_RETRIES){
+            const wait=15000*(attempt+1); _apiCooldownUntil=Math.max(_apiCooldownUntil,Date.now()+wait);
             console.warn(`[APEX] 429 on ${path} — cooling down ${wait}ms`);
             await new Promise(x=>setTimeout(x,wait));
             continue;
@@ -2672,6 +2687,17 @@ window.runScan=async function(){
       await Promise.all(batch.map((m,j) => analyzeMatchSafe(m, i+j, all.length)));
     }
     
+    // ── Επανάληψη για αγώνες που απέτυχαν (π.χ. όριο API), αντί να μείνουν με μηδενικά/προεπιλεγμένα ──
+    const _scanFailed=d=>!!d.analysisError || (d.hXGfinal && Math.abs(Number(d.hXGfinal)-1.10)<0.02 && Math.abs(Number(d.aXGfinal)-1.10)<0.02);
+    for(let pass=1; pass<=SCAN_RETRY_PASSES; pass++){
+      const ids=new Set(window.scannedMatchesData.filter(_scanFailed).map(d=>d.fixId));
+      if(!ids.size) break;
+      const redo=all.filter(m=>ids.has(m.fixture.id));
+      window.scannedMatchesData=window.scannedMatchesData.filter(d=>!ids.has(d.fixId));
+      setLoader(true,`Ξανά ανάλυση ${redo.length} αγώνων που δεν φόρτωσαν (${pass}/${SCAN_RETRY_PASSES})…`);
+      await new Promise(r=>setTimeout(r,Math.max(3000,_apiCooldownUntil-Date.now())));
+      for(let i=0;i<redo.length;i+=SCAN_BATCH){const batch=redo.slice(i,i+SCAN_BATCH);await Promise.all(batch.map((m,j)=>analyzeMatchSafe(m,i+j,redo.length)));}
+    }
     window.applyAdaptivePrecisionToCurrentScan?.();
     saveToVault(window.scannedMatchesData);
     rebuildTopLists();renderTopSections();renderSummaryTable();tickerRefresh();startAutoSync();
