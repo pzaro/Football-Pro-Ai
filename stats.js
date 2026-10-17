@@ -42,7 +42,7 @@ const SHOW_AUTOLEARN_ROW=false;
 // p' ∝ exp(log p / T + b): T=2.2 «ανοίγει» τις πιθανότητες, b = μετατόπιση υπέρ 1 / Χ (σε σχέση με το 2).
 const ENABLE_1X2_CALIBRATION=true;
 // MODEL_VERSION: αλλάζει ΜΟΝΟ όταν αλλάζει κάτι που επηρεάζει τις προβλέψεις (το backtest ξαναϋπολογίζει τότε όλους τους αγώνες).
-const MODEL_VERSION='2026-10-16-o35cal';
+const MODEL_VERSION='2026-10-17-xg1x2';
 const CAL_1X2={T:2.2,bHome:0.35,bDraw:-0.08};
 // ── Βαθμονόμηση 1Χ2 ανά πρωτάθλημα (2026-10-13, backtest 117.546 αγώνων, walk-forward) — αναίρεση: ENABLE_LEAGUE_1X2_CAL=false ──
 // Επιπλέον μετατόπιση log-πιθανότητας υπέρ 1 / Χ (σε σχέση με το 2) μετά το CAL_1X2: κοινή (CAL_1X2_ADJ) + ανά πρωτάθλημα (CAL_1X2_LEAGUE[leagueId]=[δ1,δΧ], συρρίκνωση L2).
@@ -62,6 +62,11 @@ const CAL_O25_CTX={a:0.1881,g:0.2033,t:0.729,b:-0.8899};
 // Το ωμό Poisson P(O3.5) ήταν πολύ υπερεκτιμημένο (ECE 0.092, και 10% των αγώνων με P(O3.5)>P(O2.5)). Νέο: logit p'(O3.5) = a·logit P(O2.5 τελικό) + b, με p'(O3.5) ≤ P(O2.5)−0.001.
 const ENABLE_O35_CAL=true;
 const CAL_O35={a:1.1046,b:-0.9462};
+// ── 1Χ2 με λόγο xG (2026-10-17, backtest 137.156 αγώνων, walk-forward) — αναίρεση: ENABLE_1X2_XG_CAL=false ──
+// Μετά το CAL_1X2 (+ανά πρωτάθλημα): q = softmax(W·[log p1, log pΧ, log p2] + v·log(xG1/xG2) + c) και p' = A·q + (1−A)·p (μισό βήμα, συντηρητικά).
+// Το λόγο xG το μοντέλο τον μετρούσε υπερβολικά (v1<0, v2>0) ενώ η υπόλοιπη πληροφορία της πιθανότητας υποτιμούνταν.
+const ENABLE_1X2_XG_CAL=true;
+const CAL_1X2_XG={A:0.5,W:[[1.1539,-0.3422,-0.8814],[-0.0872,0.5327,-0.1225],[-1.0667,-0.1906,1.0039]],v:[-0.6093,-0.0205,0.6298],c:[-0.3071,0.2953,0.0118]};
 function _calBin(p,c){const q=Math.min(Math.max(Number(p)||0.5,1e-4),1-1e-4);const z=c.a*Math.log(q/(1-q))+c.b;return 1/(1+Math.exp(-z));}
 // LIVE_SIMPLE: true = απλή προβολή live (πιθανότητες τελικού 1/Χ/2, επόμενο γκολ, xG). false = η παλιά πλήρης προβολή.
 const LIVE_SIMPLE=true;
@@ -2121,6 +2126,13 @@ function computeCompositeMatchPicture(rawPP,hXG,aXG,hS,aS,ctx={}){
     const _lb=ENABLE_LEAGUE_1X2_CAL?(CAL_1X2_LEAGUE[ctx?.leagueId]||[0,0]):null;
     const _ah=_lb?CAL_1X2_ADJ.bHome+_lb[0]:0, _ad=_lb?CAL_1X2_ADJ.bDraw+_lb[1]:0;
     [pHome,pDraw,pAway]=_cmiSoftmax3(Math.log(Math.max(pHome,1e-9))/T+CAL_1X2.bHome+_ah, Math.log(Math.max(pDraw,1e-9))/T+CAL_1X2.bDraw+_ad, Math.log(Math.max(pAway,1e-9))/T);
+  }
+  if(ENABLE_1X2_XG_CAL){
+    const _c=CAL_1X2_XG, _l=[Math.log(Math.max(pHome,1e-9)),Math.log(Math.max(pDraw,1e-9)),Math.log(Math.max(pAway,1e-9))];
+    const _r=Math.log(Math.max(Number(hXG)||0,0.05)/Math.max(Number(aXG)||0,0.05));
+    const _z=[0,1,2].map(k=>_c.W[k][0]*_l[0]+_c.W[k][1]*_l[1]+_c.W[k][2]*_l[2]+_c.v[k]*_r+_c.c[k]);
+    const _q=_cmiSoftmax3(_z[0],_z[1],_z[2]);
+    pHome=_c.A*_q[0]+(1-_c.A)*pHome; pDraw=_c.A*_q[1]+(1-_c.A)*pDraw; pAway=_c.A*_q[2]+(1-_c.A)*pAway;
   }
 
   const p1X=clamp(pHome+pDraw,0,1), pX2=clamp(pDraw+pAway,0,1), p12=clamp(pHome+pAway,0,1);
