@@ -13,10 +13,21 @@ const LS_LGMODS   = "omega_lgmods_v5.0";
 // AUTO_PARAM_TUNING: false = τα Self-Improve / Auto-Calibration / Audit ΔΕΝ αλλάζουν πια παραμέτρους πρωταθλημάτων.
 //   Η αυτόματη μάθηση γίνεται μόνο από το Adaptive Precision Lab. Οι τρέχουσες παράμετροι μένουν «παγωμένες».
 // ENABLE_O35_PICK: false = χωρίς σύσταση/σήμα Over 3.5 (hold-out: 30% ευστοχία, κάτω από τη βάση 32%).
-// ENABLE_MARKET_BOMBS: false = χωρίς καρτέλα/ετικέτα Bombs. Τα Value Bets παραμένουν.
+// ENABLE_MARKET_BOMBS: ακολουθεί το SMART_BOMBS (2026-10-17). Αρχικά false = χωρίς καρτέλα/ετικέτα Bombs.
 const AUTO_PARAM_TUNING=false;
 const ENABLE_O35_PICK=false;
-const ENABLE_MARKET_BOMBS=false;
+// ── Έξυπνες Βόμβες + Σημεία (2026-10-17, κατόπιν αιτήματος του χρήστη) — αναίρεση: SMART_BOMBS=false, SHOW_VALUE_BETS=true, SHOW_SIGNS_TAB=false ──
+// SMART_BOMBS: καρτέλα «💣 Βόμβες» στη θέση των Value Bets. Βόμβα = μεγάλη απόκλιση καθαρού μοντέλου από την no-vig αγορά (≥8pp),
+//   σταθμισμένη με την ιστορική αποτελεσματικότητα του μοντέλου (Brier skill ανά πρωτάθλημα/αγορά από το backtest, HIST_TABLES.bss).
+// SHOW_VALUE_BETS: false = κρυφή η καρτέλα Value Bets και η γραμμή «Value» στις κάρτες (ο υπολογισμός μένει).
+// SHOW_SIGNS_TAB: καρτέλα «🎯 Σημεία» (1/Χ/2 ανά αγώνα, ταξινόμηση με την ιστορική ευστοχία του πρωταθλήματος στην ίδια ζώνη πιθανότητας).
+const SMART_BOMBS=true;
+const SHOW_VALUE_BETS=false;
+const SHOW_SIGNS_TAB=true;
+const ENABLE_MARKET_BOMBS=SMART_BOMBS;
+// Πίνακες από backtest (MODEL_VERSION 2026-10-16-o35cal, αγώνες από 2023-07): bss = Brier skill score ανά πρωτάθλημα (συρρίκνωση n0=300 στο γενικό '0');
+// sign = [αγώνες, σωστά] του «σημείου» (μέγιστη πιθανότητα 1/Χ/2) ανά ζώνη πιθανότητας <45,45-50,50-55,55-60,60-70,70+%.
+const HIST_TABLES={bss:{"0":{"home":0.0616,"draw":0.0054,"away":0.0589,"o25":0.0167,"o35":0.0198,"btts":0.0053},"2":{"home":0.0331,"draw":-0.0096,"away":0.0512,"o25":-0.0077,"o35":-0.0095,"btts":0.0067},"3":{"home":0.0211,"draw":-0.0233,"away":0.0253,"o25":-0.0147,"o35":0.004,"btts":-0.0001},"39":{"home":0.078,"draw":0.0016,"away":0.0844,"o25":-0.0116,"o35":-0.0028,"btts":-0.0106},"40":{"home":0.0471,"draw":0.0005,"away":0.0354,"o25":0.0014,"o35":0.0085,"btts":-0.0051},"41":{"home":0.0451,"draw":-0.0063,"away":0.0409,"o25":0.0032,"o35":0.0077,"btts":0.0019},"61":{"home":0.0603,"draw":0.0019,"away":0.0693,"o25":0.0057,"o35":0.0081,"btts":-0.0028},"62":{"home":0.0254,"draw":-0.0004,"away":0.0165,"o25":0.0072,"o35":0.0094,"btts":-0.0007},"71":{"home":0.037,"draw":-0.0012,"away":0.0376,"o25":-0.0039,"o35":-0.0273,"btts":0.0023},"78":{"home":0.0951,"draw":0.0078,"away":0.0903,"o25":0.0115,"o35":-0.0027,"btts":-0.0017},"88":{"home":0.1137,"draw":0.0086,"away":0.1187,"o25":0.0101,"o35":0.0116,"btts":0.0001},"94":{"home":0.1261,"draw":0.015,"away":0.1341,"o25":0.0303,"o35":0.0148,"btts":0.0026},"103":{"home":0.0734,"draw":-0.002,"away":0.0707,"o25":0.0032,"o35":0.0049,"btts":0.0032},"106":{"home":0.0223,"draw":-0.0034,"away":0.0114,"o25":0.0041,"o35":0.0024,"btts":-0.0033},"113":{"home":0.0522,"draw":-0.0018,"away":0.0318,"o25":-0.001,"o35":0.0072,"btts":-0.0011},"119":{"home":0.0615,"draw":-0.0004,"away":0.0762,"o25":-0.0035,"o35":0.008,"btts":-0.0012},"128":{"home":0.0211,"draw":0.0016,"away":0.0071,"o25":-0.028,"o35":-0.0357,"btts":-0.009},"135":{"home":0.0995,"draw":0.0081,"away":0.1046,"o25":0.004,"o35":0.0092,"btts":-0.0004},"136":{"home":0.0464,"draw":0.0073,"away":0.0289,"o25":0.0037,"o35":0.0061,"btts":-0.0145},"140":{"home":0.1084,"draw":0.0173,"away":0.0783,"o25":0.0274,"o35":0.0289,"btts":0.0058},"141":{"home":0.0156,"draw":0.0005,"away":0.0245,"o25":0.0033,"o35":0.0073,"btts":0.0038},"144":{"home":0.0779,"draw":0.0048,"away":0.0648,"o25":0.008,"o35":0.0051,"btts":0.001},"164":{"home":0.0617,"draw":0.0053,"away":0.0597,"o25":0.0123,"o35":-0.0146,"btts":-0.0184},"197":{"home":0.1011,"draw":0.0092,"away":0.0774,"o25":0.0173,"o35":0.0151,"btts":-0.0029},"203":{"home":0.0914,"draw":0.0126,"away":0.1061,"o25":0.0159,"o35":0.0192,"btts":-0.0045},"207":{"home":0.0398,"draw":0.0039,"away":0.0326,"o25":-0.0063,"o35":0.0042,"btts":-0.0164},"218":{"home":0.0501,"draw":-0.0001,"away":0.0512,"o25":-0.0,"o35":0.0004,"btts":-0.0003},"244":{"home":0.0596,"draw":0.0006,"away":0.064,"o25":0.0037,"o35":0.0196,"btts":0.0026},"253":{"home":0.0348,"draw":0.002,"away":0.0222,"o25":-0.0065,"o35":-0.0001,"btts":-0.0077},"265":{"home":0.0443,"draw":-0.0042,"away":0.0378,"o25":-0.0018,"o35":0.0031,"btts":-0.0022},"268":{"home":0.0561,"draw":0.006,"away":0.06,"o25":0.0016,"o35":0.0013,"btts":-0.0044},"271":{"home":0.048,"draw":0.0057,"away":0.0542,"o25":-0.0051,"o35":-0.0003,"btts":-0.0028},"283":{"home":0.0533,"draw":-0.0004,"away":0.0273,"o25":0.0015,"o35":0.0082,"btts":0.0005},"345":{"home":0.0979,"draw":0.0029,"away":0.1004,"o25":0.0098,"o35":0.0073,"btts":0.0035},"357":{"home":0.0605,"draw":0.0023,"away":0.0573,"o25":0.0074,"o35":0.0075,"btts":-0.0019},"494":{"home":0.1128,"draw":0.0069,"away":0.1151,"o25":0.0093,"o35":0.0008,"btts":-0.0096},"848":{"home":0.039,"draw":-0.0107,"away":0.0417,"o25":-0.0044,"o35":0.0032,"btts":0.001}},signEdges:[0.45, 0.5, 0.55, 0.6, 0.7],sign:{"0":[[16804,6751],[7343,3469],[5250,2759],[3636,2161],[3284,2171],[536,425]],"2":[[313,140],[218,104],[140,84],[99,56],[111,64],[16,13]],"3":[[388,158],[185,92],[115,68],[75,50],[63,34],[5,3]],"39":[[441,181],[263,135],[198,105],[130,78],[141,86],[26,22]],"40":[[919,350],[379,170],[239,114],[149,92],[100,73],[4,3]],"41":[[935,363],[344,167],[266,146],[131,82],[94,53],[4,3]],"61":[[428,172],[167,78],[146,80],[98,55],[110,72],[25,17]],"62":[[601,235],[205,95],[138,65],[81,41],[46,25],[1,0]],"71":[[502,195],[283,127],[197,109],[146,78],[168,101],[20,16]],"78":[[348,129],[175,91],[140,69],[114,66],[144,96],[46,35]],"88":[[330,131],[182,81],[141,77],[143,87],[167,110],[57,50]],"94":[[359,125],[191,98],[119,63],[125,78],[140,100],[60,53]],"103":[[277,137],[163,75],[119,57],[107,63],[113,74],[32,27]],"106":[[518,218],[202,88],[133,58],[77,45],[70,36],[4,4]],"113":[[344,136],[144,67],[132,63],[98,59],[80,48],[12,7]],"119":[[266,120],[137,67],[97,55],[77,44],[60,36],[1,0]],"128":[[857,303],[254,121],[158,70],[86,46],[47,30],[1,1]],"135":[[538,209],[220,114],[184,110],[122,83],[114,74],[20,12]],"136":[[793,300],[201,90],[121,63],[76,47],[35,25],[0,0]],"140":[[477,196],[265,122],[156,75],[129,77],[138,112],[52,44]],"141":[[762,305],[317,159],[203,95],[131,70],[85,50],[1,0]],"144":[[420,180],[200,82],[156,87],[101,57],[123,84],[20,16]],"164":[[201,90],[120,56],[80,35],[80,46],[69,54],[5,2]],"197":[[298,105],[148,69],[132,76],[72,37],[82,62],[21,19]],"203":[[445,187],[205,99],[163,92],[119,75],[121,91],[37,28]],"207":[[372,146],[146,71],[101,48],[84,48],[45,32],[0,0]],"218":[[309,128],[140,68],[101,53],[39,19],[40,26],[1,0]],"244":[[283,128],[128,68],[80,36],[67,39],[40,29],[1,0]],"253":[[715,296],[389,170],[264,135],[186,106],[177,103],[8,6]],"265":[[371,156],[169,78],[114,58],[83,51],[54,37],[0,0]],"268":[[359,143],[122,57],[87,51],[43,27],[30,21],[0,0]],"271":[[290,120],[117,55],[102,52],[81,45],[54,34],[0,0]],"283":[[543,210],[198,84],[155,84],[94,63],[56,33],[1,1]],"345":[[355,151],[165,71],[147,83],[108,72],[117,82],[27,24]],"357":[[332,134],[113,57],[89,51],[36,16],[19,16],[2,2]],"494":[[419,169],[173,96],[127,73],[107,74],[98,80],[11,7]],"848":[[696,305],[315,147],[210,119],[142,89],[133,88],[15,10]]}};
 // ── Απλοποίηση #2 (2026-10-11, κατόπιν αιτήματος του χρήστη) — αναίρεση: false → true ──
 // ENABLE_EXACT_SIGNAL: false = το ακριβές σκορ δεν είναι πια «επιβεβαιωμένο σήμα» ούτε καρτέλα (live: 31/163 = 19% με δηλωμένη εμπιστοσύνη 70–99%).
 // ENABLE_PROP_PICKS: false = χωρίς συστάσεις/σήματα κόρνερ, κάρτες, οφσάιντ (σπάνια, χωρίς αποδεδειγμένη ευστοχία).
@@ -3820,7 +3831,7 @@ window.fetchAllOdds=async function(force=false){
 
     const vbN=latestTopLists.valueBets?.length||0;
     if(priced>0){
-      showOk(`✅ Market scan: ${priced}/${total} αγώνες με odds · ${vbN} value bets${failed?` · ${failed} σφάλματα`:''}`);
+      showOk(`✅ Market scan: ${priced}/${total} αγώνες με odds · ${SHOW_VALUE_BETS?vbN+' value bets':(latestTopLists.bombs?.length||0)+' βόμβες'}${failed?` · ${failed} σφάλματα`:''}`);
     }else{
       showErr(`⚠️ Δεν βρέθηκαν διαθέσιμες pre-match αποδόσεις για ${total} αγώνες. Θα ξαναδοκιμαστούν στο επόμενο refresh.`);
     }
@@ -3967,7 +3978,45 @@ function _bombStatusLabel(status){
   }[status]||status;
 }
 
+const SB_MIN_ODDS=2.00, SB_MAX_ODDS=12.00, SB_MIN_GAP_PP=8.0, SB_CONFLICT_GAP_PP=30.0, SB_MIN_TRUST_EV=0.05, SB_BASE_W=0.30, SB_REF_BSS=0.06;
+const SB_BASE={home:'home',draw:'draw',away:'away',over25:'o25',under25:'o25',over35:'o35',under35:'o35',bttsY:'btts',bttsN:'btts'};
+// Ιστορικό βάρος εμπιστοσύνης: 0.30 (=1−MARKET_BLEND_W) × skill πρωταθλήματος/αγοράς ÷ 0.06 (skill 1Χ2), όριο 0–1.5.
+function _sbTrust(leagueId,marketKey){const k=SB_BASE[marketKey];const g=HIST_TABLES.bss['0']||{};const t=HIST_TABLES.bss[String(leagueId)]||g;const s=Number(t[k]??g[k]??0);return {bss:s,w:SB_BASE_W*clamp((Number.isFinite(s)?s:0)/SB_REF_BSS,0,1.5)};}
+function _smartBombCandidate(rec,marketKey,market,label,icon,modelProb){
+  const meta=rec?.odds?._market?.[marketKey];
+  const bestOdds=Number(meta?.bestOdds||rec?.odds?.[marketKey]);
+  const marketProb=Number(meta?.noVigProb);
+  modelProb=Number(modelProb);
+  if(!Number.isFinite(modelProb)||modelProb<=0||modelProb>=0.98) return null;
+  if(!Number.isFinite(bestOdds)||bestOdds<SB_MIN_ODDS||bestOdds>SB_MAX_ODDS) return null;
+  if(!Number.isFinite(marketProb)||marketProb<=0||marketProb>=1) return null;
+  const books=Number(meta?.books||0), spreadPP=Number(meta?.spreadPP||0);
+  const gapPP=(modelProb-marketProb)*100;
+  const tr=_sbTrust(rec?.leagueId,marketKey);
+  // Σταθμισμένη πιθανότητα: η αγορά μετακινείται προς το μοντέλο όσο το επιτρέπει η ιστορική του αποτελεσματικότητα.
+  const trustedProb=clamp(marketProb+tr.w*(modelProb-marketProb),0.001,0.999);
+  const execEdge=trustedProb*bestOdds-1, execEdgePct=execEdge*100;
+  let status='VERIFIED';
+  if(gapPP>=SB_CONFLICT_GAP_PP) status='CONFLICT';
+  else if(gapPP<SB_MIN_GAP_PP) status='LOW_GAP';
+  else if(execEdge<SB_MIN_TRUST_EV) status='LOW_EDGE';
+  else if(books<BOMB_MIN_BOOKS) status='LOW_COVERAGE';
+  else if(spreadPP>BOMB_MAX_MARKET_SPREAD_PP) status='WIDE_MARKET';
+  const evScore=clamp(execEdgePct/30*45,0,45);
+  const gapScore=clamp((gapPP-SB_MIN_GAP_PP)/(SB_CONFLICT_GAP_PP-SB_MIN_GAP_PP)*20,0,20);
+  const trustScore=clamp(tr.w/(SB_BASE_W*1.5)*25,0,25);
+  const mktScore=clamp(books/5*5,0,5)+clamp((BOMB_MAX_MARKET_SPREAD_PP-spreadPP)/BOMB_MAX_MARKET_SPREAD_PP*5,0,5);
+  let bombScore=Math.round(evScore+gapScore+trustScore+mktScore);
+  if(status==='CONFLICT') bombScore=Math.min(bombScore,35);
+  return {fixId:rec.fixId,marketKey,market,label,icon,status,modelProb,marketProb,trustedProb,trustW:tr.w,histSkill:tr.bss,
+    modelFairOdds:1/modelProb,marketFairOdds:1/marketProb,effectiveOdds:bestOdds,bestBookmaker:meta?.bestBookmaker||'Best available',
+    books,spreadPP,marketOverround:meta?.overroundAvg??null,gapPP,execEdge,execEdgePct,bombScore,
+    saferMarket:rec?.matchPicture?.recommendedMarket||rec?.outcomeMarket||null,verified:status==='VERIFIED',smart:true,
+    breakdown:{evScore,gapScore,trustScore,mktScore}};
+}
+
 function _bombCandidate(rec,marketKey,market,label,icon,modelProb){
+  if(SMART_BOMBS) return _smartBombCandidate(rec,marketKey,market,label,icon,modelProb);
   const meta=rec?.odds?._market?.[marketKey];
   const bestOdds=Number(meta?.bestOdds||rec?.odds?.[marketKey]);
   const marketProb=Number(meta?.noVigProb);
@@ -4028,7 +4077,8 @@ function _bombCandidate(rec,marketKey,market,label,icon,modelProb){
 
 function computeBombScore(rec){
   if(!rec?.pp||!rec?.odds) return null;
-  const pp=rec.pp;
+  // Βόμβες: καθαρό μοντέλο (χωρίς το μείγμα αγοράς 1Χ2), αλλιώς η απόκλιση από την αγορά «σβήνει».
+  const pp=(SMART_BOMBS&&rec.pp.model)?{...rec.pp,...rec.pp.model}:rec.pp;
   const candidates=[
     _bombCandidate(rec,'home','1X2','ΝΙΚΗ ΓΗΠΕΔΟΥΧΩΝ','🏠',pp.pHome),
     _bombCandidate(rec,'draw','1X2','ΙΣΟΠΑΛΙΑ','🤝',pp.pDraw),
@@ -4086,7 +4136,7 @@ function buildBombsList(){
 function renderBombsTab(bombs){
   const priced=(window.scannedMatchesData||[]).filter(r=>(r.odds?._meta?.bookmakerCount||0)>0).length;
   const diag=latestBombDiagnostics||[];
-  const info=`<div style="margin-bottom:12px;padding:10px 14px;background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.25);border-radius:8px;font-size:0.75rem;color:var(--text-muted);line-height:1.6;">
+  const info=SMART_BOMBS?`<div style="margin-bottom:12px;padding:10px 14px;background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.25);border-radius:8px;font-size:0.75rem;color:var(--text-muted);line-height:1.6;">💣 <strong style="color:var(--accent-red);">Βόμβες</strong> — μεγάλη απόκλιση του μοντέλου από την αγορά (≥ ${SB_MIN_GAP_PP.toFixed(0)}pp, < ${SB_CONFLICT_GAP_PP.toFixed(0)}pp), απόδοση ${SB_MIN_ODDS.toFixed(2)}–${SB_MAX_ODDS.toFixed(0)}. Η πιθανότητα σταθμίζεται με την ιστορική αποτελεσματικότητα του μοντέλου στο πρωτάθλημα και στην αγορά (backtest)· απαιτείται σταθμισμένο EV ≥ ${(SB_MIN_TRUST_EV*100).toFixed(0)}%.<br><span style="color:var(--accent-gold);">Αγώνες με αποδόσεις: ${priced}</span> · Υψηλό ρίσκο: ποντάρισμα μόνο μικρό ποσό.</div>`:`<div style="margin-bottom:12px;padding:10px 14px;background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.25);border-radius:8px;font-size:0.75rem;color:var(--text-muted);line-height:1.6;">
     💣 <strong style="color:var(--accent-red);">Verified Market Bombs</strong> — best odds ≥ ${BOMB_MIN_MARKET_ODDS.toFixed(2)}, no-vig gap ≥ ${BOMB_MIN_NOVIG_GAP_PP.toFixed(0)}pp, executable EV ≥ ${(BOMB_MIN_EXEC_EDGE*100).toFixed(0)}%, ≥ ${BOMB_MIN_BOOKS} bookmakers, spread ≤ ${BOMB_MAX_MARKET_SPREAD_PP.toFixed(0)}pp.<br>
     <span style="color:var(--accent-gold);">Market priced fixtures: ${priced}</span> · Απόκλιση >${BOMB_VERIFIED_MAX_GAP_PP.toFixed(0)}pp = divergence · ≥${BOMB_CONFLICT_GAP_PP.toFixed(0)}pp = conflict, όχι Bomb.
   </div>`;
@@ -4105,7 +4155,8 @@ function renderBombsTab(bombs){
         <span style="font-family:var(--font-mono);color:var(--accent-blue);">APEX ${(b.modelProb*100).toFixed(1)}%</span>
         <span style="font-family:var(--font-mono);">Market no-vig ${(b.marketProb*100).toFixed(1)}%</span>
         <span style="font-family:var(--font-mono);color:var(--accent-green);">Δ +${b.gapPP.toFixed(1)}pp</span>
-        <span style="font-family:var(--font-mono);color:var(--accent-green);">EV +${b.execEdgePct.toFixed(1)}%</span>
+        <span style="font-family:var(--font-mono);color:var(--accent-green);">EV${b.smart?' σταθμ.':''} +${b.execEdgePct.toFixed(1)}%</span>
+        ${b.smart?`<span style="font-family:var(--font-mono);color:var(--accent-gold);">Σταθμισμένη ${(b.trustedProb*100).toFixed(1)}% · ιστορικό βάρος ${Math.round(b.trustW*100)}%</span>`:''}
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border-light);display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;font-size:.68rem;">
         <div>Model fair <b>${b.modelFairOdds.toFixed(2)}</b></div>
@@ -4248,13 +4299,34 @@ function renderTop70Tab(list){
     </div>`).join('')+`</div>`;
 }
 
+// ── Σημεία (2026-10-17): 1/Χ/2 με τη μεγαλύτερη πιθανότητα του καθαρού μοντέλου + ιστορική ευστοχία πρωταθλήματος (backtest) ──
+function _signHist(leagueId,p){const e=HIST_TABLES.signEdges;let b=0;while(b<e.length&&p>=e[b])b++;const g=HIST_TABLES.sign['0'][b]||[0,0];const gr=g[0]?g[1]/g[0]:p;const L=(HIST_TABLES.sign[String(leagueId)]||[])[b]||[0,0];return {rate:(L[1]+40*gr)/(L[0]+40),n:L[0],k:L[1],band:b};}
+function signsList(limit=15){
+  const sd=(window.scannedMatchesData||[]).filter(x=>{const st=x?.m?.fixture?.status?.short||'';return x?.pp&&!isFinished(st)&&!isLive(st);});
+  return sd.map(x=>{const q=x.pp.model||x.pp;const v=[Number(q.pHome),Number(q.pDraw),Number(q.pAway)];if(!v.every(Number.isFinite))return null;const s=v[0]+v[1]+v[2];if(!(s>0))return null;
+    const i=v.indexOf(Math.max(...v));const p=v[i]/s;return {x,sign:['1','X','2'][i],p,hist:_signHist(x.leagueId,p)};})
+    .filter(Boolean).sort((a,b)=>(b.hist.rate-a.hist.rate)||(b.p-a.p)).slice(0,limit);
+}
+function renderSignsTab(list){
+  if(!list?.length) return `<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχουν αγώνες που δεν έχουν αρχίσει στο τρέχον scan.</div>`;
+  return `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">Σημείο = το αποτέλεσμα 1/Χ/2 με τη μεγαλύτερη πιθανότητα του μοντέλου. Ταξινόμηση με την <b>ιστορική ευστοχία</b> του μοντέλου στο ίδιο πρωτάθλημα και στην ίδια ζώνη πιθανότητας (backtest από 2023-07).</div><div style="display:flex;flex-direction:column;gap:10px;">`+
+    list.map(({x,sign,p,hist},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
+      <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
+      <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}
+        <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Μοντέλο ${Math.round(p*100)}% · ιστορικά στο πρωτάθλημα: <b>${hist.n?Math.round(hist.k/hist.n*100)+'% ('+hist.k+'/'+hist.n+')':'χωρίς δείγμα'}</b></div></div>
+      <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-blue);min-width:34px;text-align:center;">${sign}</div>
+      <div style="text-align:right;flex-shrink:0;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:#16a34a;">${Math.round(hist.rate*100)}%</div><div style="font-size:.62rem;color:var(--text-muted);font-weight:700;">ΙΣΤΟΡΙΚΗ ΕΥΣΤΟΧΙΑ</div></div>
+    </div>`).join('')+`</div>`;
+}
+
 function renderTopSections(){
   if(!latestTopLists.valueBets) latestTopLists.valueBets = [];
   const vbCount = latestTopLists.valueBets.length;
   const tabs=[
     {id:'top70',lbl:`🎯 Top 10 · 70%+`,d:top70List(10),sk:null,sl:null},
-    {id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'},
-    ...(!ENABLE_MARKET_BOMBS?[]:[{id:'bombs',    lbl:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'}]),
+    ...(!SHOW_SIGNS_TAB?[]:[{id:'signs',lbl:'🎯 Σημεία',d:signsList(15),sk:null,sl:null}]),
+    ...(!SHOW_VALUE_BETS?[]:[{id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'}]),
+    ...(!ENABLE_MARKET_BOMBS?[]:[{id:'bombs',    lbl:SMART_BOMBS?`💣 Βόμβες`:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'}]),
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
     {id:'combo1',   lbl:`⚡ Top Picks`,                                    d:latestTopLists.combo1,     sk:'strength',   sl:'CONF'},
     ...(!ENABLE_APL?[]:[{id:'precision',lbl:`🧠 Precision 1X2`,                                 d:latestTopLists.precision||[],sk:null,          sl:'META'}]),
@@ -4285,6 +4357,8 @@ function renderTopSections(){
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
     if(tab.id==='top70'){
       html += renderTop70Tab(tab.d);
+    } else if(tab.id==='signs'){
+      html += renderSignsTab(tab.d);
     } else if(tab.id==='players'){
       html += renderPlayersTab(tab.d);
     } else if(tab.id==='valuebets'){
@@ -4581,7 +4655,7 @@ function renderTop3Certainty(bets) {
     const hasLineup = x.lineupData?.available;
     const hasInj = (x.hInjAdj?.delta < -0.05) || (x.aInjAdj?.delta < -0.05);
     const certScore = x._certaintyScore || 0;
-    const evLine = x.valueBets?.length
+    const evLine = SHOW_VALUE_BETS && x.valueBets?.length
       ? `<div style="font-size:0.72rem;color:var(--accent-green);font-weight:700;margin-top:4px;">💰 Value: +${Math.max(...x.valueBets.map(b=>b.ev)).toFixed(1)}% EV @ ${x.valueBets.find(b=>b.ev===Math.max(...x.valueBets.map(b=>b.ev)))?.decOdds?.toFixed(2)}</div>`
       : '';
     return `
