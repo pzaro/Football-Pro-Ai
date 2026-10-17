@@ -3103,8 +3103,86 @@ function _renderLiveAlerts(){
   el.innerHTML=liveAlerts.map(a=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:0.7rem;flex-wrap:wrap;"><span style="color:var(--text-muted);font-family:var(--font-mono);min-width:55px;">${a.time}</span><span style="font-weight:700;color:var(--text-main);">${esc(a.ht)} εναντίον ${esc(a.at)}</span><span style="color:var(--text-muted);">${a.elapsed}' · ${a.score}</span><span style="color:var(--accent-red);">${esc(a.from)}</span><span style="color:var(--text-muted);">→</span><span style="color:var(--accent-green);">${esc(a.to)}</span></div>`).join('');
 }
 
+// ── Live score σε μορφή livescore (2026-10-17, κατόπιν αιτήματος) — αναίρεση: LIVE_SCORE_STYLE=false ──
+// Λίστα ανά πρωτάθλημα (σημαία · χώρα · πρωτάθλημα), μία γραμμή ανά αγώνα (λεπτό · ομάδες · σκορ · live 1/Χ/2).
+// ★ checkbox = αγαπημένα (αποθηκεύονται στον browser)· τα αγαπημένα εμφανίζονται πρώτα, φίλτρο «Μόνο αγαπημένα». Κλικ στη γραμμή = λεπτομέρειες.
+const LIVE_SCORE_STYLE=true;
+const LS_LIVE_FAVS='omega_live_favs_v1';
+let _liveFavs=new Set((()=>{try{return JSON.parse(localStorage.getItem(LS_LIVE_FAVS)||'[]');}catch{return [];}})().map(String));
+let _liveFavOnly=false, _liveLastRecs=[];
+const _liveOpen=new Set();
+window.toggleLiveFav=function(id,ev){ if(ev)ev.stopPropagation(); id=String(id); if(_liveFavs.has(id))_liveFavs.delete(id); else _liveFavs.add(id); try{localStorage.setItem(LS_LIVE_FAVS,JSON.stringify([..._liveFavs]));}catch{} _renderLiveDashboard(_liveLastRecs); };
+window.setLiveFavOnly=function(v){ _liveFavOnly=!!v; _renderLiveDashboard(_liveLastRecs); };
+window.toggleLiveOpen=function(id){ id=String(id); if(_liveOpen.has(id))_liveOpen.delete(id); else _liveOpen.add(id); _renderLiveDashboard(_liveLastRecs); };
+const _LS_CSS=`<style>
+.ls-wrap{border:1px solid var(--border-light);border-radius:10px;overflow:hidden;background:var(--bg-surface);color:var(--text-main);}
+.ls-bar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+.ls-chip{border:1px solid var(--border-light);background:var(--bg-base);color:var(--text-main);border-radius:999px;padding:5px 14px;font-weight:800;font-size:.78rem;cursor:pointer;}
+.ls-chip.on{background:#ff7a00;border-color:#ff7a00;color:#fff;}
+.ls-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-base);font-size:.74rem;font-weight:800;border-top:1px solid var(--border-light);}
+.ls-head img{width:18px;height:13px;object-fit:cover;border-radius:2px;}
+.ls-head .ls-country{color:var(--text-muted);font-weight:700;}
+.ls-row{display:grid;grid-template-columns:34px 46px 1fr 30px minmax(0,150px);align-items:center;gap:8px;padding:7px 12px;border-top:1px solid var(--border-light);cursor:pointer;}
+.ls-row:hover{background:rgba(255,122,0,.06);}
+.ls-fav{display:flex;align-items:center;justify-content:center;cursor:pointer;}
+.ls-fav input{display:none;}
+.ls-fav span{font-size:1.15rem;color:var(--text-muted);line-height:1;}
+.ls-fav input:checked+span{color:#ff7a00;}
+.ls-min{font-family:var(--font-mono);font-weight:800;color:#ff7a00;font-size:.8rem;text-align:center;}
+.ls-min.ht{color:var(--text-muted);}
+.ls-blink{animation:lsb 1s steps(1) infinite;}
+@keyframes lsb{50%{opacity:0;}}
+.ls-teams div,.ls-score div{line-height:1.45;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ls-teams .w,.ls-score .w{font-weight:800;}
+.ls-score{text-align:center;font-family:var(--font-mono);font-weight:700;color:#ff7a00;}
+.ls-prob{display:flex;gap:4px;justify-content:flex-end;font-family:var(--font-mono);font-size:.68rem;}
+.ls-prob b{display:inline-block;min-width:40px;text-align:center;padding:2px 4px;border-radius:5px;background:var(--bg-base);color:var(--text-main);font-weight:700;}
+.ls-prob b.best{background:#16a34a;color:#fff;}
+.ls-detail{padding:4px 12px 10px 92px;border-top:1px dashed var(--border-light);}
+@media(max-width:560px){.ls-row{grid-template-columns:30px 40px 1fr 26px;}.ls-prob{grid-column:2/-1;justify-content:flex-start;}.ls-detail{padding-left:12px;}}
+</style>`;
+function _liveMinHTML(lf){
+  const st=lf.fixture.status.short, mn=lf.fixture.status.elapsed||0, ex=lf.fixture.status.extra;
+  if(st==='HT') return `<div class="ls-min ht">HT</div>`;
+  if(st==='BT') return `<div class="ls-min ht">Διάλ.</div>`;
+  if(st==='P') return `<div class="ls-min">Πέν.</div>`;
+  if(['FT','AET','PEN'].includes(st)) return `<div class="ls-min ht">${st}</div>`;
+  return `<div class="ls-min">${mn}${ex?'+'+ex:''}<span class="ls-blink">'</span></div>`;
+}
+function _liveRowHTML(r){
+  const lf=r.lf, id=String(lf.fixture.id), fav=_liveFavs.has(id);
+  const hG=lf.goals?.home??0, aG=lf.goals?.away??0, lp=r.liveP;
+  const best=lp?Math.max(lp.p1,lp.pX,lp.p2):-1;
+  const pr=lp?`<div class="ls-prob"><b class="${lp.p1===best?'best':''}" title="Τελικό 1">1 ${_livePct(lp.p1)}</b><b class="${lp.pX===best?'best':''}" title="Τελικό Χ">Χ ${_livePct(lp.pX)}</b><b class="${lp.p2===best?'best':''}" title="Τελικό 2">2 ${_livePct(lp.p2)}</b></div>`:'<div></div>';
+  const open=_liveOpen.has(id);
+  return `<div class="ls-row" id="live-card-${id}" onclick="toggleLiveOpen('${id}')">
+    <label class="ls-fav" title="Αγαπημένο" onclick="event.stopPropagation()"><input type="checkbox" ${fav?'checked':''} onchange="toggleLiveFav('${id}',event)"><span>★</span></label>
+    ${_liveMinHTML(lf)}
+    <div class="ls-teams"><div class="${hG>aG?'w':''}">${esc(lf.teams.home.name)}</div><div class="${aG>hG?'w':''}">${esc(lf.teams.away.name)}</div></div>
+    <div class="ls-score"><div class="${hG>aG?'w':''}">${hG}</div><div class="${aG>hG?'w':''}">${aG}</div></div>
+    ${pr}
+  </div>${open?`<div class="ls-detail">${liveCompactHTML(lf.teams.home.name,lf.teams.away.name,lp,r.li,{compact:true})}${r.preMatch?.omegaPick&&!String(r.preMatch.omegaPick).includes('ΧΩΡΙΣ')?`<div style="margin-top:6px;font-size:.66rem;color:var(--text-muted);">Πρό-αγώνα: ${esc(r.preMatch.omegaPick)}</div>`:''}<div style="margin-top:6px;"><button class="btn btn-outline" style="font-size:.66rem;padding:3px 8px;" onclick="event.stopPropagation();window.openMatchAnalysisDrawer&&window.openMatchAnalysisDrawer('${id}')">Πλήρης ανάλυση</button></div></div>`:''}`;
+}
+function _renderLiveScoreStyle(el,recs){
+  const isFav=r=>_liveFavs.has(String(r.lf.fixture.id));
+  const favN=recs.filter(isFav).length;
+  const bar=`<div class="ls-bar"><button class="ls-chip ${_liveFavOnly?'':'on'}" onclick="setLiveFavOnly(false)">Όλα LIVE (${recs.length})</button><button class="ls-chip ${_liveFavOnly?'on':''}" onclick="setLiveFavOnly(true)">★ Αγαπημένα (${favN})</button></div>`;
+  const list=_liveFavOnly?recs.filter(isFav):recs;
+  if(!list.length){ el.innerHTML=_LS_CSS+bar+`<div style="text-align:center;color:var(--text-muted);padding:28px 0;font-size:.82rem;">${_liveFavOnly?'Κανένα αγαπημένο live. Πάτα το ★ σε έναν αγώνα για να τον προσθέσεις.':'Δεν υπάρχουν live αγώνες για τα επιλεγμένα πρωταθλήματα.'}</div>`; return; }
+  const byMin=(a,b)=>(b.lf.fixture.status.elapsed||0)-(a.lf.fixture.status.elapsed||0);
+  const favs=list.filter(isFav).sort(byMin), rest=_liveFavOnly?[]:list.filter(r=>!isFav(r));
+  const groups=new Map(); rest.forEach(r=>{const k=r.lf.league.id; if(!groups.has(k))groups.set(k,[]); groups.get(k).push(r);});
+  const head=lg=>`<div class="ls-head">${lg.flag?`<img src="${esc(lg.flag)}" alt="" onerror="this.style.display='none'">`:lg.logo?`<img src="${esc(lg.logo)}" alt="" style="width:16px;height:16px;object-fit:contain;" onerror="this.style.display='none'">`:''}<span class="ls-country">${esc(lg.country||'')}</span><span>${esc(lg.name||'')}</span></div>`;
+  let html=_LS_CSS+bar+`<div class="ls-wrap">`;
+  if(favs.length) html+=`<div class="ls-head" style="color:#ff7a00;">★ Αγαπημένα</div>`+favs.map(_liveRowHTML).join('');
+  [...groups.values()].sort((a,b)=>String(a[0].lf.league.country||'').localeCompare(String(b[0].lf.league.country||''),'el')).forEach(g=>{ html+=head(g[0].lf.league)+g.sort(byMin).map(_liveRowHTML).join(''); });
+  el.innerHTML=html+`</div><div style="font-size:.64rem;color:var(--text-muted);margin-top:6px;">Οι πιθανότητες 1/Χ/2 είναι για το <b>τελικό</b> αποτέλεσμα από το τρέχον σκορ. Κλικ σε αγώνα για επόμενο γκολ και xG.</div>`;
+}
+
 function _renderLiveDashboard(liveRecs){
   const el=document.getElementById('liveDashboard');if(!el)return;
+  _liveLastRecs=liveRecs||[];
+  if(LIVE_SCORE_STYLE){ _renderLiveScoreStyle(el,_liveLastRecs); return; }
   if(LIVE_SIMPLE && liveRecs.length){
     liveRecs.sort((a,b)=>(b.lf.fixture.status.elapsed||0)-(a.lf.fixture.status.elapsed||0));
     el.innerHTML=liveRecs.map(({lf,li,liveP,preMatch})=>{
@@ -4335,23 +4413,81 @@ function _signRankHTML(){
   return `<div style="margin-bottom:12px;"><div style="font-size:.78rem;font-weight:800;margin-bottom:6px;">🏆 Πρωταθλήματα με την καλύτερη ευστοχία στα σημεία (backtest, τελευταίοι 12 μήνες)</div><div style="display:flex;gap:10px;flex-wrap:wrap;">${t('60','Σημεία με πιθανότητα ≥60%')}${t('50','Σημεία με πιθανότητα ≥50%')}</div></div>`;
 }
 function _signHist(leagueId,p){const e=HIST_TABLES.signEdges;let b=0;while(b<e.length&&p>=e[b])b++;const g=HIST_TABLES.sign['0'][b]||[0,0];const gr=g[0]?g[1]/g[0]:p;const L=(HIST_TABLES.sign[String(leagueId)]||[])[b]||[0,0];return {rate:(L[1]+40*gr)/(L[0]+40),n:L[0],k:L[1],band:b};}
-function signsList(limit=15){
-  const sd=(window.scannedMatchesData||[]).filter(x=>{const st=x?.m?.fixture?.status?.short||'';return x?.pp&&!isFinished(st)&&!isLive(st);});
-  return sd.map(x=>{const q=x.pp.model||x.pp;const v=[Number(q.pHome),Number(q.pDraw),Number(q.pAway)];if(!v.every(Number.isFinite))return null;const s=v[0]+v[1]+v[2];if(!(s>0))return null;
-    const i=v.indexOf(Math.max(...v));const p=v[i]/s;return {x,sign:['1','X','2'][i],p,hist:_signHist(x.leagueId,p)};})
-    .filter(Boolean).sort((a,b)=>(b.hist.rate-a.hist.rate)||(b.p-a.p)).slice(0,limit);
+function _signProbs(x){const q=x?.pp;if(!q)return null;const v=[Number(q.pHome),Number(q.pDraw),Number(q.pAway)];if(!v.every(Number.isFinite))return null;const s=v[0]+v[1]+v[2];return s>0?v.map(t=>t/s):null;}
+// Όλα τα «καθαρά» σημεία (1/Χ/2) σε φθίνουσα πιθανότητα. Πιθανότητα = τελική του προγράμματος (με το μείγμα αγοράς όταν υπάρχουν αποδόσεις).
+function signsList(limit=Infinity){
+  const sd=(window.scannedMatchesData||[]).filter(x=>{const st=x?.m?.fixture?.status?.short||'';return x?.pp&&!x.analysisError&&!isFinished(st)&&!isLive(st);});
+  return sd.map(x=>{const v=_signProbs(x);if(!v)return null;const i=v.indexOf(Math.max(...v));
+    const qm=x.pp.model?_signProbs({pp:x.pp.model}):v;const pm=qm?Math.max(...qm):v[i];
+    return {x,sign:['1','X','2'][i],p:v[i],hist:_signHist(x.leagueId,pm)};})
+    .filter(Boolean).sort((a,b)=>(b.p-a.p)||(b.hist.rate-a.hist.rate)).slice(0,limit);
 }
 function renderSignsTab(list){
   if(!list?.length) return _signRankHTML()+`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;font-size:1rem;">Δεν υπάρχουν αγώνες που δεν έχουν αρχίσει στο τρέχον scan.</div>`;
   const top5=new Set((SIGN_LEAGUE_RANK['60']||[]).slice(0,5).map(r=>Number(r[0])));
-  return _signRankHTML()+`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">Σημείο = το αποτέλεσμα 1/Χ/2 με τη μεγαλύτερη πιθανότητα του μοντέλου. Ταξινόμηση με την <b>ιστορική ευστοχία</b> του μοντέλου στο ίδιο πρωτάθλημα και στην ίδια ζώνη πιθανότητας (backtest από 2023-07).</div><div style="display:flex;flex-direction:column;gap:10px;">`+
-    list.map(({x,sign,p,hist},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
-      <div style="font-family:var(--font-mono);font-size:1.15rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
-      <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.98rem;line-height:1.35;">${top5.has(Number(x.leagueId))?'⭐ ':''}${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Μοντέλο ${Math.round(p*100)}% · ιστορικά στο πρωτάθλημα: <b>${hist.n?Math.round(hist.k/hist.n*100)+'% ('+hist.k+'/'+hist.n+')':'χωρίς δείγμα'}</b></div></div>
+  return _signRankHTML()+`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">Όλα τα <b>καθαρά σημεία</b> (1/Χ/2) των αγώνων που δεν έχουν αρχίσει, σε φθίνουσα πιθανότητα (${list.length} αγώνες). Η ιστορική ευστοχία είναι του μοντέλου στο ίδιο πρωτάθλημα και στην ίδια ζώνη πιθανότητας (backtest). ⭐ = top-5 πρωτάθλημα στα σημεία.</div><div style="display:flex;flex-direction:column;gap:8px;">`+
+    list.map(({x,sign,p,hist},j)=>`<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-base);border:1px solid var(--border-light);border-radius:var(--radius-sm);cursor:pointer;" onclick="window.openMatchAnalysisDrawer('${x.fixId}')">
+      <div style="font-family:var(--font-mono);font-size:1rem;font-weight:900;color:var(--text-dim);min-width:30px;text-align:center;">#${j+1}</div>
+      <div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:.95rem;line-height:1.35;">${top5.has(Number(x.leagueId))?'⭐ ':''}${esc(x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(x.at)}</div>${competitionContextHTML(x,{compact:true})}
+        <div style="font-size:.7rem;color:var(--text-muted);margin-top:3px;">Ιστορικά στο πρωτάθλημα: <b>${hist.n?Math.round(hist.k/hist.n*100)+'% ('+hist.k+'/'+hist.n+')':'χωρίς δείγμα'}</b></div></div>
       <div style="font-family:var(--font-mono);font-size:1.6rem;font-weight:900;color:var(--accent-blue);min-width:34px;text-align:center;">${sign}</div>
-      <div style="text-align:right;flex-shrink:0;"><div style="font-family:var(--font-mono);font-size:1.35rem;font-weight:900;color:#16a34a;">${Math.round(hist.rate*100)}%</div><div style="font-size:.62rem;color:var(--text-muted);font-weight:700;">ΙΣΤΟΡΙΚΗ ΕΥΣΤΟΧΙΑ</div></div>
+      <div style="text-align:right;flex-shrink:0;min-width:64px;"><div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:#16a34a;">${Math.round(p*100)}%</div><div style="font-size:.6rem;color:var(--text-muted);font-weight:700;">ΠΙΘΑΝΟΤΗΤΑ</div></div>
     </div>`).join('')+`</div>`;
+}
+
+// ── 3άδα με απόδοση ≥ TREBLE_MIN_ODDS (2026-10-17): τα 3 σημεία (διαφορετικοί αγώνες) με τη μεγαλύτερη κοινή πιθανότητα και συνολική απόδοση ≥ 10 ──
+const TREBLE_MIN_ODDS=10, TREBLE_MAX_CANDIDATES=150, TREBLE_SHOW=3;
+function trebleCandidates(){
+  const out=[];
+  (window.scannedMatchesData||[]).forEach(x=>{
+    const st=x?.m?.fixture?.status?.short||''; if(!x?.pp||x.analysisError||isFinished(st)||isLive(st)) return;
+    const v=_signProbs(x); if(!v) return;
+    ['home','draw','away'].forEach((k,i)=>{
+      const odd=Number(x.odds?._market?.[k]?.bestOdds||x.odds?.[k]);
+      if(!Number.isFinite(odd)||odd<1.15||odd>15) return;
+      out.push({x,fixId:x.fixId,sign:['1','X','2'][i],p:v[i],odd});
+    });
+  });
+  return out.sort((a,b)=>b.p-a.p).slice(0,TREBLE_MAX_CANDIDATES);
+}
+function buildBestTrebles(){
+  const c=trebleCandidates(), n=c.length, L=Math.log(TREBLE_MIN_ODDS), best=[];
+  const push=t=>{best.push(t);best.sort((a,b)=>b.prob-a.prob);if(best.length>TREBLE_SHOW*4)best.length=TREBLE_SHOW*4;};
+  for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){
+    if(c[j].fixId===c[i].fixId) continue;
+    const pij=c[i].p*c[j].p, oij=c[i].odd*c[j].odd;
+    if(best.length>=TREBLE_SHOW && pij*c[j].p<best[TREBLE_SHOW-1].prob) break;
+    for(let k=j+1;k<n;k++){
+      if(c[k].fixId===c[i].fixId||c[k].fixId===c[j].fixId) continue;
+      const prob=pij*c[k].p; if(best.length>=TREBLE_SHOW && prob<best[TREBLE_SHOW-1].prob) break;
+      const odds=oij*c[k].odd; if(Math.log(odds)<L) continue;
+      push({legs:[c[i],c[j],c[k]],prob,odds,ev:prob*odds-1});
+    }
+  }
+  // διαφορετικές 3άδες (όχι ίδια σύνθεση)
+  const seen=new Set(), res=[];
+  for(const t of best){const key=t.legs.map(l=>l.fixId+l.sign).sort().join('|'); if(seen.has(key))continue; seen.add(key); res.push(t); if(res.length>=TREBLE_SHOW)break;}
+  return res;
+}
+function renderTrebleTab(){
+  const priced=(window.scannedMatchesData||[]).filter(r=>(r.odds?._meta?.bookmakerCount||0)>0).length;
+  const info=`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">Η πιο πιθανή 3άδα από καθαρά σημεία (1/Χ/2, τρεις διαφορετικοί αγώνες) με συνολική απόδοση ≥ ${TREBLE_MIN_ODDS}. Απόδοση = η καλύτερη διαθέσιμη. Πιθανότητα = του προγράμματος (με το μείγμα αγοράς). Αγώνες με αποδόσεις: ${priced}.</div>`;
+  if(!priced) return info+`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;">Δεν έχουν φορτωθεί αποδόσεις. Πάτα «💎 Market Value» και ξανάνοιξε την καρτέλα.</div>`;
+  const tr=buildBestTrebles();
+  if(!tr.length) return info+`<div style="text-align:center;color:var(--text-muted);padding:22px;font-weight:600;">Δεν βρέθηκε 3άδα με απόδοση ≥ ${TREBLE_MIN_ODDS}.</div>`;
+  return info+tr.map((t,i)=>`<div style="background:var(--bg-base);border:1px solid ${i?'var(--border-light)':'rgba(22,163,74,.5)'};border-radius:8px;margin-bottom:12px;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:${i?'transparent':'rgba(22,163,74,.07)'};flex-wrap:wrap;gap:8px;">
+      <div style="font-weight:900;">${i?'Εναλλακτική '+i:'🏆 Πιο πιθανή 3άδα'}</div>
+      <div style="display:flex;gap:16px;font-family:var(--font-mono);">
+        <div style="text-align:center;"><div style="font-size:1.25rem;font-weight:900;color:var(--accent-gold);">${t.odds.toFixed(2)}</div><div style="font-size:.55rem;color:var(--text-muted);">ΑΠΟΔΟΣΗ</div></div>
+        <div style="text-align:center;"><div style="font-size:1.25rem;font-weight:900;color:#16a34a;">${(t.prob*100).toFixed(1)}%</div><div style="font-size:.55rem;color:var(--text-muted);">ΠΙΘΑΝΟΤΗΤΑ</div></div>
+        <div style="text-align:center;"><div style="font-size:1.25rem;font-weight:900;color:${t.ev>=0?'#16a34a':'var(--accent-red)'};">${t.ev>=0?'+':''}${(t.ev*100).toFixed(0)}%</div><div style="font-size:.55rem;color:var(--text-muted);">EV</div></div>
+      </div></div>
+    ${t.legs.map(l=>`<div onclick="window.openMatchAnalysisDrawer('${l.fixId}')" style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--border-light);cursor:pointer;">
+      <div style="flex:1;min-width:0;"><div style="font-weight:700;">${esc(l.x.ht)} <span style="color:var(--text-muted)">vs</span> ${esc(l.x.at)}</div>${competitionContextHTML(l.x,{compact:true})}</div>
+      <div style="font-family:var(--font-mono);font-size:1.3rem;font-weight:900;color:var(--accent-blue);min-width:28px;text-align:center;">${l.sign}</div>
+      <div style="font-family:var(--font-mono);text-align:right;min-width:90px;"><b>${l.odd.toFixed(2)}</b> · ${Math.round(l.p*100)}%</div></div>`).join('')}
+  </div>`).join('')+`<div style="font-size:.68rem;color:var(--text-muted);">Υψηλό ρίσκο: με απόδοση 10+ η 3άδα κερδίζει περίπου 1 στις ${Math.max(2,Math.round(1/tr[0].prob))} φορές.</div>`;
 }
 
 function renderTopSections(){
@@ -4359,7 +4495,8 @@ function renderTopSections(){
   const vbCount = latestTopLists.valueBets.length;
   const tabs=[
     {id:'top70',lbl:`🎯 Top 10 · 70%+`,d:top70List(10),sk:null,sl:null},
-    ...(!SHOW_SIGNS_TAB?[]:[{id:'signs',lbl:'🎯 Σημεία',d:signsList(15),sk:null,sl:null}]),
+    ...(!SHOW_SIGNS_TAB?[]:[{id:'signs',lbl:'🎯 Σημεία',d:signsList(),sk:null,sl:null}]),
+    ...(!SHOW_SIGNS_TAB?[]:[{id:'treble10',lbl:'🎰 3άδα 10+',d:[0],sk:null,sl:null}]),
     ...(!SHOW_VALUE_BETS?[]:[{id:'valuebets',lbl:`💰 Value Bets`,                                  d:latestTopLists.valueBets,  sk:'ev',         sl:'EV%',  special:'valuebets'}]),
     ...(!ENABLE_MARKET_BOMBS?[]:[{id:'bombs',    lbl:SMART_BOMBS?`💣 Βόμβες`:`💣 Bombs`,                                        d:latestTopLists.bombs||[], sk:'bombScore',  sl:'SCORE', special:'bombs'}]),
     {id:'top3',     lbl:'🥇 Τριάδα',                                        d:latestTopLists.top3Certainty||[], sk:'_certaintyScore', sl:'SCORE', special:'top3'},
@@ -4392,6 +4529,8 @@ function renderTopSections(){
     html+=`<div class="pred-tab-panel" style="display:${i===0?'block':'none'};padding:14px 18px 18px;" id="tabpanel-${tab.id}">`;
     if(tab.id==='top70'){
       html += renderTop70Tab(tab.d);
+    } else if(tab.id==='treble10'){
+      html += renderTrebleTab();
     } else if(tab.id==='signs'){
       html += renderSignsTab(tab.d);
     } else if(tab.id==='players'){
